@@ -191,6 +191,11 @@ form.panel h2{grid-column:1/-1;margin:0;font-family:var(--display);text-transfor
 .gate form{width:100%;max-width:380px;display:flex;flex-direction:column;gap:12px}
 .gate h1{font-size:2.6rem}
 .gate p{margin:0;color:var(--muted)}
+.gate .keep{display:flex;gap:8px;align-items:center;font-size:.9rem;color:var(--ink)}
+.gate .keep input{width:auto}
+#gateFields{display:flex;flex-direction:column;gap:12px}
+body.nolookups #mktBtn,body.nolookups #bulkMktBtn,body.nolookups [data-act="check"],body.nolookups [data-act="checkall"]{display:none!important}
+.banner .later{background:none;border:0;color:var(--muted);text-decoration:underline;padding:0}
 .gate .err{color:var(--danger);font-size:.9rem;min-height:1.2em}
 .gate .row2{display:flex;gap:8px;flex-wrap:wrap}
 .gate .row2 .btn{flex:1}
@@ -227,11 +232,14 @@ form.panel h2{grid-column:1/-1;margin:0;font-family:var(--display);text-transfor
   <form id="gateForm" autocomplete="on">
     <h1>Gear Locker</h1>
     <p id="gateMsg">Sign in to open your locker.</p>
+    <div id="gateFields" hidden>
     <div class="f"><label for="gEmail">Email</label><input id="gEmail" type="email" autocomplete="username" required></div>
     <div class="f"><label for="gPass">Password</label><input id="gPass" type="password" autocomplete="current-password" minlength="8" required></div>
     <div class="err" id="gErr" role="alert"></div>
     <div class="row2"><button class="btn" type="submit" id="gIn">Sign in</button><button class="btn ghost" type="button" id="gNew">Create account</button></div>
+    <label class="keep"><input type="checkbox" id="gKeep" checked> Keep me signed in on this device</label>
     <button class="link" type="button" id="gReset">Forgot password?</button>
+    </div>
   </form>
 </div>
 <div class="wrap">
@@ -252,7 +260,7 @@ form.panel h2{grid-column:1/-1;margin:0;font-family:var(--display);text-transfor
 
   <div class="banner" id="connect" hidden>
     <p id="connectMsg">Choose where Gear Locker saves your gear. Pick the <b>Gear Locker</b> folder (Desktop › FOLDERS › Gear Locker). Market checks read and update the file there.</p>
-    <button class="btn" id="connectBtn" type="button">Choose folder</button>
+    <span class="vbtns"><button class="btn" id="connectBtn" type="button">Choose folder</button><button class="later" id="connectLater" type="button">Not now</button></span>
   </div>
 
   <div class="view" id="invView">
@@ -379,10 +387,12 @@ async function persist(){
 }
 function showConnect(reconnect){
   if(!window.showDirectoryPicker)return;
+  try{if(!reconnect&&localStorage.getItem("gearLocker.noFolder")==="1")return}catch{}
   $("connect").hidden=false;
   $("connectBtn").textContent=reconnect?"Reconnect folder":"Choose folder";
-  $("connectMsg").innerHTML=reconnect?"Gear Locker needs your OK to open its save file in <b>Gear Locker</b> again. Click Reconnect folder.":"Connect your <b>Gear Locker</b> folder (Desktop › FOLDERS › Gear Locker) on this PC. That keeps a backup file there and lets the price and weight lookups do their work.";
+  $("connectMsg").innerHTML=reconnect?"Gear Locker needs your OK to open its save file in <b>Gear Locker</b> again. Click Reconnect folder.":"Optional: keep a backup file of your locker in a folder on this computer. On the PC that runs the price and weight lookups, pick the <b>Gear Locker</b> folder.";
 }
+$("connectLater").onclick=()=>{try{localStorage.setItem("gearLocker.noFolder","1")}catch{};$("connect").hidden=true};
 $("connectBtn").onclick=async()=>{
   try{
     let h=await kv("get","dir").catch(()=>null);
@@ -390,6 +400,7 @@ $("connectBtn").onclick=async()=>{
     else{ if(!window.showDirectoryPicker){$("connectMsg").textContent="This browser can't save to a folder. Open Gear Locker with the desktop shortcut (it uses Microsoft Edge).";return}
       dir=await window.showDirectoryPicker({id:"gearlocker",mode:"readwrite"}); await kv("put","dir",dir); }
     $("connect").hidden=true;
+    if(dir.name==="Gear Locker")kits={...kits,_settings:{...(kits._settings||{}),lookups:true,updatedAt:now()}};
     await syncFromDisk(); await persist(); render();
     toast("Connected to "+dir.name);
   }catch(e){if(e?.name!=="AbortError")toast("Couldn't open that folder. Try again.")}
@@ -741,7 +752,8 @@ function fmtDate(d){return d?new Date(d+"T12:00:00").toLocaleDateString():"—"}
 function daysBetween(a,b){return Math.round((new Date(b+"T12:00:00")-new Date(a+"T12:00:00"))/864e5)}
 function addDays(d,n){const x=new Date(d+"T12:00:00");x.setDate(x.getDate()+n);return x.toISOString().slice(0,10)}
 function fmtWt(oz){oz=+oz||0;return oz>=16?`${(oz/16).toFixed(1)} lb`:`${oz%1?oz.toFixed(1):oz} oz`}
-function wtText(i){return i.weight!=null&&i.weight!==""?fmtWt(i.weight):i.weightStatus==="notfound"?"weight not found":"weight pending"}
+const lookupsOn=()=>!!(kits._settings&&kits._settings.lookups);
+function wtText(i){return i.weight!=null&&i.weight!==""?fmtWt(i.weight):!lookupsOn()?"":i.weightStatus==="notfound"?"weight not found":"weight pending"}
 function kitWeight(ids){let oz=0,n=0;const uniq=[...new Set(ids)];uniq.forEach(id=>{const i=itemById(id);if(i&&i.weight!=null&&i.weight!==""){oz+=(+i.weight)*(+i.qty||1);n++}});return {oz,n,total:uniq.length}}
 function onLoan(id){return L("loans").find(x=>x.itemId===id&&!x.returned)}
 function firearms(){return live().filter(i=>i.category==="Firearms").sort(byName)}
@@ -1032,7 +1044,7 @@ function badgeFor(k){
 }
 function updateBadges(){$("tabs").innerHTML=TABS.map(([k,l])=>{const n=badgeFor(k);return `<button class="tab" role="tab" type="button" data-tab="${k}" aria-selected="${k===curTab}">${l}${n?`<span class="badge" title="${n} need attention">${n}</span>`:""}</button>`}).join("")}
 $("tabs").onclick=e=>{const b=e.target.closest("[data-tab]");if(b)showTab(b.dataset.tab)};
-function afterRender(){updateBadges();if(curTab==="kits")renderKits();else if(COLOF[curTab])renderExtra()}
+function afterRender(){document.body.classList.toggle("nolookups",!lookupsOn());updateBadges();if(curTab==="kits")renderKits();else if(COLOF[curTab])renderExtra()}
 function showTab(k){
   if(!TABS.some(t=>t[0]===k))k="inv";
   curTab=k;TABS.forEach(([t])=>{$(viewId(t)).hidden=t!==k});
@@ -1098,11 +1110,15 @@ function startCloud(){
   fsdb=firebase.firestore();
   try{fsdb.enablePersistence({synchronizeTabs:true}).catch(()=>{})}catch{}
   const auth=firebase.auth();
-  $("gate").hidden=false;$("gateMsg").textContent="Checking your sign-in…";
+  const P=firebase.auth.Auth.Persistence;
+  let keep=true;try{keep=localStorage.getItem("gearLocker.keep")!=="0"}catch{}
+  $("gKeep").checked=keep;
+  auth.setPersistence(keep?P.LOCAL:P.SESSION).catch(()=>{});
+  $("gate").hidden=false;$("gateFields").hidden=true;$("gateMsg").textContent="Opening your locker…";
   auth.onAuthStateChanged(async u=>{
     if(!u){
       cloudUser=null;cloudUnsubs.forEach(x=>x());cloudUnsubs=[];
-      $("gate").hidden=false;$("acct").hidden=true;$("gateMsg").textContent="Sign in to open your locker.";
+      $("gate").hidden=false;$("acct").hidden=true;$("gateFields").hidden=false;$("gateMsg").textContent="Sign in to open your locker.";
       return;
     }
     const switched=localStorage.getItem("gearLocker.uid")&&localStorage.getItem("gearLocker.uid")!==u.uid;
@@ -1113,8 +1129,9 @@ function startCloud(){
     await boot();
     subscribeCloud();
   });
-  $("gateForm").onsubmit=async e=>{e.preventDefault();gateErr("");$("gIn").disabled=true;try{await auth.signInWithEmailAndPassword($("gEmail").value.trim(),$("gPass").value)}catch(err){gateErr(authMsg(err))}finally{$("gIn").disabled=false}};
-  $("gNew").onclick=async()=>{gateErr("");if(!$("gateForm").reportValidity())return;$("gNew").disabled=true;try{await auth.createUserWithEmailAndPassword($("gEmail").value.trim(),$("gPass").value)}catch(err){gateErr(authMsg(err))}finally{$("gNew").disabled=false}};
+  const applyKeep=async()=>{const k=$("gKeep").checked;try{localStorage.setItem("gearLocker.keep",k?"1":"0")}catch{};try{await auth.setPersistence(k?P.LOCAL:P.SESSION)}catch{}};
+  $("gateForm").onsubmit=async e=>{e.preventDefault();gateErr("");$("gIn").disabled=true;await applyKeep();try{await auth.signInWithEmailAndPassword($("gEmail").value.trim(),$("gPass").value)}catch(err){gateErr(authMsg(err))}finally{$("gIn").disabled=false}};
+  $("gNew").onclick=async()=>{gateErr("");if(!$("gateForm").reportValidity())return;$("gNew").disabled=true;await applyKeep();try{await auth.createUserWithEmailAndPassword($("gEmail").value.trim(),$("gPass").value)}catch(err){gateErr(authMsg(err))}finally{$("gNew").disabled=false}};
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
   $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{[LS,LSK,LSD,"gearLocker.uid"].forEach(k=>localStorage.removeItem(k))}catch{};render();await auth.signOut()};
 }
