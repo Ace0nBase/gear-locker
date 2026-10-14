@@ -1,0 +1,1126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Gear Locker</title>
+<link rel="icon" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Gear Locker">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#4a572e">
+<style>
+/* Layout: equipment manifest — summary strip, add/edit drawer, then items grouped by category like a packing list */
+:root{
+  --bg:#f3f2ec; --surface:#fbfaf6; --ink:#24271f; --muted:#6a6d5f; --line:#d9d7cb;
+  --accent:#5b6b3a; --accent-ink:#fbfaf6; --coyote:#9a7b4f; --chip:#e8e6da; --danger:#a23b2c; --warn-bg:#efe6cf;
+  --display:"Bahnschrift","Arial Narrow",Arial,sans-serif;
+  --body:"Segoe UI",system-ui,-apple-system,sans-serif;
+  --mono:Consolas,"Cascadia Mono",ui-monospace,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#171915; --surface:#20231d; --ink:#e7e6dc; --muted:#9a9d8c; --line:#343829;
+  --accent:#9db06a; --accent-ink:#171915; --coyote:#c9a674; --chip:#2b2f25; --danger:#e07a68; --warn-bg:#2f2b1f; color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.45}
+.wrap{max-width:1080px;margin:0 auto;padding:calc(24px + env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) calc(64px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));display:flex;flex-direction:column;gap:20px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px}
+h1{font-family:var(--display);font-weight:700;font-size:2.5rem;letter-spacing:.03em;text-transform:uppercase;margin:0;line-height:1}
+.sub{color:var(--muted);font-family:var(--mono);font-size:.78rem;letter-spacing:.04em;margin-top:6px}
+.hbtns{display:flex;flex-wrap:wrap;gap:8px}
+button{font:inherit;cursor:pointer}
+.btn{background:var(--accent);color:var(--accent-ink);border:0;border-radius:4px;padding:9px 15px;font-weight:600}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.btn.danger{background:var(--danger);color:var(--bg)}
+.btn:disabled{opacity:.55;cursor:default}
+.btn:focus-visible,input:focus-visible,select:focus-visible,.chip:focus-visible,.row:focus-visible{outline:2px solid var(--coyote);outline-offset:2px}
+.banner{background:var(--warn-bg);border:1px solid var(--line);border-radius:6px;padding:14px 16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
+.banner p{margin:0;flex:1 1 320px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+.stat{padding:14px 16px;border-left:1px solid var(--line);min-width:0}
+.stat:first-child{border-left:0}
+.stat b{display:block;font-family:var(--display);font-size:1.9rem;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.stat span{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+@media (max-width:600px){.stats{grid-template-columns:repeat(2,1fr)}.stat:nth-child(3){border-left:0}.stat:nth-child(n+3){border-top:1px solid var(--line)}}
+.tools{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.tools input{flex:1 1 220px;min-width:0}
+input,select{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:8px 10px;width:100%}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{background:var(--chip);color:var(--ink);border:1px solid transparent;border-radius:999px;padding:5px 12px;font-size:.82rem}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.chip small{font-family:var(--mono);opacity:.7;margin-left:4px}
+form.panel{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:18px;display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+form.panel h2{grid-column:1/-1;margin:0;font-family:var(--display);text-transform:uppercase;letter-spacing:.04em;font-size:1.3rem}
+.f{display:flex;flex-direction:column;gap:4px;min-width:0}
+.f label{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.span2{grid-column:span 2}.span4{grid-column:1/-1}
+.priceRow{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:12px;align-items:center;border-top:1px dashed var(--line);padding-top:12px}
+.priceOut{flex:1 1 280px;min-width:0;font-size:.86rem;color:var(--muted)}
+.priceOut b{color:var(--ink);font-family:var(--mono);font-weight:500}
+.priceOut a{color:var(--accent)}
+.tag{display:inline-block;font-size:.66rem;text-transform:uppercase;letter-spacing:.08em;color:var(--coyote)}
+.actions{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;align-items:center}
+.actions .spacer{flex:1}
+@media (max-width:760px){form.panel{grid-template-columns:1fr 1fr}.span2{grid-column:1/-1}}
+.group{display:flex;flex-direction:column}
+.ghead{display:flex;align-items:baseline;gap:10px;border-bottom:2px solid var(--ink);padding-bottom:4px}
+.ghead h3{margin:0;font-family:var(--display);font-size:1.35rem;text-transform:uppercase;letter-spacing:.04em}
+.ghead span{font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+.row{display:grid;grid-template-columns:3.2rem minmax(0,2.4fr) minmax(0,1.4fr) minmax(0,1.4fr) 6rem 6.5rem;gap:12px;align-items:center;padding:10px 4px;border:0;border-bottom:1px solid var(--line);cursor:pointer;background:transparent;text-align:left;color:inherit;width:100%}
+.row:hover{background:var(--chip)}
+.qty{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:500}
+.nm{font-weight:600;overflow-wrap:anywhere}
+.nm small{display:block;font-weight:400;color:var(--muted);font-size:.82rem}
+.meta{font-size:.85rem;color:var(--muted);overflow-wrap:anywhere}
+.meta em{font-style:normal;color:var(--ink)}
+.cond{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;padding:3px 8px;border-radius:3px;background:var(--chip);justify-self:start}
+.cond.New{color:var(--accent)} .cond.Worn,.cond.Needs-repair{color:var(--danger)}
+.val{font-family:var(--mono);text-align:right;font-variant-numeric:tabular-nums}
+.val .tag{display:block}
+.colhead{font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);cursor:default}
+.colhead:hover{background:transparent}
+@media (max-width:700px){.row{grid-template-columns:2.6rem minmax(0,1fr) auto;row-gap:4px}.row .meta{grid-column:2/-1}.row .cond{grid-column:2}.colhead{display:none}}
+.empty{border:1px dashed var(--line);border-radius:6px;padding:28px;text-align:center;color:var(--muted)}
+.empty b{color:var(--ink);display:block;font-family:var(--display);font-size:1.4rem;text-transform:uppercase;margin-bottom:6px}
+.note{font-size:.82rem;color:var(--muted);margin:0}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:20px;background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:4px;font-size:.88rem}
+[hidden]{display:none!important}
+.tabs{display:flex;gap:4px;border-bottom:2px solid var(--ink)}
+.tab{background:transparent;border:0;border-bottom:4px solid transparent;margin-bottom:-2px;padding:8px 16px;font-family:var(--display);font-size:1.15rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.view{display:flex;flex-direction:column;gap:20px}
+.kgroup{display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%}
+.klabel{font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);width:7.5rem}
+@media (max-width:600px){.klabel{width:100%}}
+#kitChips{flex-direction:column;align-items:stretch;gap:8px}
+.packin{display:flex;flex-direction:column;gap:4px;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);min-width:220px}
+.packin select{text-transform:none;letter-spacing:0;font-size:.9rem}
+.packin small{text-transform:none;letter-spacing:0}
+.kchip small{font-family:var(--mono);margin-left:6px;opacity:.75}
+.kitHead{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;justify-content:space-between;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:18px}
+.kitHead h2{margin:0;font-family:var(--display);font-size:1.9rem;text-transform:uppercase;letter-spacing:.03em;line-height:1}
+.kitHead p{margin:6px 0 0;color:var(--muted);max-width:60ch}
+.kitHead .palette{margin-top:8px;font-size:.78rem;color:var(--muted)}
+.meter{width:220px;max-width:100%}
+.meter .bar{height:10px;border-radius:5px;background:var(--chip);overflow:hidden}
+.meter .bar i{display:block;height:100%;background:var(--accent)}
+.meter b{font-family:var(--display);font-size:1.5rem}
+.meter span{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.kitBtns{display:flex;flex-wrap:wrap;gap:8px}
+.slots{display:flex;flex-direction:column}
+.slotsHead{font-family:var(--display);font-size:1.15rem;text-transform:uppercase;letter-spacing:.04em;border-bottom:2px solid var(--ink);padding-bottom:4px;margin-top:6px;display:flex;gap:10px;align-items:baseline}
+.slotsHead span{font-family:var(--mono);font-size:.75rem;color:var(--muted);text-transform:none;letter-spacing:0}
+.slot{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,2fr) minmax(0,1.6fr) 7rem;gap:12px;align-items:center;padding:9px 4px;border-bottom:1px solid var(--line)}
+.slot .lbl{font-weight:600}
+.slot .lbl small{display:block;font-weight:400;color:var(--muted);font-size:.78rem}
+.slot select{padding:6px 8px}
+.slot .meta{font-size:.82rem}
+.pill{justify-self:start;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;padding:3px 8px;border-radius:3px;background:var(--chip)}
+.pill.ok{color:var(--accent)} .pill.gap{color:var(--danger)} .pill.warn{color:var(--coyote)}
+@media (max-width:760px){.slot{grid-template-columns:1fr auto}.slot select,.slot .meta{grid-column:1/-1}}
+.gaps{background:var(--warn-bg);border:1px solid var(--line);border-radius:6px;padding:14px 16px}
+.gaps h3{margin:0 0 6px;font-family:var(--display);text-transform:uppercase;font-size:1.1rem}
+.gaps ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;font-size:.9rem}
+.extras{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.extras .x{background:var(--chip);border-radius:999px;padding:4px 6px 4px 12px;font-size:.84rem;display:inline-flex;gap:6px;align-items:center}
+.extras .x button{border:0;background:transparent;color:var(--muted);font-size:1rem;line-height:1;padding:0 4px}
+.tabs{flex-wrap:wrap}
+.tab .badge{display:inline-block;min-width:1.4em;padding:0 5px;margin-left:6px;border-radius:999px;background:var(--danger);color:var(--bg);font-family:var(--body);font-size:.7rem;line-height:1.5;letter-spacing:0;vertical-align:middle;text-align:center}
+.tbl{width:100%;border-collapse:collapse;font-size:.9rem}
+.tbl th{font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);text-align:left;font-weight:600;padding:6px 8px;border-bottom:2px solid var(--ink);white-space:nowrap}
+.tbl td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}
+.tbl tr.click{cursor:pointer} .tbl tr.click:hover td{background:var(--chip)}
+.tbl .n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.tbl small{display:block;color:var(--muted);font-size:.78rem}
+.tbl .btn{padding:5px 10px;font-size:.82rem}
+.scroll{overflow-x:auto}
+.vhead{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}
+.vhead h2{margin:0;font-family:var(--display);font-size:1.7rem;text-transform:uppercase;letter-spacing:.03em;line-height:1}
+.vhead p{margin:6px 0 0;color:var(--muted);max-width:65ch}
+.vbtns{display:flex;flex-wrap:wrap;gap:8px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:14px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.card h3{margin:0;font-family:var(--display);font-size:1.25rem;text-transform:uppercase;letter-spacing:.03em}
+.card .sub2{color:var(--muted);font-size:.82rem}
+.card .vbtns .btn{padding:6px 12px;font-size:.85rem}
+.lines{grid-column:1/-1;display:flex;flex-direction:column;gap:8px;border-top:1px dashed var(--line);padding-top:12px}
+.lines h4{margin:0;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.lines h4 .btn{padding:4px 10px;font-size:.78rem;text-transform:none;letter-spacing:0}
+.line{display:grid;gap:8px;align-items:end}
+.line.l3{grid-template-columns:2fr 2fr 1fr auto}
+.line.drill{grid-template-columns:1.6fr .7fr .7fr .8fr 2fr .8fr .8fr auto}
+.line.dope{grid-template-columns:1fr 1fr 1fr auto}
+.line .rm{background:transparent;border:1px solid var(--line);border-radius:4px;color:var(--muted);padding:7px 10px}
+.line label{font-size:.64rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);display:block;margin-bottom:2px}
+.line input,.line select{padding:6px 8px}
+@media (max-width:760px){.line.l3,.line.drill,.line.dope{grid-template-columns:1fr 1fr}}
+.hint{font-size:.82rem;color:var(--muted);margin:0}
+.chartWrap{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px;display:flex;flex-direction:column;gap:8px}
+.chartWrap select{width:auto;max-width:100%}
+.chart{width:100%;height:auto;display:block}
+.chart text{fill:var(--muted);font-size:11px;font-family:var(--mono)}
+.chart .ln{fill:none;stroke:var(--accent);stroke-width:2.5}
+.chart .ln2{fill:none;stroke:var(--coyote);stroke-width:2;stroke-dasharray:5 4}
+.chart .grid{stroke:var(--line);stroke-width:1}
+.chart .pt{fill:var(--accent)} .chart .pt2{fill:var(--coyote)}
+.legend{display:flex;gap:16px;font-size:.78rem;color:var(--muted)}
+.legend i{display:inline-block;width:16px;height:3px;background:var(--accent);vertical-align:middle;margin-right:6px}
+.legend i.b{background:var(--coyote)}
+.riders{display:flex;flex-direction:column}
+.rider{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,2fr) auto;gap:12px;padding:8px 4px;border-bottom:1px solid var(--line);font-size:.9rem}
+.rider span{color:var(--muted)}
+.dopeTbl td,.dopeTbl th{text-align:center}
+.dopeTbl td{font-family:var(--mono);font-size:1rem}
+@media (max-width:700px){
+  h1{font-size:2rem}
+  .tabs{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tab{white-space:nowrap;padding:8px 12px;font-size:1.05rem}
+  input,select,textarea{font-size:16px}
+  .hbtns .btn,.vbtns .btn{padding:9px 12px}
+  form.panel{padding:14px}
+  .kitHead h2{font-size:1.5rem}
+  .meter{width:100%}
+}
+.gate{position:fixed;inset:0;z-index:50;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:calc(24px + env(safe-area-inset-top,0px)) 20px calc(24px + env(safe-area-inset-bottom,0px))}
+.gate form{width:100%;max-width:380px;display:flex;flex-direction:column;gap:12px}
+.gate h1{font-size:2.6rem}
+.gate p{margin:0;color:var(--muted)}
+.gate .err{color:var(--danger);font-size:.9rem;min-height:1.2em}
+.gate .row2{display:flex;gap:8px;flex-wrap:wrap}
+.gate .row2 .btn{flex:1}
+.gate .link{background:none;border:0;color:var(--accent);padding:0;text-decoration:underline;font-size:.9rem;align-self:flex-start}
+.acct{font-size:.78rem;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.acct button{background:none;border:0;color:var(--accent);text-decoration:underline;padding:0;font-size:.78rem}
+.sync{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.sync.on{background:var(--accent)} .sync.off{background:var(--danger)}
+#printSheet{display:none}
+@media print{
+  @page{size:letter landscape;margin:.45in}
+  body{background:#fff;color:#000;font-size:10pt}
+  .wrap,.toast{display:none!important}
+  #printSheet{display:block}
+  #printSheet h1{font-size:18pt;margin:0}
+  #printSheet .ph{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #000;padding-bottom:4pt;margin-bottom:8pt}
+  #printSheet .ph small{font-size:9pt}
+  #printSheet table{width:100%;border-collapse:collapse;margin-bottom:10pt;page-break-inside:auto}
+  #printSheet tr{page-break-inside:avoid}
+  #printSheet th,#printSheet td{border:1px solid #999;padding:3pt 5pt;text-align:left;vertical-align:top}
+  #printSheet thead th{background:#e8e6da}
+  #printSheet .cat th{background:#4a572e;color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;font-size:10.5pt}
+  #printSheet .box{display:inline-block;width:10pt;height:10pt;border:1px solid #000}
+  #printSheet .r{text-align:right}
+  #printSheet .sign{margin-top:18pt}
+  #printSheet .dopecard{max-width:4.2in}
+  #printSheet .dopecard td{font-size:13pt;text-align:center;font-family:Consolas,monospace}
+  #printSheet .dopecard th{text-align:center}
+}
+</style>
+</head>
+<body>
+<div class="gate" id="gate" hidden>
+  <form id="gateForm" autocomplete="on">
+    <h1>Gear Locker</h1>
+    <p id="gateMsg">Sign in to open your locker.</p>
+    <div class="f"><label for="gEmail">Email</label><input id="gEmail" type="email" autocomplete="username" required></div>
+    <div class="f"><label for="gPass">Password</label><input id="gPass" type="password" autocomplete="current-password" minlength="8" required></div>
+    <div class="err" id="gErr" role="alert"></div>
+    <div class="row2"><button class="btn" type="submit" id="gIn">Sign in</button><button class="btn ghost" type="button" id="gNew">Create account</button></div>
+    <button class="link" type="button" id="gReset">Forgot password?</button>
+  </form>
+</div>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Gear Locker</h1>
+      <div class="sub" id="sub">KIT INVENTORY</div>
+      <div class="acct" id="acct" hidden><span class="sync" id="syncDot"></span><span id="acctTxt"></span><button type="button" id="signOut">Sign out</button></div>
+    </div>
+    <div class="hbtns">
+      <button class="btn ghost" id="printBtn" type="button">Print</button>
+      <button class="btn ghost" id="csvBtn" type="button">Export CSV</button>
+      <button class="btn" id="addBtn" type="button">+ Add item</button>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs" role="tablist"></nav>
+
+  <div class="banner" id="connect" hidden>
+    <p id="connectMsg">Choose where Gear Locker saves your gear. Pick the <b>Gear Locker</b> folder (Desktop › FOLDERS › Gear Locker). Market checks read and update the file there.</p>
+    <button class="btn" id="connectBtn" type="button">Choose folder</button>
+  </div>
+
+  <div class="view" id="invView">
+  <section class="stats" aria-label="Totals">
+    <div class="stat"><b id="sItems">0</b><span>Line items</span></div>
+    <div class="stat"><b id="sQty">0</b><span>Total pieces</span></div>
+    <div class="stat"><b id="sCats">0</b><span>Categories</span></div>
+    <div class="stat"><b id="sVal">$0</b><span>Current value</span></div>
+  </section>
+
+  <form class="panel" id="form" hidden>
+    <h2 id="formTitle">Add item</h2>
+    <div class="f span2"><label for="fName">Item</label><input id="fName" required placeholder="Double M4 mag pouch"></div>
+    <div class="f"><label for="fBrand">Brand / model</label><input id="fBrand" placeholder="Esstac KYWI"></div>
+    <div class="f"><label for="fCat">Category</label><select id="fCat"></select></div>
+    <div class="f"><label for="fQty">Qty</label><input id="fQty" type="number" min="0" step="1" value="1"></div>
+    <div class="f"><label for="fColor">Color</label><input id="fColor" list="colors" placeholder="Ranger Green"></div>
+    <div class="f"><label for="fCond">Condition</label><select id="fCond"><option>New</option><option selected>Good</option><option>Used</option><option>Worn</option><option value="Needs-repair">Needs repair</option></select></div>
+    <div class="f"><label for="fRetail">New retail price ($)</label><input id="fRetail" type="number" min="0" step="1" placeholder="What it costs new"></div>
+    <div class="f"><label for="fVal">Value each ($)</label><input id="fVal" type="number" min="0" step="1" placeholder="Auto from retail"></div>
+    <div class="f"><label for="fOn">Set up on / loadout</label><input id="fOn" list="loadouts" placeholder="Plate carrier"></div>
+    <div class="f span2"><label for="fLoc">Stored at</label><input id="fLoc" list="locations" placeholder="Gear closet, bin 2"></div>
+    <div class="f"><label for="fWt">Weight each (oz)</label><input id="fWt" type="number" min="0" step="0.1" placeholder="Blank = auto lookup"></div>
+    <div class="f"><label for="fMount">Mounted on</label><select id="fMount"></select></div>
+    <div class="f fire"><label for="fCal">Caliber</label><input id="fCal" list="calibers" placeholder="5.56 NATO"></div>
+    <div class="f fire"><label for="fBase">Rounds fired before tracking</label><input id="fBase" type="number" min="0" step="1" placeholder="0"></div>
+    <div class="f span4"><label for="fNotes">Notes</label><input id="fNotes" placeholder="Serial, size, mods, where bought"></div>
+    <div class="priceRow">
+      <button class="btn ghost" type="button" id="mktBtn">Market check</button>
+      <div class="priceOut" id="priceOut">Enter the new retail price and Value each fills in for your condition. Market check looks up real eBay, TacSwap and store prices.</div>
+    </div>
+    <div class="actions">
+      <button class="btn ghost" type="button" id="delBtn" hidden>Delete</button>
+      <span class="spacer"></span>
+      <button class="btn ghost" type="button" id="cancelBtn">Cancel</button>
+      <button class="btn" type="submit" id="saveBtn">Save item</button>
+    </div>
+  </form>
+  <datalist id="colors"><option>Black</option><option>Coyote</option><option>Ranger Green</option><option>Multicam</option><option>Wolf Grey</option><option>FDE</option><option>Tan 499</option></datalist>
+  <datalist id="loadouts"></datalist>
+  <datalist id="locations"></datalist>
+  <datalist id="calibers"><option>9mm</option><option>5.56 NATO</option><option>.223 Rem</option><option>300 BLK</option><option>7.62x39</option><option>.308 Win</option><option>7.62x51</option><option>6.5 Creedmoor</option><option>.45 ACP</option><option>.40 S&amp;W</option><option>10mm</option><option>.380 ACP</option><option>.22 LR</option><option>12 Gauge</option><option>.300 Win Mag</option></datalist>
+  <datalist id="drills"><option>Bill Drill</option><option>El Presidente</option><option>FAST</option><option>Draw to first shot</option><option>Dot Torture</option><option>5x5 Skill Test</option><option>Mozambique</option><option>1-Reload-1</option><option>Failure to Stop</option><option>Blake Drill</option><option>Doubles</option><option>Box Drill</option><option>Ready-Up</option><option>Transition drill</option></datalist>
+  <datalist id="maintTasks"><option>Clean &amp; lube</option><option>Detail strip &amp; inspect</option><option>Replace battery</option><option>Swap battery / function check</option><option>Inspect tourniquet</option><option>Check med expirations</option><option>Charge &amp; check battery</option><option>Inspect plates for damage</option><option>Check optic zero &amp; screws</option><option>Check helmet pads &amp; retention</option><option>Replace recoil spring</option><option>Replace gas rings</option></datalist>
+
+  <div class="tools">
+    <input id="q" type="search" placeholder="Search items, brands, loadouts, locations" aria-label="Search">
+    <button class="btn ghost" id="bulkMktBtn" type="button">Market check all</button>
+    <select id="sort" aria-label="Sort" style="width:auto"><option value="name">Sort: name</option><option value="val">Sort: value</option><option value="on">Sort: loadout</option><option value="loc">Sort: location</option></select>
+  </div>
+  <div class="chips" id="chips" role="group" aria-label="Filter by category"></div>
+
+  <main id="list"></main>
+  </div>
+
+  <div class="view" id="kitView" hidden>
+    <div class="chips" id="kitChips" role="group" aria-label="Choose a scenario"></div>
+    <section id="kitDetail" class="view"></section>
+  </div>
+  <div class="view" id="rangeView" hidden></div>
+  <div class="view" id="dopeView" hidden></div>
+  <div class="view" id="ammoView" hidden></div>
+  <div class="view" id="maintView" hidden></div>
+  <div class="view" id="wishView" hidden></div>
+  <div class="view" id="loansView" hidden></div>
+  <p class="note" id="status"></p>
+</div>
+<div id="printSheet"></div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="config.js"></script>
+<script>
+const CATS=["Firearms","Armor & Carriers","Belts & Rigs","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Mags & Ammo Storage","Cleaning & Maintenance","Misc"];
+const FACTOR={"New":0.9,"Good":0.7,"Used":0.55,"Worn":0.4,"Needs-repair":0.2};
+const FILE="gear.json", LS="gearLocker.items", LSK="gearLocker.kits";
+let kits={};
+const COLS=["ammo","sessions","dope","maint","wish","loans"], LSD="gearLocker.db";
+let db={ammo:[],sessions:[],dope:[],maint:[],wish:[],loans:[]};
+const emptyDb=()=>Object.fromEntries(COLS.map(c=>[c,[]]));
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const money=n=>"$"+Math.round(+n||0).toLocaleString();
+const now=()=>new Date().toISOString();
+const today=()=>new Date().toISOString().slice(0,10);
+let all=[], filter="All", editing=null, delArmed=false, dir=null, valueTouched=false;
+const live=()=>all.filter(i=>!i.deleted);
+$("fCat").innerHTML=CATS.map(c=>`<option>${c}</option>`).join("");
+function toast(t){const el=$("toast");el.textContent=t;el.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>el.hidden=true,2200)}
+
+/* ---------- storage: gear.json in the chosen folder, plus a local mirror ---------- */
+function idb(){return new Promise((res,rej)=>{const r=indexedDB.open("gearLocker",1);r.onupgradeneeded=()=>r.result.createObjectStore("kv");r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+async function kv(op,key,val){const db=await idb();return new Promise((res,rej)=>{const tx=db.transaction("kv",op==="get"?"readonly":"readwrite");const st=tx.objectStore("kv");const r=op==="get"?st.get(key):st.put(val,key);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+function mirror(){try{localStorage.setItem(LS,JSON.stringify(all));localStorage.setItem(LSK,JSON.stringify(kits));localStorage.setItem(LSD,JSON.stringify(db))}catch{}}
+function mergeKits(a,b){const o={...a};for(const k in (b||{})){if(!o[k]||(b[k].updatedAt||"")>(o[k].updatedAt||""))o[k]=b[k]}return o}
+function merge(a,b){const m=new Map();[...a,...b].forEach(i=>{const p=m.get(i.id);if(!p||(i.updatedAt||"")>(p.updatedAt||""))m.set(i.id,i)});return [...m.values()]}
+async function readFile(){
+  if(!dir)return null;
+  try{const fh=await dir.getFileHandle(FILE);const txt=await (await fh.getFile()).text();const j=JSON.parse(txt||"{}");return {items:Array.isArray(j.items)?j.items:[],kits:(j.kits&&typeof j.kits==="object")?j.kits:{},db:Object.fromEntries(COLS.map(c=>[c,Array.isArray(j[c])?j[c]:[]]))}}
+  catch(e){if(e.name==="NotFoundError")return {items:[],kits:{},db:emptyDb()};throw e}
+}
+async function writeFile(){
+  if(!dir)return;
+  const disk=await readFile().catch(()=>null);
+  if(disk){all=merge(all,disk.items);kits=mergeKits(kits,disk.kits);COLS.forEach(c=>db[c]=merge(db[c],disk.db[c]))}
+  const fh=await dir.getFileHandle(FILE,{create:true});
+  const w=await fh.createWritable();
+  await w.write(JSON.stringify({app:"Gear Locker",version:1,savedAt:now(),items:all,kits,...db},null,2));
+  await w.close();
+}
+async function syncFromDisk(){
+  if(!dir)return;
+  try{const disk=await readFile();if(disk){const before=JSON.stringify([all,kits,db]);all=merge(all,disk.items);kits=mergeKits(kits,disk.kits);COLS.forEach(c=>db[c]=merge(db[c],disk.db[c]));if(JSON.stringify([all,kits,db])!==before){mirror();render();pushCloudSoon();if(editing){const fresh=all.find(i=>i.id===editing.id);if(fresh){editing=fresh;showPrice(fresh)}}}}}
+  catch{}
+}
+async function persist(){
+  mirror();
+  pushCloudSoon();
+  if(!dir){$("status").textContent=cloudUser?"":"Saved on this device only.";return}
+  try{await writeFile();mirror();$("status").textContent=`Saved to ${dir.name}\\${FILE} · ${new Date().toLocaleTimeString()}`}
+  catch{$("status").textContent="Couldn't write to the Gear Locker folder. Click Choose folder to reconnect.";showConnect(true)}
+}
+function showConnect(reconnect){
+  if(!window.showDirectoryPicker)return;
+  $("connect").hidden=false;
+  $("connectBtn").textContent=reconnect?"Reconnect folder":"Choose folder";
+  $("connectMsg").innerHTML=reconnect?"Gear Locker needs your OK to open its save file in <b>Gear Locker</b> again. Click Reconnect folder.":"Connect your <b>Gear Locker</b> folder (Desktop › FOLDERS › Gear Locker) on this PC. That keeps a backup file there and lets the price and weight lookups do their work.";
+}
+$("connectBtn").onclick=async()=>{
+  try{
+    let h=await kv("get","dir").catch(()=>null);
+    if(h&&(await h.requestPermission({mode:"readwrite"}))==="granted"){dir=h}
+    else{ if(!window.showDirectoryPicker){$("connectMsg").textContent="This browser can't save to a folder. Open Gear Locker with the desktop shortcut (it uses Microsoft Edge).";return}
+      dir=await window.showDirectoryPicker({id:"gearlocker",mode:"readwrite"}); await kv("put","dir",dir); }
+    $("connect").hidden=true;
+    await syncFromDisk(); await persist(); render();
+    toast("Connected to "+dir.name);
+  }catch(e){if(e?.name!=="AbortError")toast("Couldn't open that folder. Try again.")}
+};
+async function boot(){
+  if(window.FIREBASE_CONFIG&&!cloudUser){startCloud();return}
+  try{all=JSON.parse(localStorage.getItem(LS)||"[]")}catch{all=[]}
+  try{kits=JSON.parse(localStorage.getItem(LSK)||"{}")||{}}catch{kits={}}
+  try{const d=JSON.parse(localStorage.getItem(LSD)||"{}")||{};COLS.forEach(c=>db[c]=Array.isArray(d[c])?d[c]:[])}catch{db=emptyDb()}
+  render();
+  if(!window.showDirectoryPicker)return;
+  try{
+    const h=await kv("get","dir");
+    if(!h){showConnect(false);return}
+    const p=await h.queryPermission({mode:"readwrite"});
+    if(p==="granted"){dir=h;await syncFromDisk();render();$("status").textContent=`Saving to ${dir.name}\\${FILE}`}
+    else showConnect(true);
+  }catch{showConnect(false)}
+}
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)syncFromDisk()});
+window.addEventListener("focus",syncFromDisk);
+setInterval(()=>{if(!document.hidden)syncFromDisk()},60000);
+
+/* ---------- list ---------- */
+function render(){
+  if(typeof afterRender==="function")afterRender();
+  const items=live();
+  const q=$("q").value.trim().toLowerCase(), sort=$("sort").value;
+  const totQty=items.reduce((a,i)=>a+(+i.qty||0),0), totVal=items.reduce((a,i)=>a+(+i.qty||0)*(+i.value||0),0);
+  $("sItems").textContent=items.length;$("sQty").textContent=totQty;$("sCats").textContent=new Set(items.map(i=>i.category)).size;$("sVal").textContent=money(totVal);
+  const queued=items.filter(i=>i.marketCheck==="requested").length;
+  $("sub").textContent=`KIT INVENTORY · ${items.length} LINE ITEMS${queued?` · ${queued} QUEUED FOR MARKET CHECK`:""}`;
+  const counts={};items.forEach(i=>counts[i.category]=(counts[i.category]||0)+1);
+  if(filter!=="All"&&!counts[filter])filter="All";
+  $("chips").innerHTML=["All",...CATS.filter(c=>counts[c])].map(c=>`<button type="button" class="chip" aria-pressed="${c===filter}" data-c="${esc(c)}">${esc(c)}<small>${c==="All"?items.length:counts[c]}</small></button>`).join("");
+  $("loadouts").innerHTML=[...new Set(items.map(i=>i.setupOn).filter(Boolean))].map(v=>`<option>${esc(v)}</option>`).join("");
+  $("locations").innerHTML=[...new Set(items.map(i=>i.location).filter(Boolean))].map(v=>`<option>${esc(v)}</option>`).join("");
+  let rows=items.filter(i=>(filter==="All"||i.category===filter)&&(!q||[i.name,i.brand,i.color,i.setupOn,i.location,i.notes,i.category].join(" ").toLowerCase().includes(q)));
+  const key={name:i=>(i.name||"").toLowerCase(),on:i=>(i.setupOn||"~").toLowerCase(),loc:i=>(i.location||"~").toLowerCase()}[sort];
+  rows.sort(sort==="val"?(a,b)=>(b.qty*b.value||0)-(a.qty*a.value||0):(a,b)=>key(a).localeCompare(key(b)));
+  if(!items.length){$("list").innerHTML=`<div class="empty"><b>Locker's empty</b>Add your first item with <em>+ Add item</em>. Work through one area at a time: carrier, belt, pouches, med, packs.</div>`;return}
+  if(!rows.length){$("list").innerHTML=`<div class="empty">No items match that search.</div>`;return}
+  $("list").innerHTML=CATS.filter(c=>rows.some(r=>r.category===c)).map(c=>{const g=rows.filter(r=>r.category===c);const gq=g.reduce((a,i)=>a+(+i.qty||0),0),gv=g.reduce((a,i)=>a+(+i.qty||0)*(+i.value||0),0);
+    return `<section class="group"><div class="ghead"><h3>${esc(c)}</h3><span>${gq} pcs${gv?` · ${money(gv)}`:""}</span></div>
+    <div class="row colhead" aria-hidden="true"><span>Qty</span><span>Item</span><span>Set up on</span><span>Stored</span><span>Cond.</span><span style="text-align:right">Value</span></div>
+    ${g.map(i=>`<button type="button" class="row" data-id="${esc(i.id)}"><span class="qty">${+i.qty||0}×</span>
+      <span class="nm">${esc(i.name)}<small>${esc([i.brand,i.color,i.category==="Firearms"?(i.caliber?i.caliber+" · ":"")+roundsFired(i.id).toLocaleString()+" rds":"",wtText(i)].filter(Boolean).join(" · "))}</small></span>
+      <span class="meta">${i.mountedOn&&itemById(i.mountedOn)?`on <em>${esc(itemById(i.mountedOn).name)}</em>`:i.setupOn?`<em>${esc(i.setupOn)}</em>`:"Spare"}${onLoan(i.id)?`<span class="tag" style="display:block">on loan · ${esc(onLoan(i.id).borrower)}</span>`:""}</span>
+      <span class="meta">${esc(i.location||"—")}</span>
+      <span class="cond ${esc(i.condition)}">${esc((i.condition||"").replace("-"," "))}</span>
+      <span class="val">${i.value?money(i.qty*i.value):"—"}${i.marketCheck==="requested"?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
+}
+
+/* ---------- pricing ---------- */
+function autoValue(){
+  if(valueTouched)return;
+  const r=parseFloat($("fRetail").value);
+  if(r>0)$("fVal").value=Math.round(r*(FACTOR[$("fCond").value]??0.6));
+}
+$("fRetail").oninput=autoValue;$("fCond").onchange=autoValue;
+$("fVal").oninput=()=>{valueTouched=$("fVal").value!==""};
+function showPrice(i){
+  const out=$("priceOut");
+  if(i?.marketCheck==="requested"){out.innerHTML=`<span class="tag">Market check queued</span><br>Real eBay, TacSwap and store prices fill in on the next check run.`;return}
+  if(i?.priceSource==="market"){
+    const links=(Array.isArray(i.marketSources)?i.marketSources:[]).filter(s=>/^https:\/\//.test(s?.url||"")).slice(0,4).map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label||"source")}</a>`).join(" · ");
+    out.innerHTML=`<span class="tag">Market check ${esc(i.priceDate||"")}</span><br>${i.retailNew?`New retail <b>${money(i.retailNew)}</b> · `:""}${(i.usedLow||i.usedHigh)?`Used <b>${money(i.usedLow)}–${money(i.usedHigh)}</b> · `:""}This one <b>${money(i.value)}</b>${i.priceNote?`<br>${esc(i.priceNote)}`:""}${links?`<br>${links}`:""}`;return}
+  out.textContent="Enter the new retail price and Value each fills in for your condition. Market check looks up real eBay, TacSwap and store prices.";
+}
+
+/* ---------- form ---------- */
+function openForm(item){
+  editing=item||null;delArmed=false;valueTouched=!!(item&&item.value&&!(item.retailNew&&Math.round(item.retailNew*(FACTOR[item.condition]??0.6))===Math.round(item.value)));
+  $("formTitle").textContent=item?"Edit item":"Add item";
+  $("fName").value=item?.name||"";$("fBrand").value=item?.brand||"";$("fCat").value=item?.category||(filter!=="All"?filter:"Pouches");
+  $("fQty").value=item?.qty??1;$("fColor").value=item?.color||"";$("fCond").value=item?.condition||"Good";
+  $("fRetail").value=item?.retailNew||"";$("fVal").value=item?.value||"";$("fOn").value=item?.setupOn||"";$("fLoc").value=item?.location||"";$("fNotes").value=item?.notes||"";
+  $("delBtn").hidden=!item;$("delBtn").className="btn ghost";$("delBtn").textContent="Delete";
+  $("mktBtn").disabled=item?.marketCheck==="requested";$("mktBtn").textContent=item?.marketCheck==="requested"?"Check queued":"Market check";
+  $("fMount").innerHTML=mountOpts(item?.id);$("fMount").value=item?.mountedOn||"";
+  $("fWt").value=item?.weight??"";$("fCal").value=item?.caliber||"";$("fBase").value=item?.baseRounds??"";fireFields();
+  showPrice(item);
+  $("form").hidden=false;$("fName").focus();$("form").scrollIntoView({block:"nearest"});
+}
+function closeForm(){$("form").hidden=true;editing=null}
+function readForm(){
+  return {name:$("fName").value.trim(),brand:$("fBrand").value.trim(),category:$("fCat").value,qty:Math.max(0,parseInt($("fQty").value)||0),
+    color:$("fColor").value.trim(),condition:$("fCond").value,retailNew:Math.max(0,Math.round(parseFloat($("fRetail").value)||0)),value:Math.max(0,Math.round(parseFloat($("fVal").value)||0)),
+    setupOn:$("fOn").value.trim(),location:$("fLoc").value.trim(),notes:$("fNotes").value.trim(),
+    weight:$("fWt").value===""?null:Math.max(0,+$("fWt").value),mountedOn:$("fMount").value,caliber:$("fCal").value.trim(),
+    baseRounds:$("fBase").value===""?"":Math.max(0,parseInt($("fBase").value)||0)};
+}
+async function saveCurrent(extra){
+  const data={...readForm(),...(extra||{}),updatedAt:now()};
+  if(!data.name){$("fName").focus();return null}
+  let rec;
+  if(editing){
+    rec={...editing,...data};
+    if(editing.priceSource==="market"&&Math.round(editing.value)!==data.value&&!extra)rec.priceSource="manual";
+    all=all.map(i=>i.id===rec.id?rec:i);
+  }else{
+    rec={id:(crypto.randomUUID?crypto.randomUUID():"g"+Date.now()+Math.random().toString(36).slice(2)),createdAt:data.updatedAt,...data};
+    all.push(rec);
+  }
+  if(rec.weight==null){const renamed=editing&&(editing.name!==rec.name||editing.brand!==rec.brand);if(rec.weightStatus!=="notfound"||renamed){rec.weightStatus="pending";delete rec.weightSource}}
+  else if(!editing||+editing.weight!==+rec.weight){rec.weightSource="manual";rec.weightStatus="done"}
+  all=all.map(i=>i.id===rec.id?rec:i);
+  render();await persist();return rec;
+}
+$("addBtn").onclick=()=>openForm();
+$("cancelBtn").onclick=closeForm;
+$("q").oninput=render;$("sort").onchange=render;
+$("chips").onclick=e=>{const b=e.target.closest(".chip");if(!b)return;filter=b.dataset.c;render()};
+$("list").onclick=e=>{const r=e.target.closest(".row[data-id]");if(!r)return;openForm(all.find(i=>i.id===r.dataset.id))};
+$("form").onsubmit=async e=>{
+  e.preventDefault();
+  const wasEdit=!!editing;
+  const rec=await saveCurrent();if(!rec)return;
+  toast(wasEdit?"Item updated":"Item added");
+  if(wasEdit)closeForm();else{const k={c:rec.category,l:rec.location,o:rec.setupOn};openForm();$("fCat").value=k.c;$("fLoc").value=k.l;$("fOn").value=k.o}
+};
+$("delBtn").onclick=async()=>{
+  if(!editing)return;
+  if(!delArmed){delArmed=true;$("delBtn").className="btn danger";$("delBtn").textContent="Confirm delete";return}
+  all=all.map(i=>i.id===editing.id?{id:i.id,deleted:true,updatedAt:now()}:i);
+  closeForm();render();await persist();toast("Item deleted");
+};
+$("mktBtn").onclick=async()=>{
+  const rec=await saveCurrent({marketCheck:"requested",marketCheckAt:now()});if(!rec)return;
+  editing=rec;$("mktBtn").disabled=true;$("mktBtn").textContent="Check queued";showPrice(rec);
+  toast(dir?"Market check queued":"Queued. Choose your folder so the check can find it.");
+};
+$("bulkMktBtn").onclick=async()=>{
+  const t=now();let n=0;
+  all=all.map(i=>{if(i.deleted||i.marketCheck==="requested"||i.priceSource==="market")return i;n++;return{...i,marketCheck:"requested",marketCheckAt:t,updatedAt:t}});
+  if(!n){toast("Everything is already market-checked or queued");return}
+  render();await persist();toast(`Queued ${n} item${n===1?"":"s"} for a market check`);
+};
+
+/* ---------- print + export ---------- */
+function buildPrint(){
+  const items=live(),totQty=items.reduce((a,i)=>a+(+i.qty||0),0),totVal=items.reduce((a,i)=>a+(+i.qty||0)*(+i.value||0),0);
+  let h=`<div class="ph"><div><h1>GEAR LOCKER — INVENTORY</h1><small>Printed ${new Date().toLocaleDateString()} · ${items.length} line items · ${totQty} pieces · Value ${money(totVal)}</small></div><small>PRIVATE — PERSONAL PROPERTY RECORD</small></div>`;
+  CATS.forEach(c=>{const g=items.filter(i=>i.category===c).sort((a,b)=>(a.name||"").localeCompare(b.name||""));if(!g.length)return;
+    const gq=g.reduce((a,i)=>a+(+i.qty||0),0),gv=g.reduce((a,i)=>a+(+i.qty||0)*(+i.value||0),0);
+    h+=`<table><thead><tr class="cat"><th colspan="9">${esc(c.toUpperCase())} — ${gq} pcs${gv?" · "+money(gv):""}</th></tr><tr><th>✓</th><th>Qty</th><th>Item</th><th>Brand / model</th><th>Color</th><th>Set up on</th><th>Stored</th><th>Cond.</th><th class="r">Value</th></tr></thead><tbody>`+
+      g.map(i=>`<tr><td><span class="box"></span></td><td class="r">${+i.qty||0}</td><td>${esc(i.name)}</td><td>${esc(i.brand)}</td><td>${esc(i.color)}</td><td>${esc(i.setupOn||"Spare")}</td><td>${esc(i.location)}</td><td>${esc((i.condition||"").replace("-"," "))}</td><td class="r">${i.value?money(i.qty*i.value):"—"}</td></tr>`).join("")+`</tbody></table>`});
+  h+=`<p class="sign">Verified by: ______________________________ &nbsp;&nbsp; Date: ______________</p>`;
+  $("printSheet").innerHTML=h;
+}
+$("printBtn").onclick=()=>{if(!live().length){toast("Add some gear first");return}buildPrint();window.print()};
+let printingKit=false;
+window.addEventListener("beforeprint",()=>{if(!printingKit)buildPrint()});
+window.addEventListener("afterprint",()=>{printingKit=false});
+$("csvBtn").onclick=()=>{
+  const items=live();if(!items.length){toast("Add some gear first");return}
+  const cols=["category","qty","name","brand","color","condition","retailNew","value","weight","setupOn","location","notes","priceSource","priceDate"];
+  const q=v=>`"${String(v??"").replace(/"/g,'""')}"`;
+  const sorted=CATS.flatMap(c=>items.filter(i=>i.category===c).sort((a,b)=>(a.name||"").localeCompare(b.name||"")));
+  const csv="﻿"+[["Category","Qty","Item","Brand/Model","Color","Condition","New retail","Value each","Weight (oz)","Set up on","Stored","Notes","Price source","Price date"].map(q).join(","),...sorted.map(i=>cols.map(k=>q(i[k])).join(","))].join("\r\n");
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`gear-inventory-${today()}.csv`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);
+};
+
+/* ---------- kits ---------- */
+const S={ // slot library: [label, categories, keywords, tip, exclude]
+ carrier:["Plate carrier / chest rig",["Armor & Carriers","Belts & Rigs"],["plate carrier","carrier","jpc","avs","apc","chest rig","spc","fcpc","lv-119","slickster","micro rig","mk3","mk4"],"A carrier or chest rig to run mags and med up front.",["belt"]],
+ plates:["Armor plates",["Armor & Carriers"],["plates","plate set","level iii","level iv","lvl iii","lvl iv","iiia","sapi","esapi","armor insert","hesco","rmr"],"Rifle-rated plates sized for your carrier.",["carrier","bag","pouch"]],
+ belt:["Battle belt",["Belts & Rigs"],["belt"],"A padded or rigid gun belt for holster, pistol mags and TQ.",[]],
+ riflemag:["Rifle mag pouches",["Pouches","Mags & Ammo Storage","Armor & Carriers"],["m4","5.56","556","rifle mag","ar mag","ar-15","kywi","mag pouch","magazine pouch","triple mag","double mag","7.62","308","placard","tacos"],"Pouches for at least 3 rifle mags.",["pistol"]],
+ pistolmag:["Pistol mag pouch",["Pouches","Mags & Ammo Storage"],["pistol mag","pistol","9mm","handgun","glock"],"One or two pistol mag pouches on the belt.",[]],
+ mags:["Rifle magazines",["Mags & Ammo Storage"],["pmag","magazine","mags","lancer","gen m3","5.56","556","ar-15","ar15","m4","7.62","308"],"Enough loaded mags to fill your pouches.",["pouch","pistol","glock","9mm","handgun","p320","sig 365","m&p","loader"]],
+ ifak:["IFAK / trauma kit",["Medical","Pouches"],["ifak","trauma","med kit","medical kit","blowout","first aid","medical pouch"],"A stocked IFAK: gauze, pressure dressing, chest seals.",[]],
+ tq:["Tourniquet",["Medical"],["tourniquet","tq","cat gen","sof-t","sof t","sam xt","rmt"],"At least one TQ reachable with either hand.",["holder","pouch"]],
+ helmet:["Helmet",["Helmet & Head"],["helmet","ops-core","opscore","high cut","bump","team wendy"],"Ballistic or bump helmet.",["cover","mount","bag"]],
+ headset:["Hearing protection / headset",["Comms & Radios","Helmet & Head"],["headset","comtac","amp","peltor","sordin","ear pro","earpro","muffs","earplug","ear plug","walker"],"Electronic ear pro or a comms headset.",[]],
+ radio:["Radio",["Comms & Radios"],["radio","baofeng","prc","mbitr","handheld","uv-5r","yaesu","kenwood","motorola","icom"],"A handheld radio with a charged battery.",["pouch"]],
+ nvg:["Night vision / thermal",["NVG & Optics"],["nvg","pvs","bnvd","night vision","nod","thermal","mum","ps31","gpnvg","rpnvg","1431","dtnvs"],"A night vision device or thermal.",["mount","shroud"]],
+ mount:["NVG mount",["Helmet & Head","NVG & Optics"],["mount","shroud","wilcox","g24","l4g24","dovetail","j-arm","j arm","bridge"],"Helmet shroud and mount for your NODs.",[]],
+ wlight:["Weapon light",["Lights & Lasers"],["surefire","modlite","cloud defensive","streamlight","weapon light","scout","m600","m300","rein","owl","ok1","tlr"],"A weapon-mounted white light.",["headlamp"]],
+ laser:["IR laser / aiming device",["Lights & Lasers"],["peq","dbal","ngal","laser","ir aiming","perst","mawl","ld-ir"],"An IR aiming laser for use under NODs.",[]],
+ headlamp:["Headlamp",["Lights & Lasers","Helmet & Head"],["headlamp","head lamp","manta","petzl","signal light"],"Hands-free light, ideally with red mode.",[]],
+ pack:["Assault pack / ruck",["Packs & Bags"],["pack","ruck","backpack","assault","daypack","3 day","3-day","satl","mystery ranch","eberlestock","goruck"],"A pack sized for the mission length.",["range bag","dry bag","fanny","case","range backpack"]],
+ water:["Hydration",["Packs & Bags","Misc"],["hydration","camelbak","bladder","canteen","water bottle","nalgene","source","bottle","reservoir"],"Carry at least 2–3 L of water.",[]],
+ sling:["Rifle sling",["Holsters & Slings"],["sling","vcas","blue force"],"A two-point sling.",[]],
+ holster:["Pistol holster",["Holsters & Slings"],["holster","safariland","bravo","tier 1","t.rex","phlster"],"A retention holster for your pistol.",[]],
+ knife:["Fixed blade knife",["Knives & Tools"],["knife","fixed blade","ka-bar","kabar","esee","benchmade","dagger","machete","blade"],"A sturdy fixed blade.",[]],
+ tool:["Multitool",["Knives & Tools"],["multitool","multi-tool","leatherman","gerber"],"A multitool for repairs.",[]],
+ gloves:["Gloves",["Clothing & Boots"],["glove","mechanix","pig","hwi"],"Shooting or work gloves.",[]],
+ boots:["Boots",["Clothing & Boots"],["boot","salomon","merrell","danner","lowa","garmont","crispi","altama","nike sfb"],"Boots suited to the terrain.",[]],
+ camo:["Uniform / combat clothing",["Clothing & Boots"],["combat shirt","combat pant","uniform","g3","g4","ubacs","field shirt","field pant","pants","shirt","blouse"],"A uniform in a pattern that fits the terrain.",["boot","glove"]],
+ rain:["Rain / wind shell",["Clothing & Boots"],["rain","shell","hardshell","softshell","windbreaker","poncho","gore-tex","goretex","wind shirt"],"A waterproof or windproof outer layer.",["liner","notebook","rite in the rain","paper","pen"]],
+ insul:["Insulation layer",["Clothing & Boots"],["fleece","puffy","insulated","parka","primaloft","alpha","down jacket","grid","level 7","level 3","base layer","thermal","woobie hoodie"],"A warm layer for cold mornings and nights.",[]],
+ coldhead:["Cold-weather headwear",["Clothing & Boots","Helmet & Head"],["beanie","balaclava","watch cap","gaiter","neck warmer"],"Beanie or balaclava.",[]],
+ eyepro:["Eye protection",["Helmet & Head","Clothing & Boots","Misc"],["eye pro","eyepro","glasses","goggles","oakley","revision","esp","wiley","smith optics"],"Ballistic glasses or goggles.",[]],
+ drybag:["Dry bags / waterproofing",["Packs & Bags","Misc"],["dry bag","drybag","dry sack","waterproof","roll top","sealline","pack liner"],"Dry bags or a pack liner for electronics and clothes.",[]],
+ pfd:["Flotation / PFD",["Misc","Armor & Carriers"],["pfd","life vest","life jacket","flotation","float"],"Inflatable or foam flotation.",[]],
+ bug:["Insect protection",["Misc","Clothing & Boots"],["bug","insect","mosquito","head net","permethrin","deet"],"Head net and repellent.",[]],
+ sun:["Sun protection / headwear",["Clothing & Boots","Helmet & Head"],["boonie","hat","cap","shemagh","sun hoodie","gaiter","buff","sunscreen"],"Boonie or cap plus a shemagh or gaiter.",["beanie"]],
+ nav:["Navigation",["Misc","Knives & Tools","Comms & Radios"],["compass","gps","map","garmin","cammenga","suunto","inreach"],"Compass and map at minimum.",[]],
+ shelter:["Shelter / sleep system",["Misc","Packs & Bags"],["tarp","bivy","poncho liner","woobie","sleeping bag","tent","hammock","emergency blanket"],"Tarp, bivy or poncho liner.",[]],
+ fire:["Fire starting",["Misc","Knives & Tools"],["ferro rod","fire starter","firestarter","fire steel","firesteel","lighter","matches","tinder","bic "],"Lighter plus a ferro rod.",[]],
+ filter:["Water filter",["Misc"],["filter","sawyer","lifestraw","katadyn","purif","grayl","aquatab"],"Filter or purification tablets.",[]],
+ clean:["Cleaning kit",["Cleaning & Maintenance"],["clean","otis","bore","lube","cleaning","brush","rod"],"Field cleaning kit and lube.",[]],
+ rangebag:["Range bag",["Cases & Bags","Packs & Bags"],["range bag","range backpack","shooting bag"],"A bag for ammo, targets and tools.",[]],
+ guncase:["Rifle case / bag",["Cases & Bags"],["rifle case","rifle bag","gun case","gun bag","soft case","hard case","double rifle","sbr bag","discreet","long gun","pelican 1700","pelican 1720","pelican 1750","rifle"],"A padded case or bag to transport the long gun.",["pistol","range bag"]],
+ pistolcase:["Pistol case",["Cases & Bags"],["pistol case","handgun case","pistol rug","pistol bag","pistol"],"A lockable pistol case or rug.",["holster","mag","rifle"]],
+ ammocan:["Ammo can / ammo bag",["Mags & Ammo Storage","Cases & Bags"],["ammo can","ammo box","ammo bag","ammo crate","ammo"],"Ammo for the day, plus extra.",[]],
+ pistolmags:["Pistol magazines",["Mags & Ammo Storage"],["pistol","glock","9mm","handgun","p320","sig 365","m&p","45 acp",".45"],"At least 3–4 pistol mags.",["pouch","loader","case","holster"]],
+ timer:["Shot timer",["Misc","Knives & Tools"],["shot timer","timer","pact","amg","ced7000","special pie","competition electronics"],"A shot timer to measure drills.",[]],
+ targets:["Targets & stapler",["Misc"],["target","stapler","pasters","staple","steel","ipsc","uspsa","b-8","b8"],"Targets, pasters and a stapler or clips.",[]],
+ loader:["Mag loader",["Mags & Ammo Storage","Knives & Tools"],["loader","uplula","maglula","lula","speed loader","stripper"],"A mag loader saves your thumbs.",[]],
+ notebook:["Data book / notebook",["Misc"],["data book","databook","dope","notebook","rite in the rain","log book","logbook","notepad"],"Something to log drills, dope or frequencies.",[]],
+ bipod:["Bipod / rear bag",["NVG & Optics","Misc","Cases & Bags"],["bipod","rear bag","squeeze bag","harris","atlas","game changer","shooting pillow","tripod"],"Stable support for precision shooting.",[]],
+ mat:["Shooting mat",["Misc","Cases & Bags"],["shooting mat","mat","drag bag"],"A mat for prone positions.",[]],
+ toolkit:["Armorer / optic tools",["Knives & Tools","Cleaning & Maintenance"],["torque","wrench","armorer","fix it sticks","fix-it sticks","hex","allen","screwdriver","tool kit","toolkit","bit set","real avid"],"Torque driver and bits to fix or re-zero on the line.",[]],
+ kneepads:["Knee / elbow pads",["Clothing & Boots","Misc"],["knee pad","kneepad","elbow pad","knee pads","arc'teryx pad"],"Pads for kneeling and prone work.",[]],
+ simgear:["FoF mask / protection",["Helmet & Head","Misc"],["sim","fof","force on force","force-on-force","paint","utm","simunition","fof mask","neck protector","groin"],"Sim mask, neck and groin protection.",[]],
+ trainer:["Training weapon",["Misc"],["blue gun","rings","sirt","training pistol","trainer","airsoft","gbb","laser trainer","dummy gun","inert"],"A training or sim gun.",[]],
+ snapcaps:["Snap caps / dummy rounds",["Mags & Ammo Storage","Misc"],["snap cap","dummy round","dummy rounds","a-zoom","azoom","inert round"],"For malfunction drills and dry fire.",[]],
+ traumabag:["Trauma bag / med kit",["Medical","Cases & Bags","Packs & Bags"],["trauma bag","med bag","aid bag","medic","first aid kit","stomp","jump kit"],"A larger med bag for the team.",[]],
+ antenna:["Spare / upgraded antenna",["Comms & Radios"],["antenna","whip","nagoya","diamond","yagi","j-pole","jpole","roll-up","slim jim"],"A better antenna is the cheapest range boost.",[]],
+ ptt:["PTT / radio cables",["Comms & Radios"],["ptt","push to talk","downlead","radio cable","adapter","kenwood plug"],"PTT and cable to tie radio into the headset.",[]],
+ progcable:["Programming cable",["Comms & Radios"],["programming cable","chirp","usb cable","prog cable"],"Cable and laptop to reprogram channels.",[]],
+ spot:["Binoculars / rangefinder",["NVG & Optics"],["binocular","bino","spotting","monocular","rangefinder"],"Binos or a rangefinder for observation.",[]],
+ batteries:["Spare batteries / power",["Misc","Comms & Radios","Lights & Lasers"],["battery","batteries","cr123","aa ","aaa","18650","power bank","charger"],"Spares for lights, NODs and radio.",[]],
+};
+const KITS=[
+ {type:"env",id:"jungle",name:"Jungle",blurb:"Hot, wet and dense. Keep loads light, kit dry and bugs off you.",colors:["multicam","ranger green","green","od","olive","m81","woodland","tropic"],req:["carrier","riflemag","ifak","tq","pack","water","knife","boots","camo","bug","drybag"],opt:["helmet","headset","radio","rain","nav","shelter","filter","sun","wlight","headlamp","gloves","mags"]},
+ {type:"env",id:"desert",name:"Desert",blurb:"Heat, sun and long sightlines. Water, eye pro and earth-tone gear come first.",colors:["coyote","tan","fde","khaki","arid","499","sand","brown","flat dark earth","multicam"],req:["carrier","plates","riflemag","ifak","tq","pack","water","eyepro","sun","boots","camo"],opt:["helmet","headset","radio","gloves","nav","spot","wlight","batteries","mags","insul"]},
+ {type:"env",id:"maritime",name:"Maritime",blurb:"On or near the water. Flotation, waterproofing and gear that won't drag you down.",colors:["black","grey","gray","wolf","navy","ranger green","multicam black"],req:["pfd","drybag","carrier","riflemag","ifak","tq","knife","gloves","eyepro","headlamp","radio"],opt:["helmet","headset","rain","insul","boots","water","nav","wlight","laser","nvg"]},
+ {type:"env",id:"arctic",name:"Arctic / Cold",blurb:"Below freezing. Layers, warm extremities, fire and power for your electronics.",colors:["white","alpine","grey","gray","wolf","snow"],req:["insul","rain","coldhead","gloves","boots","pack","water","headlamp","fire","shelter","ifak","tq","batteries"],opt:["carrier","riflemag","nav","eyepro","knife","helmet","radio"]},
+ {type:"env",id:"urban",name:"Urban Low-Vis",blurb:"Built-up areas. Low-profile colors, white light, and pistol plus rifle readiness.",colors:["black","grey","gray","wolf","navy","khaki"],req:["carrier","plates","riflemag","pistolmag","holster","ifak","tq","wlight","gloves","eyepro","headset"],opt:["helmet","radio","sling","pack","tool","nvg","laser","mount"]},
+ {type:"env",id:"woodland",name:"Woodland",blurb:"Temperate forest. Green and earth tones, rain gear and enough to overnight.",colors:["ranger green","od","olive","green","multicam","m81","woodland","coyote"],req:["carrier","riflemag","ifak","tq","pack","water","camo","boots","rain","knife"],opt:["helmet","headset","radio","nav","shelter","fire","filter","headlamp","wlight","gloves","insul","nvg"]},
+ {type:"env",id:"mountain",name:"Mountain",blurb:"Elevation and fast weather changes. Layers, navigation and a pack that carries well.",colors:["multicam","coyote","ranger green","grey","gray"],req:["pack","water","insul","rain","boots","gloves","nav","ifak","tq","headlamp","sun"],opt:["carrier","riflemag","spot","shelter","fire","filter","radio","knife","batteries"]},
+ {type:"env",id:"night",name:"Night Ops",blurb:"Low light. NODs, IR aiming, comms and enough batteries to last the night.",colors:[],req:["nvg","mount","helmet","laser","wlight","carrier","riflemag","ifak","tq","headset","radio","batteries"],opt:["headlamp","gloves","plates","pack","sling"]},
+ {type:"train",id:"range",name:"Range Day",blurb:"Square-range practice. Ear and eye pro, mags, targets, med and a way to fix what breaks.",colors:[],req:["headset","eyepro","mags","pistolmags","holster","sling","targets","loader","ammocan","ifak","tq"],opt:["guncase","pistolcase","belt","riflemag","pistolmag","timer","spot","toolkit","clean","sun","water","batteries","gloves"]},
+ {type:"train",id:"pistol",name:"Pistol Course",blurb:"Holster work and movement all day. Belt setup, plenty of mags, ammo and a timer.",colors:[],req:["belt","holster","pistolmag","pistolmags","headset","eyepro","ammocan","ifak","tq"],opt:["pistolcase","timer","loader","notebook","snapcaps","wlight","gloves","toolkit","clean","sun","water","rain"]},
+ {type:"train",id:"carbine",name:"Carbine Course",blurb:"Rifle-focused class. Sling, belt or carrier, mags, pads and tools to fix the gun on the line.",colors:[],req:["guncase","sling","mags","riflemag","belt","headset","eyepro","ifak","tq","ammocan"],opt:["carrier","plates","helmet","kneepads","gloves","holster","pistolmag","wlight","toolkit","loader","snapcaps","clean","water","sun","rain","batteries"]},
+ {type:"train",id:"lowlight",name:"Low-Light Shoot",blurb:"Dusk into dark. NODs, IR and white light, clear eye pro and every battery you own.",colors:[],req:["nvg","mount","helmet","laser","wlight","headlamp","headset","eyepro","batteries","ifak","tq"],opt:["guncase","mags","riflemag","carrier","gloves","insul","timer","toolkit","radio"]},
+ {type:"train",id:"precision",name:"Precision / Long Range",blurb:"Distance work. Support, optics, a data book and tools to adjust and re-zero.",colors:[],req:["guncase","bipod","spot","notebook","headset","eyepro","ammocan","toolkit"],opt:["mat","batteries","clean","sun","water","insul","rain","ifak","tq"]},
+ {type:"train",id:"fof",name:"Force-on-Force",blurb:"Sim or UTM training. Protection first, training guns, and gear you don't mind getting marked.",colors:[],req:["simgear","trainer","gloves","kneepads","ifak","tq"],opt:["carrier","helmet","belt","holster","radio","headset","water"]},
+ {type:"train",id:"medtrain",name:"Med / TCCC Training",blurb:"Casualty care practice. Your carry IFAK and TQs plus a bigger bag to train from.",colors:[],req:["ifak","tq","traumabag","gloves","headlamp"],opt:["carrier","pack","notebook","radio","kneepads","water"]},
+ {type:"train",id:"comms",name:"Comms / Radio Training",blurb:"Field radio work. Radio, antennas, power, cables and a log for frequencies and contacts.",colors:[],req:["radio","antenna","batteries","ptt","headset","notebook"],opt:["progcable","pack","nav","headlamp","rain","insul","shelter","water"]},
+ {type:"train",id:"comp",name:"Competition",blurb:"USPSA / 3-Gun style match. Belt rig, lots of mags, loader, ammo and match-day comfort.",colors:[],req:["belt","holster","pistolmag","pistolmags","headset","eyepro","loader","ammocan"],opt:["riflemag","mags","sling","guncase","pistolcase","timer","toolkit","clean","sun","water","rain"]},
+ {type:"env",id:"gethome",name:"Get-Home Bag",blurb:"Walk home 1–3 days on your own. Water, shelter, light and low-key looks.",colors:["black","grey","gray","coyote","khaki","olive","navy"],req:["pack","water","filter","ifak","tq","knife","tool","headlamp","fire","shelter","rain","nav","batteries"],opt:["insul","gloves","radio","pistolmag","holster","sun","boots"]},
+];
+let curKit="range";
+const BAG_CATS=["Cases & Bags","Packs & Bags"];
+const BAG_PREF={train:["range bag","range backpack","shooting bag","gun bag","rifle bag","bag"],env:["pack","ruck","backpack","assault","3 day","satl"],nvg:["pelican","case","hard case"],comms:["pelican","case","radio bag","pack"]};
+function containers(){return live().filter(i=>BAG_CATS.includes(i.category))}
+function autoContainer(kit){
+  const prefs=kit.id==="comms"?BAG_PREF.comms:kit.id==="night"||kit.id==="lowlight"?[...BAG_PREF.nvg,...BAG_PREF.env]:kit.type==="train"?BAG_PREF.train:BAG_PREF.env;
+  const avoid=["rifle case","rifle bag","pistol case","gun case","hydration","bladder","dry bag","ammo"];
+  let best=null,bs=0;
+  containers().forEach(i=>{const t=itemText(i);if(avoid.some(a=>t.includes(a))&&!(kit.type==="train"&&t.includes("range")))return;
+    const k=prefs.findIndex(p=>t.includes(p)); if(k<0)return; const sc=100-k*5+(i.condition==="Needs-repair"?-50:0); if(sc>bs){bs=sc;best=i}});
+  return best;
+}
+function containerFor(kit){const st=kits[kit.id]||{};if(st.container==="none")return null;if(st.container){const c=live().find(i=>i.id===st.container);if(c)return c}return autoContainer(kit)}
+const itemText=i=>` ${[i.name,i.brand,i.notes].join(" ")} `.toLowerCase();
+const VISIBLE=new Set(["carrier","riflemag","pistolmag","ifak","pack","helmet","camo","rain","insul","belt","sun","coldhead"]);
+function colorFit(kit,i,sid){ if(!kit.colors.length||!i.color||(sid&&!VISIBLE.has(sid)))return 0; const c=i.color.toLowerCase(); return kit.colors.some(k=>c.includes(k))?1:-1 }
+function score(kit,slotId,i){
+  const [, cats, kws, , ex]=S[slotId]; const t=itemText(i);
+  if(i.category==="Firearms")return 0;
+  if(ex.some(k=>t.includes(k)))return 0;
+  const kw=kws.some(k=>t.includes(k)), cat=cats.includes(i.category);
+  if(!kw)return 0;
+  let sc=5+(cat?2:0)+colorFit(kit,i,slotId)*2;
+  if(i.condition==="New"||i.condition==="Good")sc+=1; if(i.condition==="Needs-repair")sc-=3;
+  return Math.max(sc,0.5);
+}
+function candidates(kit,slotId){return live().filter(i=>!onLoan(i.id)).map(i=>({i,s:score(kit,slotId,i)})).filter(x=>x.s>0).sort((a,b)=>b.s-a.s).map(x=>x.i)}
+function solve(kit){
+  const st=kits[kit.id]||{}; const picks=st.picks||{}; const used=new Set(); const out={};
+  const box=containerFor(kit); if(box)used.add(box.id);
+  const order=[...kit.req,...kit.opt];
+  if(box){const sid=order.find(x=>!(picks[x])&&score(kit,x,box)>0);if(sid)out[sid]=box}
+  order.forEach(sid=>{const p=picks[sid]; if(p==="none"){out[sid]=null;return} if(p){const it=live().find(i=>i.id===p); if(it){out[sid]=it;used.add(it.id)}}});
+  order.forEach(sid=>{ if(sid in out)return; const c=candidates(kit,sid).find(i=>!used.has(i.id)); out[sid]=c||null; if(c)used.add(c.id) });
+  return out;
+}
+function coverage(kit){const a=solve(kit);const have=kit.req.filter(s=>a[s]).length;return {a,have,need:kit.req.length,pct:Math.round(100*have/Math.max(1,kit.req.length))}}
+async function setKit(kitId,patch){kits={...kits,[kitId]:{...(kits[kitId]||{}),...patch,updatedAt:now()}};renderKits();await persist()}
+function renderKits(){
+  if(!live().length){$("kitChips").innerHTML="";$("kitDetail").innerHTML=`<div class="empty"><b>No gear yet</b>Add your gear on the Inventory tab. Kits build themselves from what you own, matched by item name, brand and color.</div>`;return}
+  const chip=k=>{const c=coverage(k);return `<button type="button" class="chip kchip" aria-pressed="${k.id===curKit}" data-k="${k.id}">${esc(k.name)}<small>${c.pct}%</small></button>`};
+  $("kitChips").innerHTML=`<div class="kgroup"><span class="klabel">Training</span>${KITS.filter(k=>k.type==="train").map(chip).join("")}</div><div class="kgroup"><span class="klabel">Environments</span>${KITS.filter(k=>k.type==="env").map(chip).join("")}</div>`;
+  const kit=KITS.find(k=>k.id===curKit)||KITS[0]; const {a,have,need,pct}=coverage(kit); const st=kits[kit.id]||{};
+  const extras=(st.extras||[]).map(id=>live().find(i=>i.id===id)).filter(Boolean);
+  const box=containerFor(kit);
+  const used=new Set([...Object.values(a).filter(Boolean).map(i=>i.id),...extras.map(i=>i.id),...(box?[box.id]:[])]);
+  const boxOpts=[`<option value="__auto">${box&&!st.container?`Auto: ${esc(box.name)}`:"Auto pick"}</option>`,...containers().map(i=>`<option value="${esc(i.id)}"${st.container===i.id?" selected":""}>${esc(i.name)}${i.color?` (${esc(i.color)})`:""}</option>`),`<option value="none"${st.container==="none"?" selected":""}>No bag / carry loose</option>`].join("");
+  const riders=ridersOf(used);
+  const val=[...[...used].map(id=>live().find(i=>i.id===id)),...riders].reduce((s,i)=>s+(+i.value||0)*(+i.qty||1),0);
+  const kw=kitWeight([...used,...riders.map(i=>i.id)]);
+  const row=(sid,essential)=>{const [label,, ,tip]=S[sid]; const it=a[sid]; const cands=candidates(kit,sid); const picked=(st.picks||{})[sid];
+    const opts=[`<option value="__auto">Auto pick</option>`,...cands.map(i=>`<option value="${esc(i.id)}"${it&&it.id===i.id&&picked?" selected":""}>${esc(i.name)}${i.color?` (${esc(i.color)})`:""}</option>`),`<option value="none"${picked==="none"?" selected":""}>Leave empty</option>`];
+    if(it&&!picked)opts[0]=`<option value="__auto" selected>Auto: ${esc(it.name)}${it.color?` (${esc(it.color)})`:""}</option>`;
+    const fit=it?colorFit(kit,it,sid):0;
+    const pill=!it?`<span class="pill ${essential?"gap":""}">${essential?"Gap":"Optional"}</span>`:onLoan(it.id)?`<span class="pill warn">On loan</span>`:fit<0?`<span class="pill warn">Color off</span>`:`<span class="pill ok">Packed</span>`;
+    const meta=it?esc([it.brand,it.color,it.location?`stored: ${it.location}`:""].filter(Boolean).join(" · ")||"—"):`<span class="meta">${esc(tip)}</span>`;
+    return `<div class="slot"><div class="lbl">${esc(label)}${essential?"":"<small>optional</small>"}</div><select data-slot="${sid}" aria-label="${esc(label)}">${opts.join("")}</select><div class="meta">${meta}</div>${pill}</div>`};
+  const gaps=kit.req.filter(s=>!a[s]);
+  const off=Object.entries(a).filter(([sid,i])=>i&&colorFit(kit,i,sid)<0).map(([s,i])=>`${esc(i.name)} (${esc(i.color)})`);
+  const addable=live().filter(i=>!used.has(i.id)).sort((x,y)=>(x.name||"").localeCompare(y.name||""));
+  $("kitDetail").innerHTML=`
+   <div class="kitHead"><div><h2>${esc(kit.name)}</h2><p>${esc(kit.blurb)}</p>${kit.colors.length?`<div class="palette">Best colors: ${esc(kit.colors.slice(0,6).join(", "))}</div>`:""}</div>
+     <div class="meter"><b>${have}/${need}</b> <span>essentials covered</span><div class="bar"><i style="width:${pct}%"></i></div><span>${used.size+riders.length} items · ${money(val)}</span><br><span>${kw.oz?fmtWt(kw.oz):"weight —"} · ${kw.n}/${kw.total} weighed</span></div>
+     <div class="kitBtns"><label class="packin"><span>Pack it in</span><select id="kitBox">${boxOpts}</select>${!containers().length?`<small>Add a bag or case under Cases &amp; Bags</small>`:""}</label><button class="btn ghost" type="button" id="kitPrint">Print packing list</button><button class="btn ghost" type="button" id="kitReset">Reset to auto</button></div></div>
+   ${gaps.length||off.length?`<div class="gaps"><h3>${gaps.length?`${gaps.length} gap${gaps.length>1?"s":""} to fill`:"Check these"}</h3><ul>${gaps.map(s=>`<li><b>${esc(S[s][0])}</b>: ${esc(S[s][3])}</li>`).join("")}${off.length?`<li>Color doesn't suit ${esc(kit.name.toLowerCase())}: ${off.join(", ")}</li>`:""}</ul></div>`:""}
+   <div class="slots"><div class="slotsHead">Essentials <span>${have} of ${need}</span></div>${kit.req.map(s=>row(s,true)).join("")}</div>
+   <div class="slots"><div class="slotsHead">Optional <span>${kit.opt.filter(s=>a[s]).length} of ${kit.opt.length}</span></div>${kit.opt.map(s=>row(s,false)).join("")}</div>
+   ${riders.length?`<div class="slots"><div class="slotsHead">Mounted on packed gear <span>${riders.length}</span></div><div class="riders">${riders.map(i=>`<div class="rider"><b>${esc(i.name)}</b><span>on ${esc(itemById(i.mountedOn)?.name||"")}</span><span>${esc(wtText(i))}</span></div>`).join("")}</div></div>`:""}
+   <div class="slots"><div class="slotsHead">Also bring <span>${extras.length}</span></div>
+     <div class="extras" style="padding-top:10px">${extras.map(i=>`<span class="x">${esc(i.name)}<button type="button" data-rmx="${esc(i.id)}" aria-label="Remove ${esc(i.name)}">×</button></span>`).join("")}
+     <select id="addExtra" style="width:auto;max-width:100%"><option value="">+ Add an item to this kit…</option>${addable.map(i=>`<option value="${esc(i.id)}">${esc(i.name)}${i.color?` (${esc(i.color)})`:""}</option>`).join("")}</select></div></div>`;
+}
+$("kitChips").onclick=e=>{const b=e.target.closest("[data-k]");if(!b)return;curKit=b.dataset.k;try{localStorage.setItem("gearLocker.curKit",curKit)}catch{};renderKits()};
+$("kitDetail").addEventListener("change",e=>{
+  const sel=e.target;
+  if(sel.dataset.slot){const st=kits[curKit]||{};const picks={...(st.picks||{})};if(sel.value==="__auto")delete picks[sel.dataset.slot];else picks[sel.dataset.slot]=sel.value;setKit(curKit,{picks})}
+  else if(sel.id==="kitBox"){setKit(curKit,{container:sel.value==="__auto"?undefined:sel.value})}
+  else if(sel.id==="addExtra"&&sel.value){const st=kits[curKit]||{};setKit(curKit,{extras:[...(st.extras||[]),sel.value]})}
+});
+$("kitDetail").addEventListener("click",e=>{
+  const rm=e.target.closest("[data-rmx]"); if(rm){const st=kits[curKit]||{};setKit(curKit,{extras:(st.extras||[]).filter(id=>id!==rm.dataset.rmx)});return}
+  if(e.target.id==="kitReset"){setKit(curKit,{picks:{},extras:[],container:undefined});toast("Kit reset to auto picks");return}
+  if(e.target.id==="kitPrint"){
+    const kit=KITS.find(k=>k.id===curKit);const {a}=coverage(kit);const st=kits[kit.id]||{};const box=containerFor(kit);
+    const extras=(st.extras||[]).map(id=>live().find(i=>i.id===id)).filter(Boolean);
+    const ks=new Set([...Object.values(a).filter(Boolean).map(i=>i.id),...extras.map(i=>i.id),...(box?[box.id]:[])]);const riders=ridersOf(ks);const kw=kitWeight([...ks,...riders.map(i=>i.id)]);
+    const line=(label,i,ess)=>`<tr><td><span class="box"></span></td><td>${esc(label)}${ess?"":" <small>(opt.)</small>"}</td><td>${i?esc(i.name):"<b>— GAP —</b>"}</td><td>${i?esc(i.brand):""}</td><td>${i?esc(i.color):""}</td><td>${i?esc(i.location):""}</td></tr>`;
+    $("printSheet").innerHTML=`<div class="ph"><div><h1>${esc(kit.name.toUpperCase())} KIT — PACKING LIST</h1><small>Printed ${new Date().toLocaleDateString()} · ${esc(kit.blurb)}</small><br><b>Pack it in: ${box?esc(box.name)+(box.location?` (stored: ${esc(box.location)})`:""):"no bag selected"}</b>${kw.oz?` · Est. weight ${fmtWt(kw.oz)} (${kw.n}/${kw.total} items weighed)`:""}</div><small>GEAR LOCKER</small></div>
+     <table><thead><tr class="cat"><th colspan="6">ESSENTIALS</th></tr><tr><th>✓</th><th>Slot</th><th>Item</th><th>Brand / model</th><th>Color</th><th>Stored</th></tr></thead><tbody>${kit.req.map(s=>line(S[s][0],a[s],true)).join("")}</tbody></table>
+     <table><thead><tr class="cat"><th colspan="6">OPTIONAL</th></tr><tr><th>✓</th><th>Slot</th><th>Item</th><th>Brand / model</th><th>Color</th><th>Stored</th></tr></thead><tbody>${kit.opt.filter(s=>a[s]).map(s=>line(S[s][0],a[s],false)).join("")||`<tr><td colspan="6">None packed</td></tr>`}</tbody></table>
+     ${riders.length?`<table><thead><tr class="cat"><th colspan="6">MOUNTED ON PACKED GEAR</th></tr></thead><tbody>${riders.map(i=>line("On "+(itemById(i.mountedOn)?.name||""),i,true)).join("")}</tbody></table>`:""}
+     ${extras.length?`<table><thead><tr class="cat"><th colspan="6">ALSO BRING</th></tr></thead><tbody>${extras.map(i=>line("Extra",i,true)).join("")}</tbody></table>`:""}
+     <p class="sign">Packed by: ______________________________ &nbsp;&nbsp; Date: ______________</p>`;
+    printingKit=true;window.print();
+  }
+});
+/* ---------- shared helpers ---------- */
+const uid=()=>crypto.randomUUID?crypto.randomUUID():"g"+Date.now()+Math.random().toString(36).slice(2);
+const L=c=>db[c].filter(x=>!x.deleted);
+const byName=(a,b)=>(a.name||"").localeCompare(b.name||"");
+function itemById(id){return id?live().find(i=>i.id===id):undefined}
+function fmtDate(d){return d?new Date(d+"T12:00:00").toLocaleDateString():"—"}
+function daysBetween(a,b){return Math.round((new Date(b+"T12:00:00")-new Date(a+"T12:00:00"))/864e5)}
+function addDays(d,n){const x=new Date(d+"T12:00:00");x.setDate(x.getDate()+n);return x.toISOString().slice(0,10)}
+function fmtWt(oz){oz=+oz||0;return oz>=16?`${(oz/16).toFixed(1)} lb`:`${oz%1?oz.toFixed(1):oz} oz`}
+function wtText(i){return i.weight!=null&&i.weight!==""?fmtWt(i.weight):i.weightStatus==="notfound"?"weight not found":"weight pending"}
+function kitWeight(ids){let oz=0,n=0;const uniq=[...new Set(ids)];uniq.forEach(id=>{const i=itemById(id);if(i&&i.weight!=null&&i.weight!==""){oz+=(+i.weight)*(+i.qty||1);n++}});return {oz,n,total:uniq.length}}
+function onLoan(id){return L("loans").find(x=>x.itemId===id&&!x.returned)}
+function firearms(){return live().filter(i=>i.category==="Firearms").sort(byName)}
+function roundsFired(gunId){const it=itemById(gunId);return (+(it&&it.baseRounds)||0)+L("sessions").reduce((a,s)=>a+(s.lines||[]).filter(l=>l.firearmId===gunId).reduce((b,l)=>b+(+l.rounds||0),0),0)}
+const MOUNT_CATS=["Firearms","Armor & Carriers","Belts & Rigs","Packs & Bags","Cases & Bags","Helmet & Head","Holsters & Slings"];
+function mountOpts(selfId){
+  const desc=new Set();
+  if(selfId){desc.add(selfId);let grow=true;while(grow){grow=false;live().forEach(i=>{if(!desc.has(i.id)&&desc.has(i.mountedOn)){desc.add(i.id);grow=true}})}}
+  return `<option value="">— not mounted —</option>`+live().filter(i=>MOUNT_CATS.includes(i.category)&&!desc.has(i.id)).sort(byName).map(i=>`<option value="${esc(i.id)}">${esc(i.name)}${i.color?` (${esc(i.color)})`:""}</option>`).join("");
+}
+function ridersOf(set){const out=[];live().forEach(i=>{if(set.has(i.id))return;let p=i.mountedOn,d=0;while(p&&d<8){if(set.has(p)){out.push(i);return}p=itemById(p)?.mountedOn;d++}});return out}
+function fireFields(){const on=$("fCat").value==="Firearms";document.querySelectorAll(".f.fire").forEach(e=>e.hidden=!on)}
+$("fCat").addEventListener("change",fireFields);
+function parseSplits(t){return String(t||"").split(/[\s,;]+/).map(parseFloat).filter(n=>isFinite(n)&&n>0)}
+const optList=(arr,val)=>arr.map(([v,l])=>`<option value="${esc(v)}"${String(v)===String(val??"")?" selected":""}>${esc(l)}</option>`).join("");
+
+/* ---------- generic editor ---------- */
+const ED={};
+const COLOF={range:"sessions",dope:"dope",ammo:"ammo",maint:"maint",wish:"wish",loans:"loans"};
+const VIEWS=Object.keys(COLOF);
+function openEd(view,rec){ED[view]={draft:JSON.parse(JSON.stringify(rec||{})),isNew:!rec||!rec.id,armed:false};renderExtra();setTimeout(()=>{const f=document.querySelector(`#${view}View form[data-ed]`);if(f){f.scrollIntoView({block:"nearest"});f.querySelector("input,select")?.focus()}})}
+function setPath(o,path,v){const ks=path.split(".");let t=o;for(let k=0;k<ks.length-1;k++){const key=ks[k];if(t[key]==null)t[key]=/^\d+$/.test(ks[k+1])?[]:{};t=t[key]}t[ks[ks.length-1]]=v}
+function collect(view){const ed=ED[view];if(!ed)return;const f=document.querySelector(`#${view}View form[data-ed]`);if(!f)return;f.querySelectorAll("[name]").forEach(el=>{let v=el.type==="checkbox"?el.checked:el.value;if(el.type==="number")v=el.value===""?"":+el.value;setPath(ed.draft,el.name,v)})}
+function fld(name,label,val,o={}){
+  const t=o.type||"text";const cls=`f${o.span?" span"+o.span:""}`;let inp;
+  if(t==="select")inp=`<select name="${name}" aria-label="${esc(label)}">${optList(o.opts,val)}</select>`;
+  else inp=`<input name="${name}" aria-label="${esc(label)}" type="${t}" value="${esc(val??"")}"${o.ph?` placeholder="${esc(o.ph)}"`:""}${o.step?` step="${o.step}"`:""}${o.list?` list="${o.list}"`:""}${t==="number"&&!o.neg?' min="0"':""}${o.req?" required":""}>`;
+  return `<div class="${cls}"><label>${esc(label)}</label>${inp}</div>`;
+}
+function cell(name,label,val,o={}){
+  const t=o.type||"text";let inp;
+  if(t==="select")inp=`<select name="${name}" aria-label="${esc(label)}">${optList(o.opts,val)}</select>`;
+  else inp=`<input name="${name}" aria-label="${esc(label)}" type="${t}" value="${esc(val??"")}"${o.ph?` placeholder="${esc(o.ph)}"`:""}${o.step?` step="${o.step}"`:""}${o.list?` list="${o.list}"`:""}${t==="number"&&!o.neg?' min="0"':""}>`;
+  return `<div><label>${esc(label)}</label>${inp}</div>`;
+}
+const rmBtn=(k,i)=>`<button type="button" class="rm" data-act="rmline" data-k="${k}" data-i="${i}" aria-label="Remove line">×</button>`;
+function edForm(view,title,body){
+  const ed=ED[view];
+  return `<form class="panel" data-ed="${view}"><h2>${esc(title)}</h2>${body}<div class="actions">${!ed.isNew?`<button class="btn ${ed.armed?"danger":"ghost"}" type="button" data-act="del">${ed.armed?"Confirm delete":"Delete"}</button>`:""}<span class="spacer"></span><button class="btn ghost" type="button" data-act="cancel">Cancel</button><button class="btn" type="submit">Save</button></div></form>`;
+}
+async function upsertC(c,rec){rec={...rec,updatedAt:now()};if(!rec.id){rec.id=uid();rec.createdAt=rec.updatedAt}const i=db[c].findIndex(x=>x.id===rec.id);if(i>=0)db[c][i]=rec;else db[c].push(rec);await persist();return rec}
+async function removeC(c,id){db[c]=db[c].map(x=>x.id===id?{id,deleted:true,updatedAt:now()}:x);await persist()}
+const SAVE={},DEL={},NEWREC={},ACT={},RENDER={};
+VIEWS.forEach(v=>{
+  const el=$(v+"View");
+  el.addEventListener("submit",async e=>{e.preventDefault();if(!ED[v])return;collect(v);await SAVE[v](ED[v].draft)});
+  el.addEventListener("click",async e=>{
+    const b=e.target.closest("[data-act]");if(!b||!el.contains(b))return;const act=b.dataset.act;const ed=ED[v];
+    if(act==="cancel"){ED[v]=null;renderExtra();return}
+    if(act==="del"){if(!ed.armed){collect(v);ed.armed=true;renderExtra();return}await DEL[v](ed.draft);ED[v]=null;render();toast("Deleted");return}
+    if(act==="new"){openEd(v,NEWREC[v]?NEWREC[v]():{});return}
+    if(act==="edit"){const r=L(COLOF[v]).find(x=>x.id===b.dataset.id);if(r)openEd(v,r);return}
+    if(act==="addline"){collect(v);const k=b.dataset.k;(ed.draft[k]=ed.draft[k]||[]).push({});renderExtra();return}
+    if(act==="rmline"){collect(v);ed.draft[b.dataset.k].splice(+b.dataset.i,1);renderExtra();return}
+    if(ACT[v])await ACT[v](act,b,e);
+  });
+  el.addEventListener("change",e=>{if(ACT[v])ACT[v]("change",e.target,e)});
+});
+function renderExtra(){if(!COLOF[curTab])return;collect(curTab);RENDER[curTab]()}
+
+/* ---------- AMMO ---------- */
+function ammoSummary(){
+  const m={};
+  L("ammo").forEach(a=>{const k=(a.caliber||"Unknown").trim();const s=m[k]||(m[k]={cal:k,rounds:0,cost:0,costed:0,alert:0});s.rounds+=+a.rounds||0;if(+a.cpr){s.cost+=(+a.cpr)*(+a.rounds||0);s.costed+=+a.rounds||0}s.alert=Math.max(s.alert,+a.lowAlert||0)});
+  return Object.values(m).map(s=>({...s,avg:s.costed?s.cost/s.costed:0,low:s.alert>0&&s.rounds<s.alert})).sort((a,b)=>a.cal.localeCompare(b.cal));
+}
+const ammoLabel=a=>`${a.caliber||"?"} · ${[a.brand,a.load].filter(Boolean).join(" ")} (${(+a.rounds||0).toLocaleString()} on hand)`;
+NEWREC.ammo=()=>({lowAlert:200});
+RENDER.ammo=()=>{
+  const ed=ED.ammo,sum=ammoSummary();
+  const recs=L("ammo").sort((a,b)=>(a.caliber||"").localeCompare(b.caliber||"")||(a.brand||"").localeCompare(b.brand||""));
+  const total=sum.reduce((a,s)=>a+s.rounds,0),val=L("ammo").reduce((a,x)=>a+(+x.cpr||0)*(+x.rounds||0),0);
+  const d=ed?.draft||{};
+  $("ammoView").innerHTML=`<div class="vhead"><div><h2>Ammo</h2><p>Rounds on hand by caliber. When you log a range session, the rounds you fire come off these counts.</p></div><button class="btn" type="button" data-act="new">+ Add ammo</button></div>
+  ${ed?edForm("ammo",ed.isNew?"Add ammo":"Edit ammo",
+    fld("caliber","Caliber",d.caliber,{list:"calibers",req:1,ph:"9mm"})+fld("brand","Brand",d.brand,{ph:"Federal"})+fld("load","Load",d.load,{ph:"124gr FMJ"})+fld("rounds","Rounds on hand",d.rounds,{type:"number",step:1})+
+    fld("cpr","Cost per round ($)",d.cpr,{type:"number",step:"0.01",ph:"0.28"})+fld("lowAlert","Warn when caliber drops below",d.lowAlert,{type:"number",step:1})+fld("location","Stored at",d.location,{list:"locations",span:2})+fld("lot","Lot # / notes",d.lot,{span:4})):""}
+  <section class="stats"><div class="stat"><b>${total.toLocaleString()}</b><span>Rounds on hand</span></div><div class="stat"><b>${sum.length}</b><span>Calibers</span></div><div class="stat"><b>${money(val)}</b><span>Ammo value</span></div><div class="stat"><b>${sum.filter(s=>s.low).length}</b><span>Running low</span></div></section>
+  ${recs.length?`<div class="scroll"><table class="tbl"><thead><tr><th>Caliber</th><th class="n">Rounds</th><th class="n">Avg $/rd</th><th class="n">Warn below</th><th>Status</th></tr></thead><tbody>${sum.map(s=>`<tr><td><b>${esc(s.cal)}</b></td><td class="n">${s.rounds.toLocaleString()}</td><td class="n">${s.avg?"$"+s.avg.toFixed(2):"—"}</td><td class="n">${s.alert||"—"}</td><td>${s.low?`<span class="pill gap">Low</span>`:`<span class="pill ok">OK</span>`}</td></tr>`).join("")}</tbody></table></div>
+  <div class="slotsHead">Boxes &amp; lots <span>click to edit</span></div>
+  <div class="scroll"><table class="tbl"><thead><tr><th>Caliber</th><th>Brand</th><th>Load</th><th class="n">Rounds</th><th class="n">$/rd</th><th>Stored</th></tr></thead><tbody>${recs.map(a=>`<tr class="click" data-act="edit" data-id="${esc(a.id)}"><td>${esc(a.caliber)}</td><td>${esc(a.brand)}</td><td>${esc(a.load)}</td><td class="n">${(+a.rounds||0).toLocaleString()}</td><td class="n">${+a.cpr?"$"+(+a.cpr).toFixed(2):"—"}</td><td>${esc(a.location||"—")}</td></tr>`).join("")}</tbody></table></div>`
+  :`<div class="empty"><b>No ammo logged</b>Add each caliber and load you keep, like "9mm · Federal · 124gr FMJ · 1,000 rds".</div>`}`;
+};
+SAVE.ammo=async d=>{if(!String(d.caliber||"").trim()){toast("Enter a caliber");return}await upsertC("ammo",d);ED.ammo=null;toast("Ammo saved");render()};
+DEL.ammo=async d=>{await removeC("ammo",d.id)};
+
+/* ---------- RANGE LOG ---------- */
+let curDrill="";
+NEWREC.range=()=>({date:today(),lines:[{}],drills:[{}]});
+function drillStats(){
+  const m={};
+  L("sessions").forEach(s=>(s.drills||[]).forEach(x=>{const n=(x.name||"").trim();if(!n)return;const k=n.toLowerCase();const r=m[k]||(m[k]={name:n,runs:0,best:Infinity,bestFirst:Infinity,bestSplit:Infinity,last:""});r.runs++;
+    if(+x.total)r.best=Math.min(r.best,+x.total);if(+x.first)r.bestFirst=Math.min(r.bestFirst,+x.first);parseSplits(x.splits).forEach(sp=>r.bestSplit=Math.min(r.bestSplit,sp));if((s.date||"")>r.last)r.last=s.date}));
+  return Object.values(m).sort((a,b)=>b.runs-a.runs||a.name.localeCompare(b.name));
+}
+function drillChart(name){
+  const pts=[];
+  L("sessions").slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")).forEach(s=>{const ds=(s.drills||[]).filter(x=>(x.name||"").trim().toLowerCase()===name.toLowerCase());if(!ds.length)return;
+    const tot=Math.min(...ds.map(x=>+x.total||Infinity)),fs=Math.min(...ds.map(x=>+x.first||Infinity));pts.push({date:s.date,tot:isFinite(tot)?tot:null,fs:isFinite(fs)?fs:null})});
+  if(!pts.length)return `<p class="hint">No times logged for this drill yet.</p>`;
+  const W=640,H=230,pl=48,pr=16,pt=12,pb=36;const max=Math.max(...pts.flatMap(p=>[p.tot||0,p.fs||0]))*1.15||1;
+  const x=i=>pts.length===1?pl+(W-pl-pr)/2:pl+i*(W-pl-pr)/(pts.length-1);const y=v=>pt+(H-pt-pb)*(1-v/max);
+  const grid=[0,1,2,3].map(k=>{const v=max*k/3;return `<line class="grid" x1="${pl}" x2="${W-pr}" y1="${y(v)}" y2="${y(v)}"/><text x="${pl-6}" y="${y(v)+4}" text-anchor="end">${v.toFixed(1)}s</text>`}).join("");
+  const step=Math.max(1,Math.ceil(pts.length/6));
+  const xl=pts.map((p,i)=>i%step===0||i===pts.length-1?`<text x="${x(i)}" y="${H-12}" text-anchor="${pts.length>1&&i===0?"start":pts.length>1&&i===pts.length-1?"end":"middle"}">${esc(fmtDate(p.date))}</text>`:"").join("");
+  const path=(k,cls)=>{const seg=pts.map((p,i)=>p[k]!=null?[x(i),y(p[k])]:null).filter(Boolean);if(!seg.length)return "";return (seg.length>1?`<path class="${cls}" d="M${seg.map(q=>q.join(" ")).join(" L")}"/>`:"")+seg.map(q=>`<circle class="${cls==="ln"?"pt":"pt2"}" cx="${q[0]}" cy="${q[1]}" r="${cls==="ln"?4:3}"/>`).join("")};
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(name)} times over sessions">${grid}${xl}${path("fs","ln2")}${path("tot","ln")}</svg><div class="legend"><span><i></i>Best total time</span><span><i class="b"></i>Best first shot / draw</span><span>Lower is better</span></div>`;
+}
+RENDER.range=()=>{
+  const ed=ED.range,d=ed?.draft||{};const sess=L("sessions").sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  const ds=drillStats();if(!curDrill||!ds.some(x=>x.name.toLowerCase()===curDrill.toLowerCase()))curDrill=ds[0]?.name||"";
+  const guns=firearms(),ammo=L("ammo");
+  const typeOpts=[["","—"],...KITS.filter(k=>k.type==="train").map(k=>[k.name,k.name]),["Other","Other"]];
+  const form=ed?edForm("range",ed.isNew?"Log a range session":"Edit session",
+    fld("date","Date",d.date,{type:"date"})+fld("type","Training type",d.type,{type:"select",opts:typeOpts})+fld("location","Range / location",d.location,{span:2,ph:"Local range, bay 3"})+
+    `<div class="lines"><h4>Rounds fired <button class="btn ghost" type="button" data-act="addline" data-k="lines">+ Add gun</button></h4>
+      ${!guns.length?`<p class="hint">Add your guns in Inventory under the Firearms category to track round counts per gun.</p>`:""}
+      ${(d.lines||[]).map((l,i)=>`<div class="line l3">${cell(`lines.${i}.firearmId`,"Firearm",l.firearmId,{type:"select",opts:[["","—"],...guns.map(g=>[g.id,g.name])]})}${cell(`lines.${i}.ammoId`,"Ammo used (subtracts from Ammo)",l.ammoId,{type:"select",opts:[["","— not tracked —"],...ammo.map(a=>[a.id,ammoLabel(a)])]})}${cell(`lines.${i}.rounds`,"Rounds",l.rounds,{type:"number",step:1})}${rmBtn("lines",i)}</div>`).join("")}</div>
+    <div class="lines"><h4>Drills &amp; times <button class="btn ghost" type="button" data-act="addline" data-k="drills">+ Add drill</button></h4>
+      <p class="hint">Splits: type them separated by commas, like 0.24, 0.22, 0.25. Leave Total blank and it's added up from first shot + splits.</p>
+      ${(d.drills||[]).map((x,i)=>`<div class="line drill">${cell(`drills.${i}.name`,"Drill",x.name,{list:"drills",ph:"Bill Drill"})}${cell(`drills.${i}.dist`,"Yards",x.dist,{type:"number",step:1})}${cell(`drills.${i}.par`,"Par (s)",x.par,{type:"number",step:"0.01"})}${cell(`drills.${i}.first`,"Draw / 1st (s)",x.first,{type:"number",step:"0.01"})}${cell(`drills.${i}.splits`,"Splits (s)",x.splits,{ph:"0.24, 0.22, 0.25"})}${cell(`drills.${i}.total`,"Total (s)",x.total,{type:"number",step:"0.01"})}${cell(`drills.${i}.hits`,"Hits / pts",x.hits,{ph:"6/6 A"})}${rmBtn("drills",i)}</div>`).join("")}</div>`+
+    fld("notes","Notes",d.notes,{span:4,ph:"What worked, what to fix next time"})):"";
+  const totalRds=sess.reduce((a,s)=>a+(+s.rounds||0),0);
+  $("rangeView").innerHTML=`<div class="vhead"><div><h2>Range Log</h2><p>Log each session's rounds, drills and split times to see your progress over time.</p></div><button class="btn" type="button" data-act="new">+ Log session</button></div>
+  ${form}
+  <section class="stats"><div class="stat"><b>${sess.length}</b><span>Sessions</span></div><div class="stat"><b>${totalRds.toLocaleString()}</b><span>Rounds logged</span></div><div class="stat"><b>${ds.length}</b><span>Drills tracked</span></div><div class="stat"><b>${sess[0]?esc(fmtDate(sess[0].date)):"—"}</b><span>Last session</span></div></section>
+  ${ds.length?`<div class="chartWrap"><div class="vhead"><div><h2 style="font-size:1.2rem">Progress</h2></div><select id="drillPick" aria-label="Drill">${optList(ds.map(x=>[x.name,`${x.name} (${x.runs} run${x.runs>1?"s":""})`]),curDrill)}</select></div>${drillChart(curDrill)}</div>
+  <div class="slotsHead">Personal bests</div>
+  <div class="scroll"><table class="tbl"><thead><tr><th>Drill</th><th class="n">Runs</th><th class="n">Best total</th><th class="n">Best draw / 1st</th><th class="n">Best split</th><th>Last run</th></tr></thead><tbody>${ds.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td class="n">${x.runs}</td><td class="n">${isFinite(x.best)?x.best.toFixed(2)+"s":"—"}</td><td class="n">${isFinite(x.bestFirst)?x.bestFirst.toFixed(2)+"s":"—"}</td><td class="n">${isFinite(x.bestSplit)?x.bestSplit.toFixed(2)+"s":"—"}</td><td>${esc(fmtDate(x.last))}</td></tr>`).join("")}</tbody></table></div>`:""}
+  ${guns.length?`<div class="slotsHead">Round counts</div><div class="scroll"><table class="tbl"><thead><tr><th>Firearm</th><th>Caliber</th><th class="n">Rounds fired</th></tr></thead><tbody>${guns.map(g=>`<tr><td>${esc(g.name)}</td><td>${esc(g.caliber||"—")}</td><td class="n">${roundsFired(g.id).toLocaleString()}</td></tr>`).join("")}</tbody></table></div>`:""}
+  ${sess.length?`<div class="slotsHead">Sessions <span>click to edit</span></div><div class="scroll"><table class="tbl"><thead><tr><th>Date</th><th>Type</th><th>Location</th><th class="n">Rounds</th><th>Drills</th></tr></thead><tbody>${sess.map(s=>`<tr class="click" data-act="edit" data-id="${esc(s.id)}"><td>${esc(fmtDate(s.date))}</td><td>${esc(s.type||"—")}</td><td>${esc(s.location||"—")}</td><td class="n">${(+s.rounds||0).toLocaleString()}</td><td>${esc((s.drills||[]).map(x=>x.name+(x.total?` ${(+x.total).toFixed(2)}s`:"")).join(", ")||"—")}</td></tr>`).join("")}</tbody></table></div>`
+  :`<div class="empty"><b>No sessions yet</b>Click <em>+ Log session</em> after your next range trip. Add drills with your draw time and splits to start tracking progress.</div>`}`;
+};
+function applyAmmo(lines,sign){(lines||[]).forEach(l=>{if(!l.ammoId||!+l.rounds)return;const a=db.ammo.find(x=>x.id===l.ammoId&&!x.deleted);if(a){a.rounds=Math.max(0,(+a.rounds||0)-sign*(+l.rounds));a.updatedAt=now()}})}
+SAVE.range=async d=>{
+  if(!d.date){toast("Pick a date");return}
+  d.lines=(d.lines||[]).filter(l=>l&&(l.firearmId||l.ammoId||+l.rounds));
+  d.drills=(d.drills||[]).filter(x=>x&&(x.name||x.first||x.splits||x.total));
+  d.drills.forEach(x=>{if(x.total===""||x.total==null){const t=(+x.first||0)+parseSplits(x.splits).reduce((a,b)=>a+b,0);x.total=t?+t.toFixed(2):""}});
+  const old=d.id?L("sessions").find(s=>s.id===d.id):null;
+  applyAmmo(old?.lines,-1);applyAmmo(d.lines,1);
+  d.rounds=d.lines.reduce((a,l)=>a+(+l.rounds||0),0);
+  if(d.drills[0]?.name)curDrill=d.drills[0].name;
+  await upsertC("sessions",d);ED.range=null;toast("Session saved");render();
+};
+DEL.range=async d=>{const old=L("sessions").find(s=>s.id===d.id);applyAmmo(old?.lines,-1);await removeC("sessions",d.id)};
+ACT.range=(act,t)=>{if(act==="change"&&t.id==="drillPick"){curDrill=t.value;renderExtra()}};
+
+/* ---------- DOPE ---------- */
+NEWREC.dope=()=>({units:"MIL",zero:100,rows:[100,200,300,400,500,600].map(dist=>({dist}))});
+const rifleLabel=d=>itemById(d.rifleId)?.name||d.rifleName||"Rifle";
+function dopeTable(d,cls="tbl dopeTbl"){const rows=(d.rows||[]).filter(r=>r.dist!==""&&r.dist!=null).sort((a,b)=>+a.dist-+b.dist);
+  return `<table class="${cls}"><thead><tr><th>Yards</th><th>Elev (${esc(d.units||"MIL")})</th><th>Wind 10 mph</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.dist)}</td><td>${r.elev===""||r.elev==null?"—":esc(r.elev)}</td><td>${r.wind===""||r.wind==null?"—":esc(r.wind)}</td></tr>`).join("")}</tbody></table>`}
+RENDER.dope=()=>{
+  const ed=ED.dope,d=ed?.draft||{};const guns=firearms();
+  const form=ed?edForm("dope",ed.isNew?"New DOPE card":"Edit DOPE card",
+    fld("rifleId","Rifle",d.rifleId,{type:"select",opts:[["","— pick from Firearms —"],...guns.map(g=>[g.id,g.name])]})+fld("rifleName","Or type rifle name",d.rifleName,{ph:"RPR .308"})+fld("load","Load / ammo",d.load,{ph:"Federal GMM 175gr"})+fld("optic","Optic",d.optic,{ph:"Vortex PST 5-25"})+
+    fld("units","Units",d.units,{type:"select",opts:[["MIL","MIL"],["MOA","MOA"]]})+fld("zero","Zero (yd)",d.zero,{type:"number",step:1})+fld("mv","Muzzle velocity (fps)",d.mv,{type:"number",step:1})+fld("bc","BC",d.bc,{ph:"G7 .243"})+
+    fld("conditions","Conditions when confirmed",d.conditions,{span:2,ph:"72°F, 50 ft DA 1,200"})+fld("confirmed","Confirmed on",d.confirmed,{type:"date"})+fld("height","Sight height (in)",d.height,{type:"number",step:"0.01"})+
+    `<div class="lines"><h4>Holds <span class="vbtns"><button class="btn ghost" type="button" data-act="fill">Fill 100–1000 yd</button><button class="btn ghost" type="button" data-act="addline" data-k="rows">+ Add distance</button></span></h4>
+      ${(d.rows||[]).map((r,i)=>`<div class="line dope">${cell(`rows.${i}.dist`,"Yards",r.dist,{type:"number",step:1})}${cell(`rows.${i}.elev`,`Elevation (${d.units||"MIL"})`,r.elev,{type:"number",step:"0.1",neg:1})}${cell(`rows.${i}.wind`,"Wind hold, 10 mph full value",r.wind,{type:"number",step:"0.1",neg:1})}${rmBtn("rows",i)}</div>`).join("")}</div>`+
+    fld("notes","Notes",d.notes,{span:4,ph:"Cold bore shift, spin drift, turret notes"})):"";
+  const cards=L("dope").sort((a,b)=>rifleLabel(a).localeCompare(rifleLabel(b)));
+  $("dopeView").innerHTML=`<div class="vhead"><div><h2>DOPE</h2><p>Your confirmed holds for each rifle and load. Print a card for your stock or turret cap.</p></div><button class="btn" type="button" data-act="new">+ New DOPE card</button></div>
+  ${form}
+  ${cards.length?`<div class="cards">${cards.map(c=>`<article class="card"><div><h3>${esc(rifleLabel(c))}</h3><div class="sub2">${esc([c.load,c.optic,`${c.zero||"?"} yd zero`,c.units,c.mv?c.mv+" fps":""].filter(Boolean).join(" · "))}</div>${c.confirmed?`<div class="sub2">Confirmed ${esc(fmtDate(c.confirmed))}${c.conditions?` · ${esc(c.conditions)}`:""}</div>`:""}</div>
+    <div class="scroll">${dopeTable(c)}</div>${c.notes?`<p class="hint">${esc(c.notes)}</p>`:""}
+    <div class="vbtns"><button class="btn ghost" type="button" data-act="edit" data-id="${esc(c.id)}">Edit</button><button class="btn ghost" type="button" data-act="print" data-id="${esc(c.id)}">Print card</button></div></article>`).join("")}</div>`
+  :`<div class="empty"><b>No DOPE yet</b>Make a card per rifle and load. Enter your elevation and wind holds as you confirm them at distance.</div>`}`;
+};
+SAVE.dope=async d=>{if(!d.rifleId&&!String(d.rifleName||"").trim()){toast("Pick or name the rifle");return}d.rows=(d.rows||[]).filter(r=>r&&r.dist!==""&&r.dist!=null).sort((a,b)=>+a.dist-+b.dist);await upsertC("dope",d);ED.dope=null;toast("DOPE saved");render()};
+DEL.dope=async d=>{await removeC("dope",d.id)};
+ACT.dope=(act,b)=>{
+  if(act==="fill"){collect("dope");const ed=ED.dope;const have=new Map((ed.draft.rows||[]).filter(r=>r.dist!==""&&r.dist!=null).map(r=>[+r.dist,r]));for(let y=100;y<=1000;y+=100)if(!have.has(y))have.set(y,{dist:y});ed.draft.rows=[...have.values()].sort((a,b)=>+a.dist-+b.dist);renderExtra();return}
+  if(act==="print"){const c=L("dope").find(x=>x.id===b.dataset.id);if(!c)return;
+    $("printSheet").innerHTML=`<div class="dopecard"><div class="ph"><div><h1>${esc(rifleLabel(c))}</h1><small>${esc([c.load,c.optic].filter(Boolean).join(" · "))}</small><br><small>${esc([`${c.zero||"?"} yd zero`,c.units,c.mv?c.mv+" fps":"",c.bc?"BC "+c.bc:"",c.height?`SH ${c.height}"`:""].filter(Boolean).join(" · "))}</small></div><small>${c.confirmed?esc(fmtDate(c.confirmed)):""}</small></div>${dopeTable(c,"")}${c.conditions?`<small>${esc(c.conditions)}</small>`:""}${c.notes?`<p><small>${esc(c.notes)}</small></p>`:""}</div>`;
+    printingKit=true;window.print()}
+};
+
+/* ---------- MAINTENANCE ---------- */
+const SUGG=[
+ {t:i=>i.category==="Firearms",task:"Clean & lube",everyDays:90,everyRounds:500},
+ {t:i=>i.category==="Firearms",task:"Detail strip & inspect",everyDays:365,everyRounds:2000},
+ {t:i=>/nvg|pvs|nod|night vision|thermal|bnvd|ps31|1431|dtnvs/.test(itemText(i)),task:"Swap battery / function check",everyDays:60},
+ {t:i=>i.category==="Lights & Lasers",task:"Replace battery",everyDays:180},
+ {t:i=>/optic|scope|red dot|aimpoint|eotech|trijicon|holosun|lpvo|vortex|nightforce/.test(itemText(i))&&i.category!=="Firearms",task:"Check optic zero & screws",everyDays:180},
+ {t:i=>/tourniquet| tq |cat gen|sof-t|sof t/.test(itemText(i)),task:"Inspect tourniquet",everyDays:180},
+ {t:i=>/ifak|trauma|med kit|first aid|blowout/.test(itemText(i)),task:"Check med expirations",everyDays:180},
+ {t:i=>i.category==="Comms & Radios"&&/radio|baofeng|yaesu|kenwood|icom|motorola|prc|uv-5r/.test(itemText(i)),task:"Charge & check battery",everyDays:30},
+ {t:i=>/plates|level iii|level iv|sapi|armor insert/.test(itemText(i))&&!/carrier/.test(itemText(i))&&i.category==="Armor & Carriers",task:"Inspect plates for damage",everyDays:365},
+ {t:i=>/helmet/.test(itemText(i)),task:"Check helmet pads & retention",everyDays:365},
+];
+let suggCache=[];
+function maintRows(){
+  const order={over:0,soon:1,ok:2};
+  return L("maint").map(m=>{const it=itemById(m.itemId);const isGun=it?.category==="Firearms";const cur=isGun?roundsFired(it.id):0;let status="ok",parts=[],key=1e9;
+    if(+m.everyDays){if(!m.lastDone){status="soon";parts.push("not logged yet");key=0}else{const left=daysBetween(today(),addDays(m.lastDone,+m.everyDays));key=Math.min(key,left);parts.push(left<0?`${-left} days overdue`:left===0?"due today":`due in ${left} days`);if(left<0)status="over";else if(left<=14&&status!=="over")status="soon"}}
+    if(isGun&&+m.everyRounds){const left=+m.everyRounds-(cur-(+m.lastRounds||0));key=Math.min(key,left/10);parts.push(left<0?`${(-left).toLocaleString()} rds over`:`${left.toLocaleString()} rds to go`);if(left<0)status="over";else if(left<=+m.everyRounds*0.2&&status!=="over")status="soon"}
+    return {m,it,status,txt:parts.join(" · ")||"no interval set",key,cur,isGun}}).sort((a,b)=>order[a.status]-order[b.status]||a.key-b.key);
+}
+NEWREC.maint=()=>({});
+RENDER.maint=()=>{
+  const ed=ED.maint,d=ed?.draft||{};const rows=maintRows();const items=live().slice().sort(byName);
+  const have=new Set(L("maint").map(m=>m.itemId+"|"+(m.task||"").toLowerCase()));
+  suggCache=[];live().forEach(i=>SUGG.forEach(s=>{if(s.t(i)&&!have.has(i.id+"|"+s.task.toLowerCase()))suggCache.push({i,s})}));
+  const form=ed?edForm("maint",ed.isNew?"Add maintenance task":"Edit task",
+    fld("itemId","Item",d.itemId,{type:"select",span:2,opts:[["","— pick an item —"],...items.map(i=>[i.id,`${i.name}${i.category==="Firearms"?" (firearm)":""}`])]})+fld("task","Task",d.task,{list:"maintTasks",span:2,ph:"Clean & lube"})+
+    fld("everyDays","Every (days)",d.everyDays,{type:"number",step:1,ph:"90"})+fld("everyRounds","Every (rounds, guns only)",d.everyRounds,{type:"number",step:1,ph:"500"})+fld("lastDone","Last done",d.lastDone,{type:"date"})+fld("lastRounds","Round count when last done",d.lastRounds,{type:"number",step:1})+
+    fld("notes","Notes",d.notes,{span:4,ph:"Parts used, what you found"})):"";
+  const pill=s=>s==="over"?`<span class="pill gap">Overdue</span>`:s==="soon"?`<span class="pill warn">Due soon</span>`:`<span class="pill ok">OK</span>`;
+  $("maintView").innerHTML=`<div class="vhead"><div><h2>Maintenance</h2><p>Reminders by date and, for guns, by rounds fired from your range log. Click Done when you finish a task.</p></div><button class="btn" type="button" data-act="new">+ Add task</button></div>
+  ${form}
+  <section class="stats"><div class="stat"><b>${rows.filter(r=>r.status==="over").length}</b><span>Overdue</span></div><div class="stat"><b>${rows.filter(r=>r.status==="soon").length}</b><span>Due soon</span></div><div class="stat"><b>${rows.length}</b><span>Tasks tracked</span></div><div class="stat"><b>${suggCache.length}</b><span>Suggested</span></div></section>
+  ${rows.length?`<div class="scroll"><table class="tbl"><thead><tr><th>Item</th><th>Task</th><th>Last done</th><th>Next</th><th>Status</th><th></th></tr></thead><tbody>${rows.map(r=>`<tr class="click" data-act="edit" data-id="${esc(r.m.id)}"><td>${esc(r.it?.name||"(deleted item)")}${r.isGun?`<small>${r.cur.toLocaleString()} rds</small>`:""}</td><td>${esc(r.m.task||"—")}</td><td>${esc(fmtDate(r.m.lastDone))}</td><td>${esc(r.txt)}</td><td>${pill(r.status)}</td><td><button class="btn ghost" type="button" data-act="done" data-id="${esc(r.m.id)}">Done</button></td></tr>`).join("")}</tbody></table></div>`
+  :`<div class="empty"><b>No tasks yet</b>Add tasks from the suggestions below, or click <em>+ Add task</em>.</div>`}
+  ${suggCache.length?`<div class="slotsHead">Suggested for your gear <span>${suggCache.length}</span></div><div class="scroll"><table class="tbl"><tbody>${suggCache.slice(0,12).map((x,k)=>`<tr><td>${esc(x.i.name)}</td><td>${esc(x.s.task)}</td><td>every ${x.s.everyDays} days${x.s.everyRounds?` or ${x.s.everyRounds} rds`:""}</td><td><button class="btn ghost" type="button" data-act="sugg" data-i="${k}">Add</button></td></tr>`).join("")}</tbody></table></div>${suggCache.length>1?`<div><button class="btn ghost" type="button" data-act="suggall">Add all ${suggCache.length} suggestions</button></div>`:""}`:""}`;
+};
+SAVE.maint=async d=>{if(!d.itemId){toast("Pick an item");return}if(!String(d.task||"").trim()){toast("Name the task");return}await upsertC("maint",d);ED.maint=null;toast("Task saved");render()};
+DEL.maint=async d=>{await removeC("maint",d.id)};
+ACT.maint=async(act,b)=>{
+  if(act==="done"){const r=maintRows().find(x=>x.m.id===b.dataset.id);if(!r)return;const m={...r.m,lastDone:today(),lastRounds:r.isGun?r.cur:r.m.lastRounds,history:[...(r.m.history||[]),{date:today(),rounds:r.isGun?r.cur:null}]};await upsertC("maint",m);toast(`${m.task} logged`);render();return}
+  const add=x=>({id:uid(),itemId:x.i.id,task:x.s.task,everyDays:x.s.everyDays,everyRounds:x.s.everyRounds||"",lastDone:"",lastRounds:x.i.category==="Firearms"?roundsFired(x.i.id):"",createdAt:now(),updatedAt:now()});
+  if(act==="sugg"){const x=suggCache[+b.dataset.i];if(!x)return;db.maint.push(add(x));await persist();toast("Task added");render();return}
+  if(act==="suggall"){suggCache.forEach(x=>db.maint.push(add(x)));await persist();toast("Tasks added");render()}
+};
+
+/* ---------- WISHLIST ---------- */
+const PRI={High:0,Medium:1,Low:2};
+NEWREC.wish=()=>({priority:"Medium",status:"want"});
+RENDER.wish=()=>{
+  const ed=ED.wish,d=ed?.draft||{};const want=L("wish").filter(w=>w.status!=="got").sort((a,b)=>(PRI[a.priority]??1)-(PRI[b.priority]??1)||byName(a,b));const got=L("wish").filter(w=>w.status==="got");
+  const cost=want.reduce((a,w)=>a+(+w.estPrice||0),0);
+  const form=ed?edForm("wish",ed.isNew?"Add to wishlist":"Edit wishlist item",
+    fld("name","Item",d.name,{span:2,req:1,ph:"Ballistic glasses"})+fld("brand","Brand / model",d.brand,{ph:"Revision StingerHawk"})+fld("category","Category",d.category,{type:"select",opts:CATS.map(c=>[c,c])})+
+    fld("estPrice","Est. price ($)",d.estPrice,{type:"number",step:1})+fld("priority","Priority",d.priority,{type:"select",opts:[["High","High"],["Medium","Medium"],["Low","Low"]]})+fld("link","Link",d.link,{type:"url",span:2,ph:"https://"})+
+    fld("notes","Notes",d.notes,{span:4})+(d.priceSource==="market"?`<p class="hint span4" style="grid-column:1/-1">Market check ${esc(d.priceDate||"")}: ${esc(d.priceNote||"")}</p>`:"")):"";
+  $("wishView").innerHTML=`<div class="vhead"><div><h2>Wishlist</h2><p>Gear you want, with kit gaps added for you. Market check prices them. Got it moves the item into your inventory.</p></div><div class="vbtns"><button class="btn ghost" type="button" data-act="gaps">Add kit gaps</button><button class="btn ghost" type="button" data-act="checkall">Market check all</button><button class="btn" type="button" data-act="new">+ Add item</button></div></div>
+  ${form}
+  <section class="stats"><div class="stat"><b>${want.length}</b><span>On the list</span></div><div class="stat"><b>${money(cost)}</b><span>Est. total</span></div><div class="stat"><b>${want.filter(w=>w.priority==="High").length}</b><span>High priority</span></div><div class="stat"><b>${got.length}</b><span>Bought</span></div></section>
+  ${want.length?`<div class="scroll"><table class="tbl"><thead><tr><th>Priority</th><th>Item</th><th>Needed for</th><th class="n">Est. price</th><th></th></tr></thead><tbody>${want.map(w=>`<tr class="click" data-act="edit" data-id="${esc(w.id)}"><td><span class="pill ${w.priority==="High"?"gap":w.priority==="Medium"?"warn":""}">${esc(w.priority||"Medium")}</span></td><td><b>${esc(w.name)}</b><small>${esc([w.brand,w.category].filter(Boolean).join(" · "))}${w.link&&/^https?:\/\//.test(w.link)?` · <a href="${esc(w.link)}" target="_blank" rel="noopener">link</a>`:""}</small></td><td>${esc((w.kitsNeeding||[]).join(", ")||"—")}</td><td class="n">${+w.estPrice?money(w.estPrice):"—"}${w.marketCheck==="requested"?`<span class="tag" style="display:block">check queued</span>`:w.priceSource==="market"?`<span class="tag" style="display:block">market</span>`:""}</td><td><span class="vbtns">${w.marketCheck!=="requested"?`<button class="btn ghost" type="button" data-act="check" data-id="${esc(w.id)}">Price check</button>`:""}<button class="btn" type="button" data-act="got" data-id="${esc(w.id)}">Got it</button></span></td></tr>`).join("")}</tbody></table></div>`
+  :`<div class="empty"><b>Wishlist is empty</b>Click <em>Add kit gaps</em> to fill it from what your kits are missing, or add items yourself.</div>`}
+  ${got.length?`<div class="slotsHead">Bought <span>${got.length}</span></div><p class="hint">${got.map(w=>esc(w.name)).join(" · ")}</p>`:""}`;
+};
+SAVE.wish=async d=>{if(!String(d.name||"").trim()){toast("Name the item");return}await upsertC("wish",d);ED.wish=null;toast("Saved");render()};
+DEL.wish=async d=>{await removeC("wish",d.id)};
+ACT.wish=async(act,b)=>{
+  if(act==="gaps"){
+    const gaps={};KITS.forEach(k=>{const {a}=coverage(k);k.req.forEach(s=>{if(!a[s])(gaps[s]=gaps[s]||[]).push(k.name)})});
+    let n=0,u=0;
+    for(const [s,ks] of Object.entries(gaps)){const ex=db.wish.find(w=>!w.deleted&&w.gapSlot===s&&w.status!=="got");
+      if(ex){ex.kitsNeeding=ks;ex.updatedAt=now();u++;continue}
+      db.wish.push({id:uid(),name:S[s][0],category:S[s][1][0],gapSlot:s,kitsNeeding:ks,priority:ks.length>=4?"High":ks.length>=2?"Medium":"Low",status:"want",notes:S[s][3],createdAt:now(),updatedAt:now()});n++}
+    await persist();toast(n?`Added ${n} kit gap${n>1?"s":""}`:"No new gaps to add");render();return}
+  if(act==="check"||act==="checkall"){const list=act==="check"?db.wish.filter(w=>w.id===b.dataset.id):db.wish.filter(w=>!w.deleted&&w.status!=="got"&&w.marketCheck!=="requested");list.forEach(w=>{w.marketCheck="requested";w.marketCheckAt=now();w.updatedAt=now()});await persist();toast(list.length?`Queued ${list.length} for a price check`:"Nothing to queue");render();return}
+  if(act==="got"){const w=db.wish.find(x=>x.id===b.dataset.id);if(!w)return;
+    const item={id:uid(),name:w.brand?`${w.name}`:w.name,brand:w.brand||"",category:w.category||"Misc",qty:1,condition:"New",retailNew:+w.estPrice||0,value:Math.round((+w.estPrice||0)*0.9),weight:null,weightStatus:"pending",notes:w.notes&&!w.gapSlot?w.notes:"",createdAt:now(),updatedAt:now()};
+    all.push(item);w.status="got";w.gotAt=now();w.updatedAt=now();await persist();showTab("inv");openForm(all.find(i=>i.id===item.id));toast("Added to inventory. Fill in the details.");return}
+};
+
+/* ---------- LOANS ---------- */
+NEWREC.loans=()=>({out:today()});
+RENDER.loans=()=>{
+  const ed=ED.loans,d=ed?.draft||{};const out=L("loans").filter(x=>!x.returned).sort((a,b)=>(a.due||"9").localeCompare(b.due||"9"));const back=L("loans").filter(x=>x.returned).sort((a,b)=>(b.returned||"").localeCompare(a.returned||""));
+  const avail=live().filter(i=>!onLoan(i.id)||i.id===d.itemId).sort(byName);
+  const form=ed?edForm("loans",ed.isNew?"Lend an item":"Edit loan",
+    fld("itemId","Item",d.itemId,{type:"select",span:2,opts:[["","— pick an item —"],...avail.map(i=>[i.id,i.name])]})+fld("borrower","Borrowed by",d.borrower,{req:1,ph:"Name"})+fld("contact","Contact",d.contact,{ph:"Phone or email"})+
+    fld("out","Lent on",d.out,{type:"date"})+fld("due","Due back",d.due,{type:"date"})+fld("returned","Returned on",d.returned,{type:"date"})+fld("cond","Condition when lent",d.cond,{ph:"Good, no marks"})+fld("notes","Notes",d.notes,{span:4})):"";
+  const nm=x=>esc(itemById(x.itemId)?.name||"(deleted item)");
+  $("loansView").innerHTML=`<div class="vhead"><div><h2>Loans</h2><p>Track gear you've lent out. Items on loan are flagged in your inventory and left out of kit picks.</p></div><button class="btn" type="button" data-act="new">+ Lend item</button></div>
+  ${form}
+  ${out.length?`<div class="slotsHead">Out now <span>${out.length}</span></div><div class="scroll"><table class="tbl"><thead><tr><th>Item</th><th>Borrowed by</th><th>Lent</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>${out.map(x=>{const over=x.due&&x.due<today();return `<tr class="click" data-act="edit" data-id="${esc(x.id)}"><td><b>${nm(x)}</b></td><td>${esc(x.borrower)}${x.contact?`<small>${esc(x.contact)}</small>`:""}</td><td>${esc(fmtDate(x.out))}</td><td>${esc(fmtDate(x.due))}</td><td>${over?`<span class="pill gap">Overdue</span>`:`<span class="pill warn">Out</span>`}</td><td><button class="btn ghost" type="button" data-act="returned" data-id="${esc(x.id)}">Returned</button></td></tr>`}).join("")}</tbody></table></div>`
+  :`<div class="empty"><b>Nothing on loan</b>When you lend something out, click <em>+ Lend item</em> so you know who has it.</div>`}
+  ${back.length?`<div class="slotsHead">Returned <span>${back.length}</span></div><div class="scroll"><table class="tbl"><tbody>${back.slice(0,25).map(x=>`<tr class="click" data-act="edit" data-id="${esc(x.id)}"><td>${nm(x)}</td><td>${esc(x.borrower)}</td><td>${esc(fmtDate(x.out))} → ${esc(fmtDate(x.returned))}</td></tr>`).join("")}</tbody></table></div>`:""}`;
+};
+SAVE.loans=async d=>{if(!d.itemId){toast("Pick an item");return}if(!String(d.borrower||"").trim()){toast("Who borrowed it?");return}await upsertC("loans",d);ED.loans=null;toast("Loan saved");render()};
+DEL.loans=async d=>{await removeC("loans",d.id)};
+ACT.loans=async(act,b)=>{if(act==="returned"){const x=L("loans").find(y=>y.id===b.dataset.id);if(!x)return;await upsertC("loans",{...x,returned:today()});toast("Marked returned");render()}};
+
+/* ---------- tabs ---------- */
+const TABS=[["inv","Inventory"],["kits","Kits"],["range","Range Log"],["dope","DOPE"],["ammo","Ammo"],["maint","Maintenance"],["wish","Wishlist"],["loans","Loans"]];
+const viewId=k=>k==="kits"?"kitView":k+"View";
+let curTab="inv";
+function badgeFor(k){
+  if(k==="maint")return maintRows().filter(r=>r.status==="over").length;
+  if(k==="ammo")return ammoSummary().filter(s=>s.low).length;
+  if(k==="loans")return L("loans").filter(x=>!x.returned&&x.due&&x.due<today()).length;
+  return 0;
+}
+function updateBadges(){$("tabs").innerHTML=TABS.map(([k,l])=>{const n=badgeFor(k);return `<button class="tab" role="tab" type="button" data-tab="${k}" aria-selected="${k===curTab}">${l}${n?`<span class="badge" title="${n} need attention">${n}</span>`:""}</button>`}).join("")}
+$("tabs").onclick=e=>{const b=e.target.closest("[data-tab]");if(b)showTab(b.dataset.tab)};
+function afterRender(){updateBadges();if(curTab==="kits")renderKits();else if(COLOF[curTab])renderExtra()}
+function showTab(k){
+  if(!TABS.some(t=>t[0]===k))k="inv";
+  curTab=k;TABS.forEach(([t])=>{$(viewId(t)).hidden=t!==k});
+  ["printBtn","csvBtn","addBtn"].forEach(id=>$(id).hidden=k!=="inv");
+  updateBadges();if(k==="kits")renderKits();else if(COLOF[k])renderExtra();
+  try{localStorage.setItem("gearLocker.tab",k)}catch{}
+}
+try{curKit=localStorage.getItem("gearLocker.curKit")||curKit;const t=localStorage.getItem("gearLocker.tab");setTimeout(()=>showTab(t||"inv"))}catch{setTimeout(()=>showTab("inv"))}
+
+/* ---------- cloud sync (Firebase) ---------- */
+let cloudUser=null,fsdb=null,cloudUnsubs=[],pushed={},pushTimer=null,kitsPushed="",cloudReady=new Set(),firstLoad=true;
+const CLOUD_COLS=["items",...COLS];
+const clean=o=>JSON.parse(JSON.stringify(o));
+const arrOf=c=>c==="items"?all:db[c];
+function setArr(c,a){if(c==="items")all=a;else db[c]=a}
+function userRef(){return fsdb.collection("users").doc(cloudUser.uid)}
+function setSync(state,txt){const d=$("syncDot");d.className="sync "+state;d.title=txt||"";}
+function pushCloudSoon(){if(!cloudUser||!fsdb)return;clearTimeout(pushTimer);pushTimer=setTimeout(pushCloud,400)}
+async function pushCloud(){
+  if(!cloudUser||cloudReady.size<CLOUD_COLS.length+1)return;
+  const ops=[];
+  CLOUD_COLS.forEach(c=>arrOf(c).forEach(r=>{const k=c+"/"+r.id;if(r.id&&pushed[k]!==r.updatedAt){ops.push([c,r]);pushed[k]=r.updatedAt}}));
+  const kj=JSON.stringify(kits);const kitsChanged=kj!==kitsPushed;
+  if(!ops.length&&!kitsChanged)return;
+  try{
+    for(let i=0;i<ops.length;i+=400){const b=fsdb.batch();ops.slice(i,i+400).forEach(([c,r])=>b.set(userRef().collection(c).doc(r.id),clean(r)));await b.commit()}
+    if(kitsChanged){kitsPushed=kj;await userRef().collection("meta").doc("kits").set({kits:clean(kits),updatedAt:now()})}
+    setSync("on","Synced");
+  }catch(e){ops.forEach(([c,r])=>delete pushed[c+"/"+r.id]);if(kitsChanged)kitsPushed="";setSync("off","Couldn't sync: "+(e.code||e.message));}
+}
+function onCloudChange(){
+  mirror();render();
+  if(dir)writeFile().catch(()=>{});
+  if(editing){const fresh=all.find(i=>i.id===editing.id);if(fresh){editing=fresh;showPrice(fresh)}}
+}
+function subscribeCloud(){
+  cloudUnsubs.forEach(u=>u());cloudUnsubs=[];cloudReady=new Set();
+  CLOUD_COLS.forEach(c=>{
+    cloudUnsubs.push(userRef().collection(c).onSnapshot(snap=>{
+      const recs=snap.docs.map(d=>d.data()).filter(r=>r&&r.id);
+      recs.forEach(r=>{pushed[c+"/"+r.id]=r.updatedAt});
+      const before=JSON.stringify(arrOf(c));setArr(c,merge(arrOf(c),recs));
+      const first=!cloudReady.has(c);cloudReady.add(c);
+      if(JSON.stringify(arrOf(c))!==before)onCloudChange();
+      if(first)maybeFirstPush();
+      setSync(snap.metadata.fromCache?"":"on",snap.metadata.fromCache?"Offline – changes will sync":"Synced");
+    },e=>setSync("off","Sync error: "+(e.code||e.message))));
+  });
+  cloudUnsubs.push(userRef().collection("meta").doc("kits").onSnapshot(d=>{
+    const k=d.exists?(d.data().kits||{}):{};kitsPushed=JSON.stringify(k);
+    const before=JSON.stringify(kits);kits=mergeKits(kits,k);
+    const first=!cloudReady.has("meta");cloudReady.add("meta");
+    if(JSON.stringify(kits)!==before)onCloudChange();
+    if(first)maybeFirstPush();
+  },e=>setSync("off","Sync error: "+(e.code||e.message))));
+}
+function maybeFirstPush(){if(cloudReady.size===CLOUD_COLS.length+1){pushCloud();if(firstLoad){firstLoad=false;render()}}}
+function gateErr(t){$("gErr").textContent=t||""}
+const AUTH_MSG={"auth/invalid-credential":"Email or password is wrong.","auth/wrong-password":"Email or password is wrong.","auth/user-not-found":"No account with that email.","auth/email-already-in-use":"That email already has an account. Sign in instead.","auth/weak-password":"Use at least 8 characters.","auth/invalid-email":"That email doesn't look right.","auth/too-many-requests":"Too many tries. Wait a few minutes.","auth/network-request-failed":"No connection. Check your signal and try again.","auth/operation-not-allowed":"New accounts are turned off for this locker.","auth/admin-restricted-operation":"New accounts are turned off for this locker."};
+const authMsg=e=>AUTH_MSG[e?.code]||"Something went wrong. Try again.";
+function startCloud(){
+  firebase.initializeApp(window.FIREBASE_CONFIG);
+  fsdb=firebase.firestore();
+  try{fsdb.enablePersistence({synchronizeTabs:true}).catch(()=>{})}catch{}
+  const auth=firebase.auth();
+  $("gate").hidden=false;$("gateMsg").textContent="Checking your sign-in…";
+  auth.onAuthStateChanged(async u=>{
+    if(!u){
+      cloudUser=null;cloudUnsubs.forEach(x=>x());cloudUnsubs=[];
+      $("gate").hidden=false;$("acct").hidden=true;$("gateMsg").textContent="Sign in to open your locker.";
+      return;
+    }
+    const switched=localStorage.getItem("gearLocker.uid")&&localStorage.getItem("gearLocker.uid")!==u.uid;
+    if(switched){try{[LS,LSK,LSD].forEach(k=>localStorage.removeItem(k))}catch{}}
+    try{localStorage.setItem("gearLocker.uid",u.uid)}catch{}
+    cloudUser=u;$("gate").hidden=true;$("acct").hidden=false;$("acctTxt").textContent=u.email;setSync("","Connecting…");
+    pushed={};firstLoad=true;
+    await boot();
+    subscribeCloud();
+  });
+  $("gateForm").onsubmit=async e=>{e.preventDefault();gateErr("");$("gIn").disabled=true;try{await auth.signInWithEmailAndPassword($("gEmail").value.trim(),$("gPass").value)}catch(err){gateErr(authMsg(err))}finally{$("gIn").disabled=false}};
+  $("gNew").onclick=async()=>{gateErr("");if(!$("gateForm").reportValidity())return;$("gNew").disabled=true;try{await auth.createUserWithEmailAndPassword($("gEmail").value.trim(),$("gPass").value)}catch(err){gateErr(authMsg(err))}finally{$("gNew").disabled=false}};
+  $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
+  $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{[LS,LSK,LSD,"gearLocker.uid"].forEach(k=>localStorage.removeItem(k))}catch{};render();await auth.signOut()};
+}
+if("serviceWorker" in navigator&&location.protocol==="https:")navigator.serviceWorker.register("sw.js").catch(()=>{});
+
+boot();
+</script>
+</body>
+</html>
