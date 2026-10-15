@@ -306,6 +306,9 @@ body.sharing .fab,body.sharing .toast{display:none!important}
 .watch{margin-top:4px;font-size:.8rem;color:var(--muted)}
 .watch.hit{color:var(--accent);font-weight:600}
 .watch a{color:inherit}
+.qtyPick{display:flex;align-items:center;gap:14px;margin:14px 0}
+.qtyPick b{font-size:2rem;min-width:2ch;text-align:center}
+.qtyPick .btn{width:52px;height:52px;font-size:1.5rem;padding:0}
 #printSheet{display:none}
 @media print{
   @page{size:letter landscape;margin:.45in}
@@ -444,6 +447,7 @@ body.sharing .fab,body.sharing .toast{display:none!important}
   </form></div></div>
   <div class="view" id="armsView" hidden></div>
   <div class="sheetWrap" id="swapSheet" hidden><div class="sheetBg" data-swap="keep"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Swap gear"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-swap="keep" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
+  <div class="sheetWrap" id="moveSheet" hidden><div class="sheetBg" data-mv="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Move some"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-mv="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
   <div class="sheetWrap" id="shareSheet" hidden><div class="sheetBg" data-sh="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Share"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-sh="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
   <input type="file" id="armFile" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
 
@@ -1468,7 +1472,7 @@ if(window.LOOKUP_URL){
 
 /* ---------- sheets, scroll lock, add button ---------- */
 let lockY=0;
-function anySheetOpen(){return !$("form").hidden||!$("detail").hidden||!$("swapSheet").hidden||!$("shareSheet").hidden||!!document.querySelector(".view:not([hidden]) .edSheet")}
+function anySheetOpen(){return !$("moveSheet").hidden||!$("form").hidden||!$("detail").hidden||!$("swapSheet").hidden||!$("shareSheet").hidden||!!document.querySelector(".view:not([hidden]) .edSheet")}
 function syncLock(){
   const want=anySheetOpen(),has=document.body.classList.contains("locked");
   if(want&&!has){lockY=window.scrollY;document.body.style.top=`-${lockY}px`;document.body.classList.add("locked")}
@@ -1482,6 +1486,7 @@ document.addEventListener("click",e=>{
 });
 document.addEventListener("keydown",e=>{
   if(e.key!=="Escape")return;
+  if(!$("moveSheet").hidden){moveState=null;renderMove();return}
   if(!$("shareSheet").hidden){shareState=null;renderShare();return}
   if(!$("swapSheet").hidden){swap=null;renderSwap();return}
   if(!$("form").hidden){cancelForm();return}
@@ -2023,6 +2028,98 @@ function applyWatch(ws){let ch=false,news=[];ws.forEach(r=>{const w=db.wish.find
       cell.insertAdjacentHTML("beforeend",`<div class="watch ${hit?"hit":""}">${hit?"Price alert: ":"Watching ≤ "+money(w.target)+(d&&d.price?" · lowest ":"")}${d&&d.price?`<b>${money(d.price)}</b> at ${d.url&&/^https:\/\//.test(d.url)?`<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.where||"link")}</a>`:esc(d.where||"")}${d.condition?` (${esc(d.condition)})`:""}`:d?" · nothing listed yet":" · first check within a day"}${hit?` · your max ${money(w.target)}`:""}</div>`);
       const btns=tr.querySelector(".vbtns");if(btns){btns.insertAdjacentHTML("afterbegin",`<button class="btn ghost" type="button" data-act="watchnow" data-id="${esc(w.id)}">Search now</button>`);if(hit&&w.dealSeen!==d.date)btns.insertAdjacentHTML("afterbegin",`<button class="btn ghost" type="button" data-act="dealseen" data-id="${esc(w.id)}">Seen it</button>`)}}});
 }}
+
+/* ---------- v12: stricter kit matching, one magazine slot, split / merge stacks ---------- */
+// one "Magazines" slot for rifle and pistol mags
+S.mags=["Magazines (rifle & pistol)",["Mags & Ammo Storage"],["pmag","magazine","mags","mag ","lancer","gen m3","glock mag","p320 mag","pistol mag","rifle mag","ar mag","ak mag","stanag","magpul","etsgroup","ets "],"Enough loaded mags for the day: rifle, pistol or both.",["pouch","loader","holster","case","carrier","coupler"]];
+delete S.pistolmags;
+KITS.forEach(k=>{k.req=[...new Set(k.req.map(s=>s==="pistolmags"?"mags":s))];k.opt=[...new Set(k.opt.map(s=>s==="pistolmags"?"mags":s))].filter(s=>!k.req.includes(s))});
+Object.keys(kits).forEach(id=>{const p=kits[id]?.picks;if(p&&p.pistolmags){if(!p.mags)p.mags=p.pistolmags;delete p.pistolmags}});
+// gear only fills a slot in its own category (no more suppressors as magazines)
+const NEVER_SLOT=new Set(["Firearms","Suppressors"]);
+score=function(kit,slotId,i){
+  const def=S[slotId];if(!def)return 0;const [, cats, kws, , ex]=def;const t=itemText(i);
+  if(NEVER_SLOT.has(i.category))return 0;
+  if(!cats.includes(i.category))return 0;
+  if(ex.some(k=>t.includes(k)))return 0;
+  if(!kws.some(k=>t.includes(k)))return 0;
+  let sc=7+colorFit(kit,i,slotId)*2;
+  if(i.condition==="New"||i.condition==="Good")sc+=1;if(i.condition==="Needs-repair")sc-=3;
+  return Math.max(sc,0.5);
+};
+
+/* split a stack: move some of a quantity somewhere else */
+const twinKey=i=>[i.name,i.brand,i.color,i.condition,i.category,i.nick].map(v=>String(v||"").trim().toLowerCase()).join("|");
+const isSpare=i=>!i.mountedOn&&!i.setupOn;
+function mergeIntoSpare(it){
+  if(!it||!isSpare(it)||it.serial||it.armId||onLoan(it.id))return it;
+  const twin=live().find(x=>x.id!==it.id&&isSpare(x)&&!x.serial&&!x.armId&&!onLoan(x.id)&&twinKey(x)===twinKey(it));
+  if(!twin)return it;
+  twin.qty=(+twin.qty||0)+(+it.qty||0);twin.updatedAt=now();
+  all=all.map(x=>x.id===it.id?{id:it.id,deleted:true,updatedAt:now()}:x);
+  Object.values(kits).forEach(k=>{if(k&&k.picks)Object.keys(k.picks).forEach(s=>{if(k.picks[s]===it.id)k.picks[s]=twin.id});if(k&&Array.isArray(k.extras))k.extras=k.extras.map(x=>x===it.id?twin.id:x)});
+  return twin;
+}
+function splitOff(it,n,dest){
+  n=Math.max(1,Math.min(+it.qty||1,Math.round(n)));const t=now();
+  if(n>=(+it.qty||1)){Object.assign(it,dest,{updatedAt:t});return mergeIntoSpare(it)}
+  it.qty=(+it.qty||1)-n;it.updatedAt=t;
+  const copy={...it,...dest,id:uid(),qty:n,createdAt:t,updatedAt:t};delete copy.armId;delete copy.serial;delete copy.lookupError;
+  all.push(copy);return mergeIntoSpare(copy);
+}
+let moveState=null;
+function openMove(id,opts={}){
+  const it=itemById(id);if(!it)return;
+  moveState={id,qty:+it.qty||1,n:opts.n??1,dest:opts.dest||"",mode:opts.mode||"move",fromMount:opts.fromMount,fromSetup:opts.fromSetup};renderMove();
+}
+function renderMove(){
+  const el=$("moveSheet");const m=moveState;if(!m){el.hidden=true;syncLock();return}
+  const it=itemById(m.id);if(!it){moveState=null;renderMove();return}
+  const here=it.mountedOn&&itemById(it.mountedOn)?`on ${itemById(it.mountedOn).name}`:it.setupOn||"spare";
+  const body=m.mode==="after"
+    ?`<h2>How many moved?</h2><p>You moved <b>${esc(it.name)}</b> (×${m.qty}) ${it.mountedOn&&itemById(it.mountedOn)?`onto <b>${esc(itemById(it.mountedOn).name)}</b>`:it.setupOn?`to <b>${esc(it.setupOn)}</b>`:"back to spare"}. Did all ${m.qty} go, or just some?</p>
+      <div class="qtyPick"><button class="btn ghost" type="button" data-mv="dec" aria-label="Fewer">−</button><b id="mvN">${m.n}</b><span>of ${m.qty}</span><button class="btn ghost" type="button" data-mv="inc" aria-label="More">+</button></div>
+      <p class="hint">The rest stay where they were${m.fromMount&&itemById(m.fromMount)?` (on ${esc(itemById(m.fromMount).name)})`:m.fromSetup?` (${esc(m.fromSetup)})`:" (spare)"}.</p>
+      <div class="actions"><span class="spacer"></span><button class="btn ghost" type="button" data-mv="all">All ${m.qty}</button><button class="btn" type="button" data-mv="go">Just ${m.n}</button></div>`
+    :`<h2>Move some</h2><p><b>${esc(it.name)}</b> · you have ${m.qty}, now ${esc(here)}.</p>
+      <div class="qtyPick"><button class="btn ghost" type="button" data-mv="dec" aria-label="Fewer">−</button><b id="mvN">${m.n}</b><span>of ${m.qty}</span><button class="btn ghost" type="button" data-mv="inc" aria-label="More">+</button></div>
+      <div class="f"><label for="mvDest">Move them to</label><select id="mvDest"><option value="">Spare (back in inventory)</option>${mountOpts(it.id).replace('<option value="">— not mounted —</option>','')}</select></div>
+      <p class="hint">They become their own line so you can see exactly where each one is. Spares of the same thing stack back together automatically.</p>
+      <div class="actions"><span class="spacer"></span><button class="btn ghost" type="button" data-mv="close">Cancel</button><button class="btn" type="button" data-mv="go">Move ${m.n}</button></div>`;
+  el.querySelector(".panel").innerHTML=body;if($("mvDest"))$("mvDest").value=m.dest;el.hidden=false;syncLock();
+}
+$("moveSheet").addEventListener("change",e=>{if(e.target.id==="mvDest"&&moveState)moveState.dest=e.target.value});
+$("moveSheet").addEventListener("click",async e=>{
+  const b=e.target.closest("[data-mv]");if(!b||!moveState)return;const m=moveState;const a=b.dataset.mv;
+  if(a==="close"){moveState=null;renderMove();return}
+  if(a==="inc"||a==="dec"){m.n=Math.max(1,Math.min(m.mode==="after"?m.qty:m.qty,m.n+(a==="inc"?1:-1)));renderMove();return}
+  const it=itemById(m.id);if(!it){moveState=null;renderMove();return}
+  if(a==="all"){moveState=null;renderMove();const r=mergeIntoSpare(it);render();await persist();if(r)openDetail(r,true);return}
+  if(a==="go"){
+    let r;
+    if(m.mode==="after"){
+      // it already sits at the new spot with the full qty: leave m.n there, put the rest back where they were
+      const stay=m.qty-m.n;if(stay>0){it.qty=m.n;it.updatedAt=now();const back={...it,id:uid(),qty:stay,mountedOn:m.fromMount||"",setupOn:m.fromSetup||"",createdAt:now(),updatedAt:now()};delete back.armId;delete back.serial;all.push(back);mergeIntoSpare(back)}
+      r=mergeIntoSpare(it);
+    }else{
+      const host=m.dest?itemById(m.dest):null;r=splitOff(it,m.n,{mountedOn:m.dest||"",setupOn:host?(host.setupOn||""):""});
+    }
+    moveState=null;renderMove();render();await persist();if(r&&!r.deleted)openDetail(itemById(r.id)||r,true);toast("Moved");return}
+});
+// detail: "Move some" when there's more than one
+{const _od=openDetail;openDetail=function(i,quiet){_od(i,quiet);if(!i||(+i.qty||1)<2)return;const v=$("detail").querySelector(".dh .vbtns");if(v&&!v.querySelector('[data-dact="move"]'))v.insertAdjacentHTML("beforeend",`<button class="btn ghost" type="button" data-dact="move">Move some</button>`)}}
+$("detail").addEventListener("click",e=>{const b=e.target.closest('[data-dact="move"]');if(b&&viewing)openMove(viewing.id)});
+// form: moving a stack asks "all or just some?"
+{const _sc=saveCurrent;saveCurrent=async function(extra){const before=editing?{...editing}:null;const rec=await _sc(extra);
+  if(rec&&!extra&&before&&(+before.qty||1)>1&&(+rec.qty||1)===(+before.qty||1)&&((rec.mountedOn||"")!==(before.mountedOn||"")||(rec.setupOn||"")!==(before.setupOn||"")))
+    setTimeout(()=>openMove(rec.id,{mode:"after",n:+rec.qty-1||1,fromMount:before.mountedOn||"",fromSetup:before.setupOn||""}),380);
+  else if(rec&&!extra&&isSpare(rec)&&before&&!isSpare(before)){const r=mergeIntoSpare(itemById(rec.id));if(r&&r.id!==rec.id){render();await persist();toast(`Stacked with your other ${r.name} (now ${r.qty})`)}}
+  return rec}}
+// swap prompt "Move off" → stack with matching spares
+{const _ms=$("swapSheet");_ms.addEventListener("click",e=>{const b=e.target.closest('[data-swap="move"]');if(!b)return;setTimeout(async()=>{let n=0;live().filter(isSpare).forEach(i=>{if(!all.some(x=>x.id===i.id&&!x.deleted))return;const r=mergeIntoSpare(i);if(r&&r.id!==i.id)n++});if(n){render();await persist()}},250)},true)}
+// show counts in kits
+function migrateMags(){Object.keys(kits).forEach(id=>{const p=kits[id]?.picks;if(p&&p.pistolmags){if(!p.mags)p.mags=p.pistolmags;delete p.pistolmags}})}
+{const _rk=renderKits;renderKits=function(){migrateMags();_rk();document.querySelectorAll("#kitDetail select[data-slot]").forEach(sel=>{const sid=sel.dataset.slot;const kit=KITS.find(k=>k.id===curKit);if(!kit)return;const it=coverage(kit).a[sid];if(it&&(+it.qty||1)>1){const meta=sel.parentElement.querySelector(".meta");if(meta&&!meta.dataset.q){meta.dataset.q=1;meta.insertAdjacentHTML("afterbegin",`<b>×${+it.qty}</b> · `)}}})}}
 
 boot();
 </script>
