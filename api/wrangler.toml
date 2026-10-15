@@ -1,0 +1,15 @@
+name = "gear-locker-api"
+main = "worker.js"
+compatibility_date = "2026-06-01"
+
+[vars]
+FIREBASE_PROJECT = "gear-locker-c248c"
+ALLOWED_ORIGINS = "https://ace0nbase.github.io"
+MODEL = "claude-haiku-5-5"
+FALLBACK_MODEL = "claude-sonnet-5-5"
+MAX_ITEMS = "4"
+# Optional: comma-separated emails allowed to run (paid) lookups. Leave empty to allow every signed-in user.
+ALLOWED_EMAILS = ""
+
+# The Claude API key is a secret: add it in the Cloudflare dashboard
+# (Worker -> Settings -> Variables and Secrets -> Add -> Secret named ANTHROPIC_API_KEY).

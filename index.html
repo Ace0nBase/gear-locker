@@ -167,6 +167,18 @@ form.panel h2{grid-column:1/-1;margin:0;font-family:var(--display);text-transfor
 .chart .ln{fill:none;stroke:var(--accent);stroke-width:2.5}
 .chart .ln2{fill:none;stroke:var(--coyote);stroke-width:2;stroke-dasharray:5 4}
 .chart .grid{stroke:var(--line);stroke-width:1}
+.chart .bench{stroke:var(--danger);stroke-width:1;stroke-dasharray:2 4;opacity:.7}
+.chart text.benchT{fill:var(--danger);font-size:10px;opacity:.85}
+.drills{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.drill{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.drill h4{margin:0;font-family:var(--display);font-size:1.15rem;text-transform:uppercase;letter-spacing:.03em}
+.drill .setup{font-size:.84rem;color:var(--muted)}
+.tiers{display:flex;flex-wrap:wrap;gap:6px}
+.tiers span{font-size:.74rem;font-family:var(--mono);background:var(--chip);border-radius:4px;padding:3px 7px}
+.tiers span.hit{background:var(--accent);color:var(--accent-ink)}
+.drill .you{font-size:.86rem}
+.drill .src{font-size:.72rem;color:var(--muted)}
+.drill .btn{align-self:flex-start;padding:6px 12px;font-size:.85rem}
 .chart .pt{fill:var(--accent)} .chart .pt2{fill:var(--coyote)}
 .legend{display:flex;gap:16px;font-size:.78rem;color:var(--muted)}
 .legend i{display:inline-block;width:16px;height:3px;background:var(--accent);vertical-align:middle;margin-right:6px}
@@ -196,6 +208,21 @@ form.panel h2{grid-column:1/-1;margin:0;font-family:var(--display);text-transfor
 #gateFields{display:flex;flex-direction:column;gap:12px}
 body.nolookups #mktBtn,body.nolookups #bulkMktBtn,body.nolookups [data-act="check"],body.nolookups [data-act="checkall"]{display:none!important}
 .banner .later{background:none;border:0;color:var(--muted);text-decoration:underline;padding:0}
+.detail{display:flex;flex-direction:column;gap:14px}
+.detail .dh{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between}
+.detail h2{margin:0;font-family:var(--display);font-size:1.6rem;text-transform:uppercase;letter-spacing:.03em;line-height:1.05}
+.detail .dsub{color:var(--muted);font-size:.88rem;margin-top:4px}
+.detail dl{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px 16px;margin:0}
+.detail dt{font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.detail dd{margin:2px 0 0;font-weight:600;overflow-wrap:anywhere}
+.detail dd small{display:block;font-weight:400;color:var(--muted);font-size:.78rem}
+.detail h3{margin:0 0 6px;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.detail .sect{border-top:1px dashed var(--line);padding-top:12px}
+.detail .links{display:flex;flex-wrap:wrap;gap:8px}
+.detail .lnk{background:var(--chip);border:0;border-radius:999px;padding:4px 12px;font-size:.84rem;color:var(--ink)}
+.detail a{color:var(--accent)}
+.detail .note{white-space:pre-wrap;font-size:.92rem;color:var(--ink)}
+@media (max-width:700px){.detail dl{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .gate .err{color:var(--danger);font-size:.9rem;min-height:1.2em}
 .gate .row2{display:flex;gap:8px;flex-wrap:wrap}
 .gate .row2 .btn{flex:1}
@@ -271,6 +298,7 @@ body.nolookups #mktBtn,body.nolookups #bulkMktBtn,body.nolookups [data-act="chec
     <div class="stat"><b id="sVal">$0</b><span>Current value</span></div>
   </section>
 
+  <section class="panel detail" id="detail" hidden aria-live="polite"></section>
   <form class="panel" id="form" hidden>
     <h2 id="formTitle">Add item</h2>
     <div class="f span2"><label for="fName">Item</label><input id="fName" required placeholder="Double M4 mag pouch"></div>
@@ -284,7 +312,9 @@ body.nolookups #mktBtn,body.nolookups #bulkMktBtn,body.nolookups [data-act="chec
     <div class="f"><label for="fOn">Set up on / loadout</label><input id="fOn" list="loadouts" placeholder="Plate carrier"></div>
     <div class="f span2"><label for="fLoc">Stored at</label><input id="fLoc" list="locations" placeholder="Gear closet, bin 2"></div>
     <div class="f"><label for="fWt">Weight each (oz)</label><input id="fWt" type="number" min="0" step="0.1" placeholder="Blank = auto lookup"></div>
-    <div class="f"><label for="fMount">Mounted on</label><select id="fMount"></select></div>
+    <div class="f"><label for="fNick">Nickname (to tell twins apart)</label><input id="fNick" placeholder="Belt #1 – plate setup"></div>
+    <div class="f span2"><label for="fMount">Mounted on</label><select id="fMount"></select></div>
+    <div class="f span2 nogun"><label for="fGun">Goes with firearm</label><select id="fGun"></select></div>
     <div class="f fire"><label for="fCal">Caliber</label><input id="fCal" list="calibers" placeholder="5.56 NATO"></div>
     <div class="f fire"><label for="fBase">Rounds fired before tracking</label><input id="fBase" type="number" min="0" step="1" placeholder="0"></div>
     <div class="f span4"><label for="fNotes">Notes</label><input id="fNotes" placeholder="Serial, size, mods, where bought"></div>
@@ -447,11 +477,11 @@ function render(){
     return `<section class="group"><div class="ghead"><h3>${esc(c)}</h3><span>${gq} pcs${gv?` · ${money(gv)}`:""}</span></div>
     <div class="row colhead" aria-hidden="true"><span>Qty</span><span>Item</span><span>Set up on</span><span>Stored</span><span>Cond.</span><span style="text-align:right">Value</span></div>
     ${g.map(i=>`<button type="button" class="row" data-id="${esc(i.id)}"><span class="qty">${+i.qty||0}×</span>
-      <span class="nm">${esc(i.name)}<small>${esc([i.brand,i.color,i.category==="Firearms"?(i.caliber?i.caliber+" · ":"")+roundsFired(i.id).toLocaleString()+" rds":"",wtText(i)].filter(Boolean).join(" · "))}</small></span>
+      <span class="nm">${esc(i.name)}${i.nick?` <span class="tag">${esc(i.nick)}</span>`:""}<small>${esc([i.brand,i.color,i.category==="Firearms"?(i.caliber?i.caliber+" · ":"")+roundsFired(i.id).toLocaleString()+" rds":"",wtText(i)].filter(Boolean).join(" · "))}</small></span>
       <span class="meta">${i.mountedOn&&itemById(i.mountedOn)?`on <em>${esc(itemById(i.mountedOn).name)}</em>`:i.setupOn?`<em>${esc(i.setupOn)}</em>`:"Spare"}${onLoan(i.id)?`<span class="tag" style="display:block">on loan · ${esc(onLoan(i.id).borrower)}</span>`:""}</span>
       <span class="meta">${esc(i.location||"—")}</span>
       <span class="cond ${esc(i.condition)}">${esc((i.condition||"").replace("-"," "))}</span>
-      <span class="val">${i.value?money(i.qty*i.value):"—"}${i.marketCheck==="requested"?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
+      <span class="val">${i.value?money(i.qty*i.value):"—"}${lookingUp.has(i.id)?`<span class="tag">looking up…</span>`:i.marketCheck==="requested"?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
 }
 
 /* ---------- pricing ---------- */
@@ -473,6 +503,7 @@ function showPrice(i){
 
 /* ---------- form ---------- */
 function openForm(item){
+  $("detail").hidden=true;
   editing=item||null;delArmed=false;valueTouched=!!(item&&item.value&&!(item.retailNew&&Math.round(item.retailNew*(FACTOR[item.condition]??0.6))===Math.round(item.value)));
   $("formTitle").textContent=item?"Edit item":"Add item";
   $("fName").value=item?.name||"";$("fBrand").value=item?.brand||"";$("fCat").value=item?.category||(filter!=="All"?filter:"Pouches");
@@ -481,6 +512,7 @@ function openForm(item){
   $("delBtn").hidden=!item;$("delBtn").className="btn ghost";$("delBtn").textContent="Delete";
   $("mktBtn").disabled=item?.marketCheck==="requested";$("mktBtn").textContent=item?.marketCheck==="requested"?"Check queued":"Market check";
   $("fMount").innerHTML=mountOpts(item?.id);$("fMount").value=item?.mountedOn||"";
+  $("fGun").innerHTML=gunOpts();$("fGun").value=item?.forGun||"";$("fNick").value=item?.nick||"";
   $("fWt").value=item?.weight??"";$("fCal").value=item?.caliber||"";$("fBase").value=item?.baseRounds??"";fireFields();
   showPrice(item);
   $("form").hidden=false;$("fName").focus();$("form").scrollIntoView({block:"nearest"});
@@ -491,7 +523,8 @@ function readForm(){
     color:$("fColor").value.trim(),condition:$("fCond").value,retailNew:Math.max(0,Math.round(parseFloat($("fRetail").value)||0)),value:Math.max(0,Math.round(parseFloat($("fVal").value)||0)),
     setupOn:$("fOn").value.trim(),location:$("fLoc").value.trim(),notes:$("fNotes").value.trim(),
     weight:$("fWt").value===""?null:Math.max(0,+$("fWt").value),mountedOn:$("fMount").value,caliber:$("fCal").value.trim(),
-    baseRounds:$("fBase").value===""?"":Math.max(0,parseInt($("fBase").value)||0)};
+    baseRounds:$("fBase").value===""?"":Math.max(0,parseInt($("fBase").value)||0),
+    nick:$("fNick").value.trim(),forGun:$("fCat").value==="Firearms"?"":$("fGun").value};
 }
 async function saveCurrent(extra){
   const data={...readForm(),...(extra||{}),updatedAt:now()};
@@ -514,13 +547,13 @@ $("addBtn").onclick=()=>openForm();
 $("cancelBtn").onclick=closeForm;
 $("q").oninput=render;$("sort").onchange=render;
 $("chips").onclick=e=>{const b=e.target.closest(".chip");if(!b)return;filter=b.dataset.c;render()};
-$("list").onclick=e=>{const r=e.target.closest(".row[data-id]");if(!r)return;openForm(all.find(i=>i.id===r.dataset.id))};
+$("list").onclick=e=>{const r=e.target.closest(".row[data-id]");if(!r)return;openDetail(all.find(i=>i.id===r.dataset.id))};
 $("form").onsubmit=async e=>{
   e.preventDefault();
   const wasEdit=!!editing;
   const rec=await saveCurrent();if(!rec)return;
   toast(wasEdit?"Item updated":"Item added");
-  if(wasEdit)closeForm();else{const k={c:rec.category,l:rec.location,o:rec.setupOn};openForm();$("fCat").value=k.c;$("fLoc").value=k.l;$("fOn").value=k.o}
+  if(wasEdit){closeForm();openDetail(all.find(i=>i.id===rec.id))}else{const k={c:rec.category,l:rec.location,o:rec.setupOn};openForm();$("fCat").value=k.c;$("fLoc").value=k.l;$("fOn").value=k.o}
 };
 $("delBtn").onclick=async()=>{
   if(!editing)return;
@@ -752,20 +785,31 @@ function fmtDate(d){return d?new Date(d+"T12:00:00").toLocaleDateString():"—"}
 function daysBetween(a,b){return Math.round((new Date(b+"T12:00:00")-new Date(a+"T12:00:00"))/864e5)}
 function addDays(d,n){const x=new Date(d+"T12:00:00");x.setDate(x.getDate()+n);return x.toISOString().slice(0,10)}
 function fmtWt(oz){oz=+oz||0;return oz>=16?`${(oz/16).toFixed(1)} lb`:`${oz%1?oz.toFixed(1):oz} oz`}
-const lookupsOn=()=>!!(kits._settings&&kits._settings.lookups);
+const lookupsOn=()=>!!(window.LOOKUP_URL||(kits._settings&&kits._settings.lookups));
+const lookingUp=new Set();
 function wtText(i){return i.weight!=null&&i.weight!==""?fmtWt(i.weight):!lookupsOn()?"":i.weightStatus==="notfound"?"weight not found":"weight pending"}
 function kitWeight(ids){let oz=0,n=0;const uniq=[...new Set(ids)];uniq.forEach(id=>{const i=itemById(id);if(i&&i.weight!=null&&i.weight!==""){oz+=(+i.weight)*(+i.qty||1);n++}});return {oz,n,total:uniq.length}}
 function onLoan(id){return L("loans").find(x=>x.itemId===id&&!x.returned)}
 function firearms(){return live().filter(i=>i.category==="Firearms").sort(byName)}
 function roundsFired(gunId){const it=itemById(gunId);return (+(it&&it.baseRounds)||0)+L("sessions").reduce((a,s)=>a+(s.lines||[]).filter(l=>l.firearmId===gunId).reduce((b,l)=>b+(+l.rounds||0),0),0)}
 const MOUNT_CATS=["Firearms","Armor & Carriers","Belts & Rigs","Packs & Bags","Cases & Bags","Helmet & Head","Holsters & Slings"];
+function itemLabel(i,pool){
+  const base=`${i.name}${i.nick?` “${i.nick}”`:""}`;
+  const extra=[i.brand,i.color,i.location].filter(Boolean).join(" · ");
+  let lab=extra?`${base} — ${extra}`:base;
+  if(pool){const twins=pool.filter(x=>`${x.name}${x.nick?` “${x.nick}”`:""}`===base&&[x.brand,x.color,x.location].filter(Boolean).join(" · ")===extra);
+    if(twins.length>1){const k=twins.slice().sort((a,b)=>(a.createdAt||a.id).localeCompare(b.createdAt||b.id)).findIndex(x=>x.id===i.id);lab+=` (#${k+1})`}}
+  return lab;
+}
+function gunOpts(){const g=firearms();return g.length?`<option value="">— none —</option>`+g.map(x=>`<option value="${esc(x.id)}">${esc(itemLabel(x,g))}</option>`).join(""):`<option value="">Add your guns under the Firearms category first</option>`}
 function mountOpts(selfId){
   const desc=new Set();
   if(selfId){desc.add(selfId);let grow=true;while(grow){grow=false;live().forEach(i=>{if(!desc.has(i.id)&&desc.has(i.mountedOn)){desc.add(i.id);grow=true}})}}
-  return `<option value="">— not mounted —</option>`+live().filter(i=>MOUNT_CATS.includes(i.category)&&!desc.has(i.id)).sort(byName).map(i=>`<option value="${esc(i.id)}">${esc(i.name)}${i.color?` (${esc(i.color)})`:""}</option>`).join("");
+  const pool=live().filter(i=>MOUNT_CATS.includes(i.category)&&!desc.has(i.id)).sort(byName);
+  return `<option value="">— not mounted —</option>`+pool.map(i=>`<option value="${esc(i.id)}">${esc(itemLabel(i,pool))}</option>`).join("");
 }
 function ridersOf(set){const out=[];live().forEach(i=>{if(set.has(i.id))return;let p=i.mountedOn,d=0;while(p&&d<8){if(set.has(p)){out.push(i);return}p=itemById(p)?.mountedOn;d++}});return out}
-function fireFields(){const on=$("fCat").value==="Firearms";document.querySelectorAll(".f.fire").forEach(e=>e.hidden=!on)}
+function fireFields(){const on=$("fCat").value==="Firearms";document.querySelectorAll(".f.fire").forEach(e=>e.hidden=!on);document.querySelectorAll(".f.nogun").forEach(e=>e.hidden=on)}
 $("fCat").addEventListener("change",fireFields);
 function parseSplits(t){return String(t||"").split(/[\s,;]+/).map(parseFloat).filter(n=>isFinite(n)&&n>0)}
 const optList=(arr,val)=>arr.map(([v,l])=>`<option value="${esc(v)}"${String(v)===String(val??"")?" selected":""}>${esc(l)}</option>`).join("");
@@ -843,6 +887,29 @@ DEL.ammo=async d=>{await removeC("ammo",d.id)};
 /* ---------- RANGE LOG ---------- */
 let curDrill="";
 NEWREC.range=()=>({date:today(),lines:[{}],drills:[{}]});
+/* Published standards. Times are seconds; lower is better. metric "total" = beep to last shot, "first" = beep to first shot. */
+const DRILLS=[
+ {name:"Bill Drill",setup:"7 yd · 6 rds · holster to 6 shots on the A-zone (8\" circle)",metric:"total",tiers:[["Novice",5.0],["Intermediate",3.0],["Advanced",2.0],["Master",1.5]],tip:"Advanced ≈ sub-1.0s draw with ~0.20s splits.",src:"RifleConfigurator drill standards"},
+ {name:"Draw to first shot",setup:"7 yd · 1 rd · from concealment to a body hit",metric:"total",tiers:[["Beginner",3.0],["Intermediate",2.0],["Advanced",1.4],["Master",1.0]],tip:"Same as ASP 10-Round Skill Check, stage 1.",src:"ASP 10-Round Skill Check"},
+ {name:"FAST",setup:"7 yd · 6 rds · 2 head (3×5 card), slidelock reload, 4 body (8\" plate) · from concealment",metric:"total",tiers:[["Novice",10.0],["Intermediate",9.99],["Advanced",6.99],["Expert",4.99]],tip:"Under 10 = Intermediate, under 7 = Advanced, under 5 = Expert. +0.5s for open-top retention holster.",src:"Todd Green / pistol-training.com"},
+ {name:"El Presidente",setup:"10 yd · 12 rds · 3 targets 1 m apart · start facing away, holstered · 2 each, reload, 2 each",metric:"total",tiers:[["Standard",10.0]],tip:"10.00s clean is the classic reference.",src:"Jeff Cooper standard"},
+ {name:"Failure to Stop",setup:"7 yd · 3 rds · 2 body + 1 head · from the holster (Mozambique)",metric:"total",tiers:[["Dark",2.9],["Light",2.25],["Turbo",1.7]],tip:"Gabe White Technical Skills Test pins.",src:"Gabe White standards"},
+ {name:"Keepers' Test",setup:"7 yd · 3 rds · 3×5 card horizontal · from concealment",metric:"total",tiers:[["Pretty salty",3.0],["Really good",2.5]],tip:"",src:"Spencer Keepers"},
+ {name:"5x5 Skill Test",setup:"5 yd · 5 rds · 5\" circle · from ready",metric:"total",tiers:[["Pass",5.0]],tip:"All 5 inside the circle within 5.00s.",src:"Standard 5^5 drill"},
+ {name:"The Test",setup:"10 yd · 10 rds · B-8 repair center · from ready",metric:"total",tiers:[["Pass",10.0]],tip:"Score: 80% pass, 90% good, 95% excellent (Hackathorn).",src:"Larry Vickers / Ken Hackathorn"},
+ {name:"Bill Drill 2",setup:"7 yd · 15 rds · strings of 1,2,3,4,5 from the holster",metric:"total",tiers:[["Goal",10.0]],tip:"10.00s total across all five strings.",src:"Published drill library"},
+ {name:"Dot Torture",setup:"Starts at 3 yd · 50 rds · ten 2\" dots · untimed",metric:"none",tiers:[],tip:"Score is the farthest distance you shoot 50/50 clean. Log it in Hits/pts.",src:"David Blinder"},
+];
+function tierFor(d,t){if(!t||!isFinite(t)||d.metric==="none")return null;let got=null;d.tiers.forEach(x=>{if(t<=x[1]+1e-9)got=x[0]});return got}
+function drillLibrary(ds){
+  return `<div class="slotsHead">Drill library <span>published standards to compare against</span></div><div class="drills">${DRILLS.map((d,k)=>{
+    const me=ds.find(x=>x.name.toLowerCase()===d.name.toLowerCase());const best=me&&isFinite(me.best)?me.best:null;const lvl=tierFor(d,best);
+    return `<article class="drill"><h4>${esc(d.name)}</h4><div class="setup">${esc(d.setup)}</div>
+      ${d.tiers.length?`<div class="tiers">${d.tiers.map(t=>`<span class="${lvl===t[0]?"hit":""}">${esc(t[0])} ≤ ${t[1].toFixed(2)}s</span>`).join("")}</div>`:""}
+      ${d.tip?`<div class="setup">${esc(d.tip)}</div>`:""}
+      <div class="you">${best!=null?`Your best: <b>${best.toFixed(2)}s</b>${lvl?` · <b>${esc(lvl)}</b>`:" · keep working"}${me&&isFinite(me.bestFirst)?` · draw ${me.bestFirst.toFixed(2)}s`:""}${me&&isFinite(me.bestSplit)?` · split ${me.bestSplit.toFixed(2)}s`:""}`:"Not logged yet"}</div>
+      <button class="btn ghost" type="button" data-act="logdrill" data-i="${k}">Log this drill</button><div class="src">Source: ${esc(d.src)}</div></article>`}).join("")}</div>`;
+}
 function drillStats(){
   const m={};
   L("sessions").forEach(s=>(s.drills||[]).forEach(x=>{const n=(x.name||"").trim();if(!n)return;const k=n.toLowerCase();const r=m[k]||(m[k]={name:n,runs:0,best:Infinity,bestFirst:Infinity,bestSplit:Infinity,last:""});r.runs++;
@@ -860,7 +927,9 @@ function drillChart(name){
   const step=Math.max(1,Math.ceil(pts.length/6));
   const xl=pts.map((p,i)=>i%step===0||i===pts.length-1?`<text x="${x(i)}" y="${H-12}" text-anchor="${pts.length>1&&i===0?"start":pts.length>1&&i===pts.length-1?"end":"middle"}">${esc(fmtDate(p.date))}</text>`:"").join("");
   const path=(k,cls)=>{const seg=pts.map((p,i)=>p[k]!=null?[x(i),y(p[k])]:null).filter(Boolean);if(!seg.length)return "";return (seg.length>1?`<path class="${cls}" d="M${seg.map(q=>q.join(" ")).join(" L")}"/>`:"")+seg.map(q=>`<circle class="${cls==="ln"?"pt":"pt2"}" cx="${q[0]}" cy="${q[1]}" r="${cls==="ln"?4:3}"/>`).join("")};
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(name)} times over sessions">${grid}${xl}${path("fs","ln2")}${path("tot","ln")}</svg><div class="legend"><span><i></i>Best total time</span><span><i class="b"></i>Best first shot / draw</span><span>Lower is better</span></div>`;
+  const lib=DRILLS.find(d=>d.name.toLowerCase()===name.toLowerCase());
+  const bench=lib&&lib.metric==="total"?lib.tiers.filter(t=>t[1]<=max).map(t=>`<line class="bench" x1="${pl}" x2="${W-pr}" y1="${y(t[1])}" y2="${y(t[1])}"/><text class="benchT" x="${W-pr-2}" y="${y(t[1])-3}" text-anchor="end">${esc(t[0])} ${t[1].toFixed(2)}s</text>`).join(""):"";
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(name)} times over sessions">${grid}${bench}${xl}${path("fs","ln2")}${path("tot","ln")}</svg><div class="legend"><span><i></i>Best total time</span><span><i class="b"></i>Best first shot / draw</span><span>Lower is better</span></div>`;
 }
 RENDER.range=()=>{
   const ed=ED.range,d=ed?.draft||{};const sess=L("sessions").sort((a,b)=>(b.date||"").localeCompare(a.date||""));
@@ -877,12 +946,14 @@ RENDER.range=()=>{
       ${(d.drills||[]).map((x,i)=>`<div class="line drill">${cell(`drills.${i}.name`,"Drill",x.name,{list:"drills",ph:"Bill Drill"})}${cell(`drills.${i}.dist`,"Yards",x.dist,{type:"number",step:1})}${cell(`drills.${i}.par`,"Par (s)",x.par,{type:"number",step:"0.01"})}${cell(`drills.${i}.first`,"Draw / 1st (s)",x.first,{type:"number",step:"0.01"})}${cell(`drills.${i}.splits`,"Splits (s)",x.splits,{ph:"0.24, 0.22, 0.25"})}${cell(`drills.${i}.total`,"Total (s)",x.total,{type:"number",step:"0.01"})}${cell(`drills.${i}.hits`,"Hits / pts",x.hits,{ph:"6/6 A"})}${rmBtn("drills",i)}</div>`).join("")}</div>`+
     fld("notes","Notes",d.notes,{span:4,ph:"What worked, what to fix next time"})):"";
   const totalRds=sess.reduce((a,s)=>a+(+s.rounds||0),0);
+  const libHTML=drillLibrary(ds);
   $("rangeView").innerHTML=`<div class="vhead"><div><h2>Range Log</h2><p>Log each session's rounds, drills and split times to see your progress over time.</p></div><button class="btn" type="button" data-act="new">+ Log session</button></div>
   ${form}
   <section class="stats"><div class="stat"><b>${sess.length}</b><span>Sessions</span></div><div class="stat"><b>${totalRds.toLocaleString()}</b><span>Rounds logged</span></div><div class="stat"><b>${ds.length}</b><span>Drills tracked</span></div><div class="stat"><b>${sess[0]?esc(fmtDate(sess[0].date)):"—"}</b><span>Last session</span></div></section>
   ${ds.length?`<div class="chartWrap"><div class="vhead"><div><h2 style="font-size:1.2rem">Progress</h2></div><select id="drillPick" aria-label="Drill">${optList(ds.map(x=>[x.name,`${x.name} (${x.runs} run${x.runs>1?"s":""})`]),curDrill)}</select></div>${drillChart(curDrill)}</div>
   <div class="slotsHead">Personal bests</div>
   <div class="scroll"><table class="tbl"><thead><tr><th>Drill</th><th class="n">Runs</th><th class="n">Best total</th><th class="n">Best draw / 1st</th><th class="n">Best split</th><th>Last run</th></tr></thead><tbody>${ds.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td class="n">${x.runs}</td><td class="n">${isFinite(x.best)?x.best.toFixed(2)+"s":"—"}</td><td class="n">${isFinite(x.bestFirst)?x.bestFirst.toFixed(2)+"s":"—"}</td><td class="n">${isFinite(x.bestSplit)?x.bestSplit.toFixed(2)+"s":"—"}</td><td>${esc(fmtDate(x.last))}</td></tr>`).join("")}</tbody></table></div>`:""}
+  ${libHTML}
   ${guns.length?`<div class="slotsHead">Round counts</div><div class="scroll"><table class="tbl"><thead><tr><th>Firearm</th><th>Caliber</th><th class="n">Rounds fired</th></tr></thead><tbody>${guns.map(g=>`<tr><td>${esc(g.name)}</td><td>${esc(g.caliber||"—")}</td><td class="n">${roundsFired(g.id).toLocaleString()}</td></tr>`).join("")}</tbody></table></div>`:""}
   ${sess.length?`<div class="slotsHead">Sessions <span>click to edit</span></div><div class="scroll"><table class="tbl"><thead><tr><th>Date</th><th>Type</th><th>Location</th><th class="n">Rounds</th><th>Drills</th></tr></thead><tbody>${sess.map(s=>`<tr class="click" data-act="edit" data-id="${esc(s.id)}"><td>${esc(fmtDate(s.date))}</td><td>${esc(s.type||"—")}</td><td>${esc(s.location||"—")}</td><td class="n">${(+s.rounds||0).toLocaleString()}</td><td>${esc((s.drills||[]).map(x=>x.name+(x.total?` ${(+x.total).toFixed(2)}s`:"")).join(", ")||"—")}</td></tr>`).join("")}</tbody></table></div>`
   :`<div class="empty"><b>No sessions yet</b>Click <em>+ Log session</em> after your next range trip. Add drills with your draw time and splits to start tracking progress.</div>`}`;
@@ -900,7 +971,13 @@ SAVE.range=async d=>{
   await upsertC("sessions",d);ED.range=null;toast("Session saved");render();
 };
 DEL.range=async d=>{const old=L("sessions").find(s=>s.id===d.id);applyAmmo(old?.lines,-1);await removeC("sessions",d.id)};
-ACT.range=(act,t)=>{if(act==="change"&&t.id==="drillPick"){curDrill=t.value;renderExtra()}};
+ACT.range=(act,t)=>{
+  if(act==="change"&&t.id==="drillPick"){curDrill=t.value;renderExtra();return}
+  if(act==="logdrill"){const d=DRILLS[+t.dataset.i];if(!d)return;const m=d.setup.match(/^(\d+) yd/);
+    if(ED.range){collect("range");const ds=ED.range.draft.drills=ED.range.draft.drills||[];const empty=ds.findIndex(x=>!x.name);const row={name:d.name,dist:m?+m[1]:""};if(empty>=0)ds[empty]=row;else ds.push(row);renderExtra()}
+    else openEd("range",{date:today(),lines:[{}],drills:[{name:d.name,dist:m?+m[1]:""}]});
+    curDrill=d.name}
+};
 
 /* ---------- DOPE ---------- */
 NEWREC.dope=()=>({units:"MIL",zero:100,rows:[100,200,300,400,500,600].map(dist=>({dist}))});
@@ -1077,6 +1154,7 @@ async function pushCloud(){
 }
 function onCloudChange(){
   mirror();render();
+  if(viewing&&!$("detail").hidden){const v=all.find(x=>x.id===viewing.id);if(v&&!v.deleted)openDetail(v,true)}
   if(dir)writeFile().catch(()=>{});
   if(editing){const fresh=all.find(i=>i.id===editing.id);if(fresh){editing=fresh;showPrice(fresh)}}
 }
@@ -1136,6 +1214,123 @@ function startCloud(){
   $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{[LS,LSK,LSD,"gearLocker.uid"].forEach(k=>localStorage.removeItem(k))}catch{};render();await auth.signOut()};
 }
 if("serviceWorker" in navigator&&location.protocol==="https:")navigator.serviceWorker.register("sw.js").catch(()=>{});
+
+/* ---------- item detail ---------- */
+let viewing=null;
+function kitsUsing(id){const out=[];KITS.forEach(k=>{const {a}=coverage(k);const st=kits[k.id]||{};const box=containerFor(k);const ids=new Set([...Object.values(a).filter(Boolean).map(i=>i.id),...(st.extras||[]),...(box?[box.id]:[])]);if(ids.has(id)||ridersOf(ids).some(i=>i.id===id))out.push(k)});return out}
+function openDetail(i,quiet){
+  if(!i)return;viewing=i;$("form").hidden=true;editing=null;
+  const parent=itemById(i.mountedOn);const kids=live().filter(x=>x.mountedOn===i.id).sort(byName);
+  const gun=itemById(i.forGun);const gunGear=i.category==="Firearms"?live().filter(x=>x.forGun===i.id&&x.mountedOn!==i.id).sort(byName):[];
+  const ln=onLoan(i.id);const tasks=maintRows().filter(r=>r.m.itemId===i.id);const ks=kitsUsing(i.id);
+  const isGun=i.category==="Firearms";
+  const sess=isGun?L("sessions").filter(s=>(s.lines||[]).some(l=>l.firearmId===i.id)):[];
+  const links=(Array.isArray(i.marketSources)?i.marketSources:[]).filter(s=>/^https:\/\//.test(s?.url||"")).slice(0,4);
+  const f=(label,val,sub,opt)=>(!val&&opt)?"":`<div><dt>${esc(label)}</dt><dd>${val||"—"}${sub?`<small>${sub}</small>`:""}</dd></div>`;
+  const wt=i.weight!=null&&i.weight!==""?esc(fmtWt(i.weight)):lookingUp.has(i.id)?"Looking up…":lookupsOn()?(i.weightStatus==="notfound"?"Not found":"Pending"):"—";
+  const priceState=i.marketCheck==="requested"?"Market check queued":i.priceSource==="market"?`Market check ${esc(i.priceDate||"")}`:i.priceSource==="manual"?"Entered by you":"";
+  $("detail").innerHTML=`
+   <div class="dh"><div><h2>${esc(i.name)}${i.nick?` <span class="tag" style="font-size:.8rem">${esc(i.nick)}</span>`:""}</h2><div class="dsub">${esc([i.brand,i.color,i.category].filter(Boolean).join(" · "))}</div></div>
+     <div class="vbtns"><button class="btn" type="button" data-dact="edit">Edit</button>${lookupsOn()&&i.marketCheck!=="requested"&&!isGun?`<button class="btn ghost" type="button" data-dact="mkt">Market check</button>`:""}<button class="btn ghost" type="button" data-dact="close">Close</button></div></div>
+   <dl>
+     ${f("Quantity",esc(String(+i.qty||0)))}${f("Condition",esc((i.condition||"").replace("-"," ")))}
+     ${f("Value each",i.value?money(i.value):"",priceState)}${f("Total value",i.value?money((+i.value)*(+i.qty||1)):"")}
+     ${f("New retail",i.retailNew?money(i.retailNew):"","",1)}${f("Used range",(i.usedLow||i.usedHigh)?`${money(i.usedLow)}–${money(i.usedHigh)}`:"","",1)}
+     ${f("Weight each",wt,i.weightNote?esc(i.weightNote):i.weightSource==="manual"?"Entered by you":"")}${f("Stored at",esc(i.location||""))}
+     ${f("Goes with",gun?`<button class="lnk" type="button" data-dview="${esc(gun.id)}">${esc(gun.name)}</button>`:"","",1)}
+     ${f("Mounted on",parent?`<button class="lnk" type="button" data-dview="${esc(parent.id)}">${esc(parent.name)}</button>`:"","",1)}${f("Set up on",esc(i.setupOn||""),"",1)}
+     ${isGun?f("Caliber",esc(i.caliber||""))+f("Rounds fired",roundsFired(i.id).toLocaleString(),sess.length?`${sess.length} logged session${sess.length>1?"s":""}`:""):""}
+     ${f("On loan",ln?`${esc(ln.borrower)}`:"",ln?`since ${esc(fmtDate(ln.out))}${ln.due?` · due ${esc(fmtDate(ln.due))}`:""}`:"",1)}
+   </dl>
+   ${i.priceNote||links.length?`<div class="sect"><h3>Market data</h3>${i.priceNote?`<div class="note">${esc(i.priceNote)}</div>`:""}${links.length?`<div class="links" style="margin-top:6px">${links.map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label||"source")}</a>`).join(" · ")}</div>`:""}</div>`:""}
+   ${kids.length?`<div class="sect"><h3>Mounted on this (${kids.length})</h3><div class="links">${kids.map(k=>`<button class="lnk" type="button" data-dview="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
+   ${gunGear.length?`<div class="sect"><h3>Gear for this gun (${gunGear.length})</h3><div class="links">${gunGear.map(k=>`<button class="lnk" type="button" data-dview="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
+   ${ks.length?`<div class="sect"><h3>Packed in kits (${ks.length})</h3><div class="links">${ks.map(k=>`<button class="lnk" type="button" data-dkit="${k.id}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
+   ${tasks.length?`<div class="sect"><h3>Maintenance</h3>${tasks.map(r=>`<div>${esc(r.m.task)} · <span class="pill ${r.status==="over"?"gap":r.status==="soon"?"warn":"ok"}">${r.status==="over"?"Overdue":r.status==="soon"?"Due soon":"OK"}</span> <small>${esc(r.txt)}</small></div>`).join("")}</div>`:""}
+   ${i.notes?`<div class="sect"><h3>Notes</h3><div class="note">${esc(i.notes)}</div></div>`:""}`;
+  $("detail").hidden=false;if(!quiet)$("detail").scrollIntoView({block:"start",behavior:"smooth"});
+}
+$("detail").addEventListener("click",async e=>{
+  const b=e.target.closest("[data-dact],[data-dview],[data-dkit]");if(!b||!viewing)return;
+  if(b.dataset.dview){openDetail(itemById(b.dataset.dview));return}
+  if(b.dataset.dkit){curKit=b.dataset.dkit;$("detail").hidden=true;showTab("kits");return}
+  const a=b.dataset.dact;
+  if(a==="close"){$("detail").hidden=true;viewing=null;return}
+  if(a==="edit"){openForm(viewing);return}
+  if(a==="mkt"){const r=all.find(x=>x.id===viewing.id);if(!r)return;if(window.LOOKUP_URL){runLookups([r.id]);openDetail(r,true);return}Object.assign(r,{marketCheck:"requested",marketCheckAt:now(),updatedAt:now()});render();await persist();openDetail(r);toast("Market check queued")}
+});
+
+/* ---------- lookup API (instant prices + weights) ---------- */
+async function apiLookup(list){
+  const u=firebase.auth().currentUser;if(!u)throw new Error("Sign in first");
+  const tok=await u.getIdToken();
+  const r=await fetch(window.LOOKUP_URL.replace(/\/$/,"")+"/lookup",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+tok},body:JSON.stringify({items:list})});
+  if(!r.ok){let m="";try{m=(await r.json()).error||""}catch{};throw new Error(m||("Lookup failed ("+r.status+")"))}
+  return (await r.json()).results||[];
+}
+const lookupBody=i=>({id:i.id,name:i.name,brand:i.brand||"",category:i.category||"",condition:i.condition||"",color:i.color||"",notes:(i.notes||"").slice(0,200)});
+function applyLookup(id,res){
+  const it=all.find(x=>x.id===id);if(!it||it.deleted||!res||!res.ok)return false;
+  const n=v=>v==null||v===""||!isFinite(+v)?null:Math.round(+v);
+  if(it.category!=="Firearms"){
+    if(n(res.retailNew)!=null)it.retailNew=n(res.retailNew);
+    if(n(res.usedLow)!=null)it.usedLow=n(res.usedLow);
+    if(n(res.usedHigh)!=null)it.usedHigh=n(res.usedHigh);
+    if(n(res.value)!=null&&it.valueSource!=="manual")it.value=n(res.value);
+    it.priceSource="market";it.priceDate=today();it.priceNote=String(res.priceNote||"").slice(0,240);
+    it.marketSources=(Array.isArray(res.sources)?res.sources:[]).filter(s=>/^https:\/\//.test(s?.url||"")).slice(0,4).map(s=>({label:String(s.label||"source").slice(0,40),url:s.url}));
+  }
+  if(res.weightOz!=null&&isFinite(+res.weightOz)&&+res.weightOz>0&&it.weightSource!=="manual"){it.weight=Math.round(+res.weightOz*10)/10;it.weightSource="lookup";it.weightStatus="done";it.weightNote=String(res.weightNote||"").slice(0,80)}
+  else if(it.weight==null||it.weight==="")it.weightStatus="notfound";
+  it.marketCheck="done";it.updatedAt=now();
+  return true;
+}
+async function runLookups(ids,quiet){
+  if(!window.LOOKUP_URL||!cloudUser)return;
+  ids=[...new Set(ids)].filter(id=>!lookingUp.has(id)&&all.some(i=>i.id===id&&!i.deleted));
+  if(!ids.length)return;
+  ids.forEach(id=>lookingUp.add(id));render();
+  let ok=0,fail="";
+  for(let k=0;k<ids.length;k+=4){
+    const chunk=ids.slice(k,k+4);
+    try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++})}
+    catch(e){fail=e.message||"Lookup failed"}
+    chunk.forEach(id=>lookingUp.delete(id));render();await persist();
+    if(viewing&&!$("detail").hidden&&chunk.includes(viewing.id))openDetail(all.find(i=>i.id===viewing.id),true);
+  }
+  if(fail)toast(fail);else if(!quiet||ids.length>1)toast(`Looked up ${ok} item${ok===1?"":"s"}`);
+}
+const _saveCurrent=saveCurrent;
+saveCurrent=async function(extra){
+  const before=editing?{...editing}:null;const manualVal=valueTouched&&$("fVal").value!=="";
+  const rec=await _saveCurrent(extra);if(!rec)return rec;
+  if(manualVal&&(!before||+before.value!==+rec.value))rec.valueSource="manual";
+  else if(!manualVal&&rec.valueSource==="manual"&&!$("fVal").value)delete rec.valueSource;
+  if(rec.valueSource!==before?.valueSource)await persist();
+  const changed=!before||before.name!==rec.name||before.brand!==rec.brand||before.condition!==rec.condition;
+  const needs=rec.priceSource!=="market"||rec.weight==null||rec.weight==="";
+  if(window.LOOKUP_URL&&cloudUser&&!extra&&(changed||needs))runLookups([rec.id],true);
+  return rec;
+};
+if(window.LOOKUP_URL){
+  $("mktBtn").onclick=async()=>{const rec=await saveCurrent({});if(rec)runLookups([rec.id])};
+  $("bulkMktBtn").onclick=()=>{const ids=live().filter(i=>i.priceSource!=="market"||i.weight==null||i.weight==="").map(i=>i.id);if(!ids.length){toast("Everything already has prices and weights");return}toast(`Looking up ${ids.length} item${ids.length>1?"s":""}…`);runLookups(ids)};
+  $("bulkMktBtn").textContent="Look up all";
+  const _wish=ACT.wish;
+  ACT.wish=async(act,b)=>{
+    if(act!=="check"&&act!=="checkall")return _wish(act,b);
+    const list=act==="check"?db.wish.filter(w=>w.id===b.dataset.id):db.wish.filter(w=>!w.deleted&&w.status!=="got"&&w.priceSource!=="market");
+    if(!list.length){toast("Nothing to price");return}
+    toast(`Pricing ${list.length}…`);
+    for(let k=0;k<list.length;k+=4){
+      const chunk=list.slice(k,k+4);
+      try{const res=await apiLookup(chunk.map(w=>({id:w.id,name:w.name,brand:w.brand||"",category:w.category||"",condition:"New",notes:w.notes||"",kind:"wish"})));
+        res.forEach(r=>{const w=db.wish.find(x=>x.id===r.id);if(!w||!r.ok)return;if(r.retailNew!=null)w.estPrice=Math.round(+r.retailNew);w.priceSource="market";w.priceDate=today();w.priceNote=String(r.priceNote||"").slice(0,240);w.marketSources=(r.sources||[]).filter(s=>/^https:\/\//.test(s?.url||"")).slice(0,4);w.marketCheck="done";w.updatedAt=now()})}
+      catch(e){toast(e.message||"Pricing failed");break}
+    }
+    await persist();render();
+  };
+}
 
 boot();
 </script>
