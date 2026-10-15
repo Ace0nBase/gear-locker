@@ -279,6 +279,12 @@ body.locked{position:fixed;left:0;right:0;overflow:hidden}
   .detail .dh .vbtns{width:100%}
   .detail .dh .vbtns .btn{flex:1}
 }
+.armRow{grid-template-columns:4.6rem minmax(0,2fr) minmax(0,1.2fr) 6.5rem!important}
+.sheet .imp{padding:2px 20px 0}.sheet .imp .tbl{width:100%;margin:8px 0}
+.armId{font-family:var(--mono);font-size:.78rem;color:var(--muted);text-align:left}
+.mono{font-family:var(--mono);letter-spacing:.03em}
+.ser{font-size:.85rem;min-width:0;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:700px){.armRow{grid-template-columns:3.7rem minmax(0,1fr) auto!important}.armRow .ser{grid-column:2;grid-row:2;font-size:.78rem;color:var(--muted)}.armRow .val{grid-row:1/span 2;grid-column:3}#armAdd{display:none}}
 #printSheet{display:none}
 @media print{
   @page{size:letter landscape;margin:.45in}
@@ -346,6 +352,22 @@ body.locked{position:fixed;left:0;right:0;overflow:hidden}
     <div class="stat"><b id="sVal">$0</b><span>Current value</span></div>
   </section>
 
+  <datalist id="colors"><option>Black</option><option>Coyote</option><option>Ranger Green</option><option>Multicam</option><option>Wolf Grey</option><option>FDE</option><option>Tan 499</option></datalist>
+  <datalist id="loadouts"></datalist>
+  <datalist id="locations"></datalist>
+  <datalist id="calibers"><option>9mm</option><option>5.56 NATO</option><option>.223 Rem</option><option>300 BLK</option><option>7.62x39</option><option>.308 Win</option><option>7.62x51</option><option>6.5 Creedmoor</option><option>.45 ACP</option><option>.40 S&amp;W</option><option>10mm</option><option>.380 ACP</option><option>.22 LR</option><option>12 Gauge</option><option>.300 Win Mag</option></datalist>
+  <datalist id="drills"><option>Bill Drill</option><option>El Presidente</option><option>FAST</option><option>Draw to first shot</option><option>Dot Torture</option><option>5x5 Skill Test</option><option>Mozambique</option><option>1-Reload-1</option><option>Failure to Stop</option><option>Blake Drill</option><option>Doubles</option><option>Box Drill</option><option>Ready-Up</option><option>Transition drill</option></datalist>
+  <datalist id="maintTasks"><option>Clean &amp; lube</option><option>Detail strip &amp; inspect</option><option>Replace battery</option><option>Swap battery / function check</option><option>Inspect tourniquet</option><option>Check med expirations</option><option>Charge &amp; check battery</option><option>Inspect plates for damage</option><option>Check optic zero &amp; screws</option><option>Check helmet pads &amp; retention</option><option>Replace recoil spring</option><option>Replace gas rings</option></datalist>
+
+  <div class="tools">
+    <input id="q" type="search" placeholder="Search items, brands, loadouts, locations" aria-label="Search">
+    <button class="btn ghost" id="bulkMktBtn" type="button">Market check all</button>
+    <select id="sort" aria-label="Sort" style="width:auto"><option value="name">Sort: name</option><option value="val">Sort: value</option><option value="on">Sort: loadout</option><option value="loc">Sort: location</option></select>
+  </div>
+  <div class="chips" id="chips" role="group" aria-label="Filter by category"></div>
+
+  <main id="list"></main>
+  </div>
   <div class="sheetWrap" id="detailSheet"><div class="sheetBg" data-close="detail"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Item details"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-close="detail" aria-label="Close">✕</button></div>
   <section class="panel detail" id="detail" hidden aria-live="polite"></section></div></div>
   <div class="sheetWrap" id="formSheet"><div class="sheetBg" data-close="form"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Item form"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-close="form" aria-label="Close">✕</button></div>
@@ -367,6 +389,22 @@ body.locked{position:fixed;left:0;right:0;overflow:hidden}
     <div class="f span2 nogun"><label for="fGun">Goes with firearm</label><select id="fGun"></select></div>
     <div class="f fire"><label for="fCal">Caliber</label><input id="fCal" list="calibers" placeholder="5.56 NATO"></div>
     <div class="f fire"><label for="fBase">Rounds fired before tracking</label><input id="fBase" type="number" min="0" step="1" placeholder="0"></div>
+    <div class="f span2"><label for="fArm">Serial record (Arms Room)</label><select id="fArm"><option value="">— not on the record —</option><option value="FA">Firearm</option><option value="SU">Suppressor</option><option value="OP">Optic / sight</option><option value="WL">Weapon light</option><option value="LA">Laser / NVG / thermal</option><option value="KN">Knife</option></select></div>
+    <div class="f rec" data-recs="FA SU OP WL LA"><label for="fSerial">Serial number</label><input id="fSerial" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Exactly as stamped"></div>
+    <div class="f rec"><label for="fArmId">Record ID</label><input id="fArmId" autocapitalize="characters" placeholder="Auto"></div>
+    <div class="f rec"><label for="fArmType" id="fArmTypeL">Type</label><input id="fArmType" placeholder="Rifle, pistol, RD, 1-6x…"></div>
+    <div class="f rec"><label for="fAcq">Date acquired</label><input id="fAcq" type="date"></div>
+    <div class="f rec span2"><label for="fFrom">Acquired from (dealer / private)</label><input id="fFrom" placeholder="Sentry Firearms"></div>
+    <div class="f rec" data-recs="FA"><label for="fBbl">Barrel length</label><input id="fBbl" placeholder='16"'></div>
+    <div class="f rec" data-recs="SU"><label for="fForm">Form type</label><input id="fForm" placeholder="4 / 4473"></div>
+    <div class="f rec" data-recs="SU"><label for="fStamp">Stamp / approval date</label><input id="fStamp" type="date"></div>
+    <div class="f rec" data-recs="SU"><label for="fAdapter">Mount / adapter</label><input id="fAdapter" placeholder="Dead Air KeyMo"></div>
+    <div class="f rec" data-recs="OP"><label for="fArmMount">Optic mount</label><input id="fArmMount" placeholder="Reptilia"></div>
+    <div class="f rec" data-recs="WL"><label for="fBatt">Battery</label><input id="fBatt" placeholder="CR123"></div>
+    <div class="f rec" data-recs="KN"><label for="fBlade">Blade length</label><input id="fBlade" placeholder='4"'></div>
+    <div class="f rec" data-recs="KN"><label for="fSteel">Blade steel</label><input id="fSteel" placeholder="S35VN"></div>
+    <div class="f rec" data-recs="KN"><label for="fHandle">Handle</label><input id="fHandle" placeholder="Black G10"></div>
+    <div class="f rec" data-recs="KN"><label for="fMarks">Markings</label><input id="fMarks" placeholder="Engraving, logo"></div>
     <div class="f span4"><label for="fNotes">Notes</label><input id="fNotes" placeholder="Serial, size, mods, where bought"></div>
     <div class="priceRow">
       <button class="btn ghost" type="button" id="mktBtn">Market check</button>
@@ -380,22 +418,8 @@ body.locked{position:fixed;left:0;right:0;overflow:hidden}
       <button class="btn" type="submit" id="saveBtn">Save</button>
     </div>
   </form></div></div>
-  <datalist id="colors"><option>Black</option><option>Coyote</option><option>Ranger Green</option><option>Multicam</option><option>Wolf Grey</option><option>FDE</option><option>Tan 499</option></datalist>
-  <datalist id="loadouts"></datalist>
-  <datalist id="locations"></datalist>
-  <datalist id="calibers"><option>9mm</option><option>5.56 NATO</option><option>.223 Rem</option><option>300 BLK</option><option>7.62x39</option><option>.308 Win</option><option>7.62x51</option><option>6.5 Creedmoor</option><option>.45 ACP</option><option>.40 S&amp;W</option><option>10mm</option><option>.380 ACP</option><option>.22 LR</option><option>12 Gauge</option><option>.300 Win Mag</option></datalist>
-  <datalist id="drills"><option>Bill Drill</option><option>El Presidente</option><option>FAST</option><option>Draw to first shot</option><option>Dot Torture</option><option>5x5 Skill Test</option><option>Mozambique</option><option>1-Reload-1</option><option>Failure to Stop</option><option>Blake Drill</option><option>Doubles</option><option>Box Drill</option><option>Ready-Up</option><option>Transition drill</option></datalist>
-  <datalist id="maintTasks"><option>Clean &amp; lube</option><option>Detail strip &amp; inspect</option><option>Replace battery</option><option>Swap battery / function check</option><option>Inspect tourniquet</option><option>Check med expirations</option><option>Charge &amp; check battery</option><option>Inspect plates for damage</option><option>Check optic zero &amp; screws</option><option>Check helmet pads &amp; retention</option><option>Replace recoil spring</option><option>Replace gas rings</option></datalist>
-
-  <div class="tools">
-    <input id="q" type="search" placeholder="Search items, brands, loadouts, locations" aria-label="Search">
-    <button class="btn ghost" id="bulkMktBtn" type="button">Market check all</button>
-    <select id="sort" aria-label="Sort" style="width:auto"><option value="name">Sort: name</option><option value="val">Sort: value</option><option value="on">Sort: loadout</option><option value="loc">Sort: location</option></select>
-  </div>
-  <div class="chips" id="chips" role="group" aria-label="Filter by category"></div>
-
-  <main id="list"></main>
-  </div>
+  <div class="view" id="armsView" hidden></div>
+  <input type="file" id="armFile" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
 
   <div class="view" id="kitView" hidden>
     <div class="chips" id="kitChips" role="group" aria-label="Choose a scenario"></div>
@@ -418,7 +442,7 @@ body.locked{position:fixed;left:0;right:0;overflow:hidden}
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="config.js"></script>
 <script>
-const CATS=["Firearms","Armor & Carriers","Belts & Rigs","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Mags & Ammo Storage","Cleaning & Maintenance","Misc"];
+const CATS=["Firearms","Suppressors","Armor & Carriers","Belts & Rigs","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Mags & Ammo Storage","Cleaning & Maintenance","Misc"];
 const FACTOR={"New":0.9,"Good":0.7,"Used":0.55,"Worn":0.4,"Needs-repair":0.2};
 const FILE="gear.json", LS="gearLocker.items", LSK="gearLocker.kits";
 let kits={};
@@ -520,7 +544,7 @@ function render(){
   $("chips").innerHTML=["All",...CATS.filter(c=>counts[c])].map(c=>`<button type="button" class="chip" aria-pressed="${c===filter}" data-c="${esc(c)}">${esc(c)}<small>${c==="All"?items.length:counts[c]}</small></button>`).join("");
   $("loadouts").innerHTML=[...new Set(items.map(i=>i.setupOn).filter(Boolean))].map(v=>`<option>${esc(v)}</option>`).join("");
   $("locations").innerHTML=[...new Set(items.map(i=>i.location).filter(Boolean))].map(v=>`<option>${esc(v)}</option>`).join("");
-  let rows=items.filter(i=>(filter==="All"||i.category===filter)&&(!q||[i.name,i.brand,i.color,i.setupOn,i.location,i.notes,i.category].join(" ").toLowerCase().includes(q)));
+  let rows=items.filter(i=>(filter==="All"||i.category===filter)&&(!q||[i.name,i.brand,i.color,i.setupOn,i.location,i.notes,i.category,i.serial,i.armId].join(" ").toLowerCase().includes(q)));
   const key={name:i=>(i.name||"").toLowerCase(),on:i=>(i.setupOn||"~").toLowerCase(),loc:i=>(i.location||"~").toLowerCase()}[sort];
   rows.sort(sort==="val"?(a,b)=>(b.qty*b.value||0)-(a.qty*a.value||0):(a,b)=>key(a).localeCompare(key(b)));
   if(!items.length){$("list").innerHTML=`<div class="empty"><b>Locker's empty</b>Add your first item with <em>+ Add item</em>. Work through one area at a time: carrier, belt, pouches, med, packs.</div>`;return}
@@ -1175,7 +1199,7 @@ DEL.loans=async d=>{await removeC("loans",d.id)};
 ACT.loans=async(act,b)=>{if(act==="returned"){const x=L("loans").find(y=>y.id===b.dataset.id);if(!x)return;await upsertC("loans",{...x,returned:today()});toast("Marked returned");render()}};
 
 /* ---------- tabs ---------- */
-const TABS=[["inv","Inventory"],["kits","Kits"],["range","Range Log"],["dope","DOPE"],["ammo","Ammo"],["maint","Maintenance"],["wish","Wishlist"],["loans","Loans"]];
+const TABS=[["inv","Inventory"],["arms","Arms Room"],["kits","Kits"],["range","Range Log"],["dope","DOPE"],["ammo","Ammo"],["maint","Maintenance"],["wish","Wishlist"],["loans","Loans"]];
 const viewId=k=>k==="kits"?"kitView":k+"View";
 let curTab="inv";
 function badgeFor(k){
@@ -1186,12 +1210,12 @@ function badgeFor(k){
 }
 function updateBadges(){$("tabs").innerHTML=TABS.map(([k,l])=>{const n=badgeFor(k);return `<button class="tab" role="tab" type="button" data-tab="${k}" aria-selected="${k===curTab}">${l}${n?`<span class="badge" title="${n} need attention">${n}</span>`:""}</button>`}).join("")}
 $("tabs").onclick=e=>{const b=e.target.closest("[data-tab]");if(b)showTab(b.dataset.tab)};
-function afterRender(){document.body.classList.toggle("nolookups",!lookupsOn());updateBadges();if(curTab==="kits")renderKits();else if(COLOF[curTab])renderExtra()}
+function afterRender(){document.body.classList.toggle("nolookups",!lookupsOn());updateBadges();if(curTab==="arms")renderArms();else if(curTab==="kits")renderKits();else if(COLOF[curTab])renderExtra()}
 function showTab(k){
   if(!TABS.some(t=>t[0]===k))k="inv";
   curTab=k;TABS.forEach(([t])=>{$(viewId(t)).hidden=t!==k});
   ["printBtn","csvBtn","addBtn"].forEach(id=>$(id).hidden=k!=="inv");
-  updateBadges();if(k==="kits")renderKits();else if(COLOF[k])renderExtra();
+  updateBadges();if(k==="arms")renderArms();else if(k==="kits")renderKits();else if(COLOF[k])renderExtra();
   try{localStorage.setItem("gearLocker.tab",k)}catch{}
 }
 try{curKit=localStorage.getItem("gearLocker.curKit")||curKit;const t=localStorage.getItem("gearLocker.tab");setTimeout(()=>showTab(t||"inv"))}catch{setTimeout(()=>showTab("inv"))}
@@ -1308,6 +1332,7 @@ function openDetail(i,quiet){
      ${f("On loan",ln?`${esc(ln.borrower)}`:"",ln?`since ${esc(fmtDate(ln.out))}${ln.due?` · due ${esc(fmtDate(ln.due))}`:""}`:"",1)}
    </dl>
    ${i.priceNote||links.length?`<div class="sect"><h3>Market data</h3>${i.priceNote?`<div class="note">${esc(i.priceNote)}</div>`:""}${links.length?`<div class="links" style="margin-top:6px">${links.map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label||"source")}</a>`).join(" · ")}</div>`:""}</div>`:""}
+   ${armDetail(i)}
    ${i.lookupError&&!lookingUp.has(i.id)?`<div class="sect"><h3>Market check</h3><div class="note">Last lookup didn't work: ${esc(i.lookupError)}</div></div>`:""}
    ${kids.length?`<div class="sect"><h3>Mounted on this (${kids.length})</h3><div class="links">${kids.map(k=>`<button class="lnk" type="button" data-dview="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
    ${gunGear.length?`<div class="sect"><h3>Gear for this gun (${gunGear.length})</h3><div class="links">${gunGear.map(k=>`<button class="lnk" type="button" data-dview="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
@@ -1323,6 +1348,7 @@ $("detail").addEventListener("click",async e=>{
   const a=b.dataset.dact;
   if(a==="close"){closeDetail();return}
   if(a==="edit"){openForm(viewing);return}
+  if(a==="ser"){showSer=!showSer;openDetail(viewing,true);if(curTab==="arms")renderArms();return}
   if(a==="mkt"){const r=all.find(x=>x.id===viewing.id);if(!r)return;if(window.LOOKUP_URL){const p=runLookups([r.id]);openDetail(r,true);await p;return}Object.assign(r,{marketCheck:"requested",marketCheckAt:now(),updatedAt:now()});render();await persist();openDetail(r);toast("Market check queued")}
 });
 
@@ -1334,7 +1360,7 @@ async function apiLookup(list){
   if(!r.ok){let m="";try{m=(await r.json()).error||""}catch{};throw new Error(m||("Lookup failed ("+r.status+")"))}
   return (await r.json()).results||[];
 }
-const lookupBody=i=>({id:i.id,name:i.name,brand:i.brand||"",category:i.category||"",condition:i.condition||"",color:i.color||"",notes:(i.notes||"").slice(0,200)});
+const lookupBody=i=>({id:i.id,name:i.name,brand:i.brand||"",category:i.category||"",condition:i.condition||"",color:i.color||"",notes:armOf(i)?"":(i.notes||"").slice(0,200)});
 function applyLookup(id,res){
   const it=all.find(x=>x.id===id);if(!it||it.deleted||!res||!res.ok)return false;
   const n=v=>v==null||v===""||!isFinite(+v)?null:Math.round(+v);
@@ -1419,15 +1445,267 @@ document.addEventListener("keydown",e=>{
   if(e.key!=="Escape")return;
   if(!$("form").hidden){cancelForm();return}
   if(!$("detail").hidden){closeDetail();return}
+  if(curTab==="arms"&&armImport){armImport=null;renderArms();return}
   if(COLOF[curTab]&&ED[curTab]){ED[curTab]=null;renderExtra()}
 });
-$("fab").onclick=()=>{if(curTab==="inv")openForm();else if(COLOF[curTab])openEd(curTab,NEWREC[curTab]?NEWREC[curTab]():{})};
+$("fab").onclick=()=>{if(curTab==="arms")openArmForm();else if(curTab==="inv")openForm();else if(COLOF[curTab])openEd(curTab,NEWREC[curTab]?NEWREC[curTab]():{})};
 const _showTab=showTab;
 showTab=function(k){
   if(!$("form").hidden)closeForm();if(!$("detail").hidden)closeDetail();
   VIEWS.forEach(v=>{if(ED[v])ED[v]=null});
-  _showTab(k);$("fab").hidden=!(curTab==="inv"||COLOF[curTab]);syncLock();window.scrollTo(0,0);
+  _showTab(k);$("fab").hidden=!(curTab==="inv"||curTab==="arms"||COLOF[curTab]);syncLock();window.scrollTo(0,0);
 };
+
+/* ---------- Arms Room: serial records ---------- */
+const ARM={
+  FA:{label:"Firearms",one:"Firearm",cat:"Firearms",type:"Type / action"},
+  SU:{label:"Suppressors",one:"Suppressor",cat:"Suppressors",type:"Caliber rating"},
+  OP:{label:"Optics & sights",one:"Optic",cat:"NVG & Optics",type:"Type / power"},
+  WL:{label:"Weapon lights",one:"Weapon light",cat:"Lights & Lasers",type:"Output"},
+  LA:{label:"Lasers, NVG & thermal",one:"Laser / NVG / thermal",cat:"Lights & Lasers",type:"Type (vis / IR)"},
+  KN:{label:"Knives",one:"Knife",cat:"Knives & Tools",type:"Fixed / folder / auto"},
+};
+const ARM_KEYS=Object.keys(ARM);
+let showSer=false,armImport=null;
+const armOf=i=>i.arm&&ARM[i.arm]?i.arm:i.category==="Firearms"?"FA":i.category==="Suppressors"?"SU":"";
+const maskSer=s=>!s?"":showSer?s:(s.length>4?"•••• "+s.slice(-4):"••••");
+const nrm=s=>String(s||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+function nextArmId(sec,taken){
+  const used=new Set([...live().map(i=>i.armId),...(taken||[])].filter(Boolean));
+  let n=1;while(used.has(`${sec}-${String(n).padStart(3,"0")}`))n++;
+  return `${sec}-${String(n).padStart(3,"0")}`;
+}
+function armRows(sec){return live().filter(i=>armOf(i)===sec).sort((a,b)=>(a.armId||"~").localeCompare(b.armId||"~")||byName(a,b))}
+function fmtD(d){return d?fmtDate(d):""}
+
+function renderArms(){
+  const v=$("armsView");if(!v)return;
+  const secs=ARM_KEYS.map(k=>({k,rows:armRows(k)}));
+  const n=secs.reduce((a,s)=>a+s.rows.length,0),val=secs.reduce((a,s)=>a+s.rows.reduce((b,i)=>b+(+i.value||0)*(+i.qty||1),0),0);
+  const noSer=secs.reduce((a,s)=>a+s.rows.filter(i=>!i.serial&&s.k!=="KN").length,0);
+  v.innerHTML=`<div class="vhead"><div><h2>Arms Room</h2><p>Serial numbers and records for your guns, suppressors, optics, lights, lasers and knives, for insurance and theft reports. Only you can see this when signed in.</p></div>
+    <div class="vbtns"><button class="btn ghost" type="button" data-arm="ser">${showSer?"Hide serials":"Show serials"}</button><button class="btn ghost" type="button" data-arm="import">Import record</button><button class="btn ghost" type="button" data-arm="print">Print record</button><button class="btn" type="button" data-arm="new" id="armAdd">+ Add</button></div></div>
+  <section class="stats"><div class="stat"><b>${n}</b><span>On record</span></div><div class="stat"><b>${secs[0].rows.length}</b><span>Firearms</span></div><div class="stat"><b>${money(val)}</b><span>Record value</span></div><div class="stat"><b>${noSer}</b><span>Missing serial</span></div></section>
+  ${n?secs.filter(s=>s.rows.length).map(s=>{const sv=s.rows.reduce((b,i)=>b+(+i.value||0)*(+i.qty||1),0);
+    return `<section class="group"><div class="ghead"><h3>${esc(ARM[s.k].label)}</h3><span>${s.rows.length}${sv?` · ${money(sv)}`:""}</span></div>
+    ${s.rows.map(i=>{const on=itemById(i.mountedOn);const sub=[i.brand,i.armType,i.caliber,on?"on "+on.name:i.setupOn].filter(Boolean).join(" · ");
+      return `<button type="button" class="row armRow" data-id="${esc(i.id)}"><span class="qty armId">${esc(i.armId||"—")}</span>
+      <span class="nm">${esc(i.name)}${i.nick?` <span class="tag">${esc(i.nick)}</span>`:""}<small>${esc(sub)}</small></span>
+      <span class="ser">${s.k==="KN"?esc(i.markings||""):i.serial?`<span class="mono">${esc(maskSer(i.serial))}</span>`:`<span class="tag">no serial</span>`}</span>
+      <span class="val">${i.value?money((+i.value)*(+i.qty||1)):"—"}</span></button>`}).join("")}</section>`}).join("")
+  :`<div class="empty"><b>Nothing on record yet</b>Tap <em>Import record</em> to bring in your serial number Word file, or add guns and gear with a serial.</div>`}
+  ${armImport?importSheet():""}`;
+  syncLock();
+}
+function importSheet(){
+  const p=armImport;const by=k=>p.rows.filter(r=>r.d.arm===k);
+  return `<div class="sheetWrap edSheet"><div class="sheetBg" data-arm="icancel"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Import record"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-arm="icancel" aria-label="Close">✕</button></div>
+  <div class="panel imp"><h2>Import ${esc(p.file)}</h2>
+  <p class="hint">Found ${p.rows.length} items. ${p.rows.filter(r=>r.match).length} match gear you already have and get the serial and record details added. ${p.rows.filter(r=>!r.match).length} are new.</p>
+  <table class="tbl"><thead><tr><th>Section</th><th class="n">New</th><th class="n">Update</th></tr></thead><tbody>${ARM_KEYS.filter(k=>by(k).length).map(k=>`<tr><td>${esc(ARM[k].label)}</td><td class="n">${by(k).filter(r=>!r.match).length}</td><td class="n">${by(k).filter(r=>r.match).length}</td></tr>`).join("")}</tbody></table>
+  ${(()=>{const u=p.rows.filter(r=>r.match&&nrm(r.match.name)!==nrm(r.d.name));return u.length?`<p class="hint">Matched to gear you entered: ${u.slice(0,8).map(r=>`${esc(r.d.brand)} ${esc(r.d.name)} → your “${esc(r.match.name)}”`).join("; ")}${u.length>8?` and ${u.length-8} more`:""}</p>`:""})()}
+  <p class="hint">Mounted-on links matched to your guns: ${p.links}. Values from the record are kept as entered. Nothing is sent anywhere except your own account.</p>
+  <div class="actions"><span class="spacer"></span><button class="btn ghost" type="button" data-arm="icancel">Cancel</button><button class="btn" type="button" data-arm="igo">Import ${p.rows.length}</button></div></div></div></div>`;
+}
+
+/* read a .docx in the browser (zip + XML, no libraries) */
+async function docxXml(buf){
+  const dv=new DataView(buf);let e=buf.byteLength-22;
+  while(e>=0&&dv.getUint32(e,true)!==0x06054b50)e--;
+  if(e<0)throw new Error("That isn't a Word (.docx) file");
+  const cnt=dv.getUint16(e+10,true);let p=dv.getUint32(e+16,true);
+  for(let k=0;k<cnt;k++){
+    const method=dv.getUint16(p+10,true),csize=dv.getUint32(p+20,true),nl=dv.getUint16(p+28,true),xl=dv.getUint16(p+30,true),cl=dv.getUint16(p+32,true),off=dv.getUint32(p+42,true);
+    const name=new TextDecoder().decode(new Uint8Array(buf,p+46,nl));
+    if(name==="word/document.xml"){
+      const ln=dv.getUint16(off+26,true),lx=dv.getUint16(off+28,true);
+      const data=new Uint8Array(buf,off+30+ln+lx,csize);
+      if(method===0)return new TextDecoder().decode(data);
+      if(typeof DecompressionStream==="undefined")throw new Error("Update your browser to import Word files");
+      const out=await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer();
+      return new TextDecoder().decode(out);
+    }
+    p+=46+nl+xl+cl;
+  }
+  throw new Error("That Word file has no document text");
+}
+function docxTables(xml){
+  const W="http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const doc=new DOMParser().parseFromString(xml,"application/xml");
+  const kids=(el,n)=>[...el.childNodes].filter(c=>c.localName===n);
+  return [...doc.getElementsByTagNameNS(W,"tbl")].map(t=>kids(t,"tr").map(tr=>{
+    const out=[];kids(tr,"tc").forEach(tc=>{
+      const txt=[...tc.getElementsByTagNameNS(W,"p")].map(p=>[...p.getElementsByTagNameNS(W,"t")].map(x=>x.textContent).join("")).filter(Boolean).join(" ").trim();
+      const gs=tc.getElementsByTagNameNS(W,"gridSpan")[0];const span=gs?parseInt(gs.getAttributeNS(W,"val")||gs.getAttribute("w:val"))||1:1;
+      out.push(txt);for(let s=1;s<span;s++)out.push("");
+    });return out;
+  }));
+}
+const MON={JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,SEPT:9,OCT:10,NOV:11,DEC:12};
+function recDate(s){const m=String(s||"").toUpperCase().replace(/\s/g,"").match(/^(\d{1,2})([A-Z]{3,4})(\d{4})$/);if(m&&MON[m[2]])return `${m[3]}-${String(MON[m[2]]).padStart(2,"0")}-${m[1].padStart(2,"0")}`;const d=new Date(s);return s&&!isNaN(d)&&/\d{4}/.test(s)?d.toISOString().slice(0,10):""}
+const unk=s=>/^(UK|UNK|UNKNOWN|N\/?A|NONE|-+)$/i.test(String(s||"").trim())?"":String(s||"").trim();
+function recMoney(s){const v=parseFloat(String(s||"").replace(/[$,\s]/g,""));return isFinite(v)&&v>0?Math.round(v*100)/100:0}
+function parseRecord(tables){
+  const out=[];
+  tables.forEach(t=>{
+    const hi=t.findIndex(r=>/^item\s*id$/i.test((r[0]||"").trim()));if(hi<0)return;
+    const H=t[hi].map(h=>h.toLowerCase());
+    const col=re=>H.findIndex(h=>re.test(h));
+    const C={mfr:col(/manufacturer/),model:col(/^model/),type:col(/^type|output|caliber rating/),cal:col(/caliber \/ gauge|^caliber$/),calr:col(/caliber rating/),serial:col(/serial/),bbl:col(/bbl|barrel/),acq:col(/date acquired/),from:col(/acquired from/),
+      value:col(/^value/),photo:col(/photo/),notes:col(/notes/),form:col(/form type/),stamp:col(/stamp/),reg:col(/registrant/),dealer:col(/transferring dealer|dealer/),adapter:col(/adapter/),mount:col(/^mount$/),on:col(/mounted on/),
+      batt:col(/battery/),cls:col(/class/),blade:col(/blade len/),steel:col(/steel/),handle:col(/handle/),marks:col(/markings/)};
+    t.slice(hi+1).forEach(r=>{
+      const id=(r[0]||"").trim().toUpperCase();const m=id.match(/^([A-Z]{2})-\d+$/);if(!m||!ARM[m[1]])return;
+      const g=k=>C[k]>=0?(r[C[k]]||"").trim():"";
+      const mfr=unk(g("mfr")),model=unk(g("model"));if(!mfr&&!model&&!unk(g("type"))&&!unk(g("serial"))&&!unk(g("blade")))return;
+      const sec=m[1],notes=g("notes");
+      const d={arm:sec,armId:id,brand:mfr,name:model||(unk(g("type"))?unk(g("type")).charAt(0)+unk(g("type")).slice(1).toLowerCase()+" "+ARM[sec].one.toLowerCase():ARM[sec].one),serial:unk(g("serial")),armType:unk(g("type")),acquired:recDate(g("acq")),acquiredFrom:unk(g("from"))||unk(g("dealer")),
+        value:recMoney(g("value")),notes:notes,qty:1,condition:"Good"};
+      if(sec==="FA"){d.caliber=unk(g("cal"));d.bbl=unk(g("bbl"))}
+      if(sec==="SU"){d.caliber=unk(g("calr"))||unk(g("cal"));d.armType="";d.nfaForm=unk(g("form"));d.stampDate=recDate(g("stamp"));d.registrant=unk(g("reg"));d.adapter=unk(g("adapter"));d.acquired=d.acquired||d.stampDate}
+      if(sec==="OP"){d.armMount=unk(g("mount"));d._on=unk(g("on"))}
+      if(sec==="WL"){d.battery=unk(g("batt"));d._on=unk(g("on"))}
+      if(sec==="LA"){d._on=unk(g("on"));d.laserClass=unk(g("cls"));if(/thermal|night vision|nvg/i.test(notes))d.cat="NVG & Optics"}
+      if(sec==="KN"){d.bladeLen=unk(g("blade"));d.steel=unk(g("steel"));d.handle=unk(g("handle"));d.markings=unk(g("marks"));d.serial=""}
+      if(g("photo"))d.photoRef=g("photo");
+      d.category=d.cat||ARM[sec].cat;delete d.cat;
+      out.push(d);
+    });
+  });
+  return out;
+}
+function findMatch(d,used){
+  const pool=live().filter(i=>!used.has(i.id));
+  if(d.serial){const s=nrm(d.serial);const hit=pool.find(i=>i.serial&&nrm(i.serial)===s);if(hit)return hit}
+  const byId=pool.find(i=>i.armId===d.armId&&(nrm(i.name)===nrm(d.name)||(i.serial&&nrm(i.serial)===nrm(d.serial))));if(byId)return byId;
+  const b3=nrm(d.brand).slice(0,3),strip=(x,bs)=>bs.filter(Boolean).reduce((a,bb)=>a.split(bb).join(""),x),mdl=strip(nrm(d.name),[nrm(d.brand)]);
+  const c=pool.filter(i=>!i.serial&&(armOf(i)===d.arm||i.category===d.category)&&(()=>{
+    const full=nrm((i.brand||"")+" "+i.name),df=nrm(d.brand+" "+d.name);
+    if(full===df)return true;
+    if(full.length>=5&&(df.includes(full)||full.includes(df)))return true;
+    if(b3&&!full.includes(b3))return false;
+    const core=strip(nrm(i.name),[nrm(i.brand),nrm(d.brand)]);
+    if(!core||!mdl)return false;
+    return core.length>=3?(mdl.includes(core)||core.includes(mdl)):mdl.startsWith(core);
+  })());
+  return c.length===1?c[0]:null;
+}
+function resolveGun(txt,guns){
+  const t=nrm(txt);if(!t)return null;
+  const sub=(a,b)=>{let j=0;for(const ch of b){if(ch===a[j])j++;if(j===a.length)return true}return false};
+  const hits=guns.filter(gn=>{const f=nrm((gn.brand||"")+gn.name);return f.includes(t)||sub(t,f)||nrm(gn.name)===t});
+  if(hits.length<=1)return hits[0]||null;
+  const dg=t.replace(/\D/g,"");const best=hits.filter(gn=>dg&&nrm(gn.name).replace(/\D/g,"").startsWith(dg));
+  return best.length===1?best[0]:null;
+}
+function planImport(rows,file){
+  const used=new Set();
+  rows.forEach(r=>{r.match=findMatch(r.d,used);if(r.match)used.add(r.match.id)});
+  const guns=[...firearms(),...rows.filter(r=>r.d.arm==="FA"&&!r.match).map(r=>({id:"new:"+r.d.armId,brand:r.d.brand,name:r.d.name}))];
+  const gunsAll=guns.map(gn=>{const r=rows.find(x=>x.match&&x.match.id===gn.id);return r?{...gn,brand:gn.brand||r.d.brand,name:gn.name+" "+r.d.name}:gn});
+  let links=0;rows.forEach(r=>{if(r.d._on){const gn=resolveGun(r.d._on,gunsAll);if(gn){r.gun=gn.id;links++}}});
+  return {file,rows,links};
+}
+async function doImport(){
+  const p=armImport;if(!p)return;const t=now();const idMap={};
+  p.rows.forEach(r=>{
+    const d={...r.d};const on=d._on;delete d._on;
+    const keep={};Object.keys(d).forEach(k=>{if(d[k]!==""&&d[k]!=null)keep[k]=d[k]});
+    if(r.match){
+      const it=all.find(i=>i.id===r.match.id);if(!it)return;
+      const val=keep.value;delete keep.value;delete keep.name;delete keep.brand;delete keep.qty;delete keep.condition;delete keep.category;
+      if(keep.notes&&it.notes&&!it.notes.includes(keep.notes))keep.notes=it.notes+" · "+keep.notes;
+      Object.assign(it,keep);if(val&&!+it.value){it.value=val;it.valueSource="manual";it.priceSource="manual"}
+      if(!it.caliber&&d.caliber)it.caliber=d.caliber;it.updatedAt=t;idMap["new:"+d.armId]=it.id;r.id=it.id;
+    }else{
+      const id=(crypto.randomUUID?crypto.randomUUID():"g"+Date.now()+Math.random().toString(36).slice(2));
+      const rec={id,createdAt:t,updatedAt:t,...keep,weightStatus:"pending"};
+      if(keep.value){rec.valueSource="manual";rec.priceSource="manual"}
+      if(on&&!r.gun)rec.setupOn=on;
+      all.push(rec);idMap["new:"+d.armId]=id;r.id=id;
+    }
+  });
+  p.rows.forEach(r=>{if(!r.gun||!r.id)return;const it=all.find(i=>i.id===r.id);const gid=idMap[r.gun]||r.gun;if(it&&gid&&gid!==it.id){it.mountedOn=gid;it.updatedAt=t}});
+  const n=p.rows.length;armImport=null;render();renderArms();await persist();toast(`Imported ${n} items into the Arms Room`,4000);
+}
+$("armsView").addEventListener("click",async e=>{
+  const row=e.target.closest(".armRow[data-id]");if(row){openDetail(all.find(i=>i.id===row.dataset.id));return}
+  const b=e.target.closest("[data-arm]");if(!b)return;const a=b.dataset.arm;
+  if(a==="ser"){showSer=!showSer;renderArms();return}
+  if(a==="new"){openArmForm();return}
+  if(a==="import"){$("armFile").click();return}
+  if(a==="print"){if(!ARM_KEYS.some(k=>armRows(k).length)){toast("Nothing on record yet");return}buildArmsPrint();printingKit=true;window.print();return}
+  if(a==="icancel"){armImport=null;renderArms();return}
+  if(a==="igo"){await doImport();return}
+});
+$("armFile").addEventListener("change",async e=>{
+  const f=e.target.files[0];e.target.value="";if(!f)return;
+  try{
+    const rows=parseRecord(docxTables(await docxXml(await f.arrayBuffer())));
+    if(!rows.length){toast("No serial record tables found in that file",4000);return}
+    armImport=planImport(rows.map(d=>({d})),f.name);renderArms();
+  }catch(err){toast(err.message||"Couldn't read that file",4000)}
+});
+function openArmForm(sec){openForm();const s=sec||"FA";$("fCat").value=ARM[s].cat;fireFields();$("fArm").value=s;recFields()}
+
+/* form: record fields */
+function recFields(){
+  const s=$("fArm").value;document.querySelectorAll(".f.rec").forEach(e=>e.hidden=!s);
+  document.querySelectorAll("[data-recs]").forEach(e=>{e.hidden=!s||!e.dataset.recs.split(" ").includes(s)});
+  if(s){$("fArmTypeL").textContent=ARM[s].type;$("fArmId").placeholder=editing?.armId||"Auto ("+nextArmId(s)+")"}
+}
+$("fArm").addEventListener("change",recFields);
+$("fCat").addEventListener("change",()=>{if(!$("fArm").value&&!editing){const c=$("fCat").value;if(c==="Firearms")$("fArm").value="FA";else if(c==="Suppressors")$("fArm").value="SU";recFields()}});
+const REC_IDS={fArmId:"armId",fSerial:"serial",fArmType:"armType",fAcq:"acquired",fFrom:"acquiredFrom",fBbl:"bbl",fForm:"nfaForm",fStamp:"stampDate",fAdapter:"adapter",fArmMount:"armMount",fBatt:"battery",fBlade:"bladeLen",fSteel:"steel",fHandle:"handle",fMarks:"markings"};
+const _openForm=openForm;
+openForm=function(item){
+  _openForm(item);
+  $("fArm").value=item?(item.arm||armOf(item)):"";
+  Object.entries(REC_IDS).forEach(([el,k])=>$(el).value=item?.[k]||"");
+  recFields();
+};
+const _readForm=readForm;
+readForm=function(){
+  const d=_readForm();const s=$("fArm").value;d.arm=s;
+  Object.entries(REC_IDS).forEach(([el,k])=>d[k]=s?$(el).value.trim():(editing?.[k]||""));
+  if(s&&!d.armId)d.armId=(editing&&editing.arm===s&&editing.armId)||nextArmId(s);
+  if(s==="KN")d.serial="";
+  return d;
+};
+
+/* printable record */
+function buildArmsPrint(){
+  const m2=n=>"$"+(+n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const on=i=>{const g=itemById(i.mountedOn);return g?(g.armId||g.name):(i.setupOn||"")};
+  const COLS={
+    FA:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Type / Action","armType"],["Caliber","caliber"],["Serial Number","serial"],["Bbl. Len.","bbl"],["Date Acquired",i=>fmtD(i.acquired)],["Acquired From","acquiredFrom"],["Value",i=>i.value?m2(i.value):""],["Notes / Status","notes"]],
+    SU:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Caliber","caliber"],["Serial Number","serial"],["Form","nfaForm"],["Stamp / Approval",i=>fmtD(i.stampDate)],["Dealer","acquiredFrom"],["Mount / Adapter","adapter"],["Value",i=>i.value?m2(i.value):""],["Notes / Status","notes"]],
+    OP:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Type","armType"],["Serial Number","serial"],["Mount","armMount"],["Mounted On",on],["Date Acquired",i=>fmtD(i.acquired)],["Value",i=>i.value?m2(i.value):""],["Notes / Status","notes"]],
+    WL:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Output","armType"],["Serial Number","serial"],["Battery","battery"],["Mounted On",on],["Date Acquired",i=>fmtD(i.acquired)],["Value",i=>i.value?m2(i.value):""],["Notes / Status","notes"]],
+    LA:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Type","armType"],["Serial Number","serial"],["Mounted On",on],["Date Acquired",i=>fmtD(i.acquired)],["Value",i=>i.value?m2(i.value):""],["Notes / Status","notes"]],
+    KN:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Type","armType"],["Blade Len.","bladeLen"],["Steel","steel"],["Handle","handle"],["Markings","markings"],["Date Acquired",i=>fmtD(i.acquired)],["Value",i=>i.value?m2(i.value):""],["Notes / Status","notes"]],
+  };
+  const sum=[];
+  let h=`<div class="ph"><div><h1>PERSONAL PROPERTY RECORD</h1><small>Firearms, NFA items, accessories &amp; edged weapons · ${esc(cloudUser?.email||"")} · Printed ${new Date().toLocaleDateString()}</small></div><small>PRIVATE — CONTAINS SERIAL NUMBERS</small></div>`;
+  ARM_KEYS.forEach(k=>{const rows=armRows(k);if(!rows.length)return;const tot=rows.reduce((a,i)=>a+(+i.value||0)*(+i.qty||1),0);sum.push([ARM[k].label,rows.length,tot]);
+    const cols=COLS[k];
+    h+=`<table><thead><tr class="cat"><th colspan="${cols.length}">${esc(ARM[k].label.toUpperCase())} — ${rows.length} · ${m2(tot)}</th></tr><tr>${cols.map(c=>`<th>${esc(c[0])}</th>`).join("")}</tr></thead><tbody>`+
+      rows.map(i=>`<tr>${cols.map(c=>`<td${c[0]==="Value"?' class="r"':""}>${esc(typeof c[1]==="function"?c[1](i):(i[c[1]]||""))}</td>`).join("")}</tr>`).join("")+`</tbody></table>`});
+  const gt=sum.reduce((a,s)=>a+s[2],0),gn=sum.reduce((a,s)=>a+s[1],0);
+  h+=`<table style="max-width:5.5in"><thead><tr class="cat"><th colspan="3">SUMMARY</th></tr><tr><th>Category</th><th class="r">Items</th><th class="r">Total value</th></tr></thead><tbody>${sum.map(s=>`<tr><td>${esc(s[0])}</td><td class="r">${s[1]}</td><td class="r">${m2(s[2])}</td></tr>`).join("")}<tr><th>GRAND TOTAL</th><th class="r">${gn}</th><th class="r">${m2(gt)}</th></tr></tbody></table>`;
+  h+=`<p class="sign">Owner signature: ______________________________ &nbsp;&nbsp; Date: ______________ &nbsp;&nbsp; Witness: ______________________________</p>`;
+  $("printSheet").innerHTML=h;
+}
+
+function armDetail(i){
+  const s=armOf(i);if(!s)return "";
+  const L=[["Record ID",esc(i.armId||"")],
+    ["Serial number",s==="KN"?"":i.serial?`<span class="mono">${esc(maskSer(i.serial))}</span> <button class="lnk" type="button" data-dact="ser">${showSer?"Hide":"Show"}</button>`:"Not recorded"],
+    [ARM[s].type,esc(i.armType||"")],["Acquired",esc(fmtD(i.acquired))],["Acquired from",esc(i.acquiredFrom||"")],["Barrel length",esc(i.bbl||"")],
+    ["Form",esc(i.nfaForm||"")],["Stamp / approval",esc(fmtD(i.stampDate))],["Mount / adapter",esc(i.adapter||i.armMount||"")],["Battery",esc(i.battery||"")],
+    ["Blade length",esc(i.bladeLen||"")],["Steel",esc(i.steel||"")],["Handle",esc(i.handle||"")],["Markings",esc(i.markings||"")]].filter(r=>r[1]);
+  return `<div class="sect"><h3>Serial record · ${esc(ARM[s].one)}</h3><dl>${L.map(r=>`<div><dt>${esc(r[0])}</dt><dd>${r[1]}</dd></div>`).join("")}</dl></div>`;
+}
 
 boot();
 </script>
