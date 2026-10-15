@@ -239,6 +239,30 @@ async function runDueWatches(env, budget) {
   } while (cursor);
   return done;
 }
+
+/* ---------- battery facts for a device ---------- */
+async function batteryLookup(env, d) {
+  const ask = `What battery does this device use, and how long does it normally last?
+Device: ${d.brand} ${d.name} (${d.category}${d.type ? ", " + d.type : ""})
+Use web search (at most 3 searches) on the maker's spec page or manual. If it uses no battery at all (iron sights, tritium/fiber optic, non-illuminated magnifier), say so.
+swapMonths = a sensible replacement interval for someone who relies on it (e.g. EOTech CR123 ~3 months, Aimpoint T2 CR2032 ~12 months, weapon-light CR123s ~6 months, rechargeables = how often to top up, in months, can be 0.5).
+Reply with ONLY this JSON:
+{"none": false, "battery": "e.g. CR123A, CR2032, AA, built-in rechargeable", "count": number, "life": "short note, e.g. '50,000 hrs at setting 8' or '1.5 hrs on high'", "swapMonths": number}`;
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }];
+  const messages = [{ role: "user", content: ask }];
+  let data;
+  for (let i = 0; i < 3; i++) {
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 2000, tools, messages }) });
+    data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data?.error?.message || ("Claude API error " + r.status));
+    if (data.stop_reason !== "pause_turn") break;
+    messages.push({ role: "assistant", content: data.content });
+  }
+  const t = textOf(data.content).replace(/```(?:json)?/gi, "");
+  let j = null; for (const c of (t.match(/\{[\s\S]*?\}/g) || []).reverse()) { try { const o = JSON.parse(c); if ("battery" in o || "none" in o) { j = o; break } } catch {} }
+  if (!j) throw new Error("couldn't read the battery answer");
+  return { none: !!j.none, battery: String(j.battery || "").slice(0, 40), count: Math.max(0, Math.min(8, +j.count || 1)), life: String(j.life || "").slice(0, 80), swapMonths: Math.max(0.25, Math.min(60, +j.swapMonths || 6)) };
+}
 async function lookupOne(env, it) {
   const clean = {
     id: String(it.id || "").slice(0, 80), name: String(it.name || "").slice(0, 120), brand: String(it.brand || "").slice(0, 120),
@@ -265,7 +289,7 @@ export default {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: h });
     const url = new URL(req.url);
     if (url.pathname === "/" || url.pathname === "/health") return json({ ok: true, service: "gear-locker-api" }, 200, h);
-    if (!["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check"].includes(url.pathname) || req.method !== "POST") return json({ error: "Not found" }, 404, h);
+    if (!["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/battery"].includes(url.pathname) || req.method !== "POST") return json({ error: "Not found" }, 404, h);
     if (!env.ANTHROPIC_API_KEY) return json({ error: "Lookup service isn't set up yet (missing API key)." }, 503, h);
 
     let user;
@@ -306,6 +330,10 @@ export default {
         return json({ watches: pub() }, 200, h);
       }
       return json({ watches: pub() }, 200, h);
+    }
+    if (url.pathname === "/battery") {
+      try { return json({ result: await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) }) }, 200, h); }
+      catch (e) { return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/identify") {
       const img = String(body.image || "");

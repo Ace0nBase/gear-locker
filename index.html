@@ -327,6 +327,11 @@ body.sharing .fab,body.sharing .toast{display:none!important}
 .wtGrid b{display:block;font-size:1.25rem}
 .wtGrid span{font-size:.75rem;color:var(--muted)}
 @media (max-width:700px){.wtGrid{grid-template-columns:repeat(2,1fr)}}
+.battList{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.batt{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--line);border-radius:6px;padding:10px 12px}
+.batt.over{border-left-color:var(--danger)}.batt.soon{border-left-color:#c8902e}.batt.ok{border-left-color:var(--accent)}
+.batt .bn{flex:1 1 220px;min-width:0}.batt .bn small{display:block;color:var(--muted)}
+.batt .bb{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .qtyPick{display:flex;align-items:center;gap:14px;margin:14px 0}
 .qtyPick b{font-size:2rem;min-width:2ch;text-align:center}
 .qtyPick .btn{width:52px;height:52px;font-size:1.5rem;padding:0}
@@ -468,6 +473,7 @@ body.sharing .fab,body.sharing .toast{display:none!important}
   </form></div></div>
   <div class="view" id="armsView" hidden></div>
   <div class="sheetWrap" id="swapSheet" hidden><div class="sheetBg" data-swap="keep"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Swap gear"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-swap="keep" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
+  <div class="sheetWrap" id="battSheet" hidden><div class="sheetBg" data-bs="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Battery"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-bs="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
   <div class="sheetWrap" id="buildSheet" hidden><div class="sheetBg"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Gun build"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-bclose="1" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
   <div class="sheetWrap" id="moveSheet" hidden><div class="sheetBg" data-mv="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Move some"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-mv="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
   <div class="sheetWrap" id="shareSheet" hidden><div class="sheetBg" data-sh="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Share"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-sh="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
@@ -1366,7 +1372,7 @@ function startCloud(){
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
   $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{[LS,LSK,LSD,"gearLocker.uid"].forEach(k=>localStorage.removeItem(k))}catch{};render();await auth.signOut()};
 }
-const APP_VERSION="17";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+const APP_VERSION="18";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 if("serviceWorker" in navigator&&location.protocol==="https:"){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
@@ -1499,7 +1505,7 @@ if(window.LOOKUP_URL){
 
 /* ---------- sheets, scroll lock, add button ---------- */
 let lockY=0;
-function anySheetOpen(){return !$("buildSheet").hidden||!$("moveSheet").hidden||!$("form").hidden||!$("detail").hidden||!$("swapSheet").hidden||!$("shareSheet").hidden||!!document.querySelector(".view:not([hidden]) .edSheet")}
+function anySheetOpen(){return !$("battSheet").hidden||!$("buildSheet").hidden||!$("moveSheet").hidden||!$("form").hidden||!$("detail").hidden||!$("swapSheet").hidden||!$("shareSheet").hidden||!!document.querySelector(".view:not([hidden]) .edSheet")}
 function syncLock(){
   const want=anySheetOpen(),has=document.body.classList.contains("locked");
   if(want&&!has){lockY=window.scrollY;document.body.style.top=`-${lockY}px`;document.body.classList.add("locked")}
@@ -1513,6 +1519,7 @@ document.addEventListener("click",e=>{
 });
 document.addEventListener("keydown",e=>{
   if(e.key!=="Escape")return;
+  if(!$("battSheet").hidden){battEdit=null;renderBattSheet();return}
   if(!$("buildSheet").hidden){buildFor=null;renderBuild();return}
   if(!$("moveSheet").hidden){moveState=null;renderMove();return}
   if(!$("shareSheet").hidden){shareState=null;renderShare();return}
@@ -2534,6 +2541,80 @@ function kitWeightFull(kit){
 $("kitDetail").addEventListener("click",e=>{if(e.target.id!=="kitWeigh")return;const kit=KITS.find(k=>k.id===curKit);const st=kstate(kit.id);const ids=new Set([...kitPacked(kit),...ridersOf(kitPacked(kit)).map(i=>i.id)]);
   const need=[...ids].map(itemById).filter(i=>i&&(i.weight==null||i.weight==="")&&!(classify(i).has("mag_rifle")||classify(i).has("mag_pistol"))).map(i=>i.id);
   if(!need.length){toast("Everything here has a weight");return}e.target.disabled=true;e.target.textContent=`Looking up ${need.length}…`;runLookups(need).then(()=>renderKits())});
+/* ---------- v18: battery tracker ---------- */
+const NO_BATT=/\bg[34]5\b|\bg33\b|magnifier|dual ?ill|acog|tritium|fiber|\bta\d{2}|irons?\b|backup sights?/;
+// starting points by device type (refined by "Look up" for your exact model)
+function battGuess(i){
+  const k=classify(i);const t=itemNameText(i);
+  if(NO_BATT.test(t)||k.has("optic_mag"))return null;
+  if(k.has("optic")){
+    if(/eotech|exps|\bxps|\b55[28]\b|\bhws\b/.test(t))return {type:/55[28]/.test(t)?"AA":"CR123A",count:/55[28]/.test(t)?2:1,months:3,life:"~600–1,000 hrs at mid setting",kind:"holographic"};
+    if(k.has("optic_lpvo"))return {type:"CR2032",count:1,months:12,life:"illumination only; ~100–500 hrs on",kind:"LPVO illumination"};
+    if(/aimpoint|\bt-?[12]\b|\bcco\b|\bm68\b|comp ?m/.test(t))return {type:/comp ?m[45]|\bm68|\bcco/.test(t)?"AA":"CR2032",count:1,months:12,life:"years of constant-on (Aimpoint ~5 yrs)",kind:"red dot"};
+    if(k.has("optic_pistol"))return {type:"CR2032",count:1,months:12,life:"~1–4 years depending on brightness",kind:"pistol dot"};
+    return {type:"CR2032",count:1,months:12,life:"months to years depending on brightness",kind:"red dot"};
+  }
+  if(k.has("wlight"))return {type:/tlr-?7|tlr-?8|apl ?c|x400u?|\bscout\b|m6[0-4]0|x300u?/.test(t)&&!/tlr-?7/.test(t)?"CR123A":"CR123A",count:/tlr-?7|tlr-?6|apl ?c/.test(t)?1:2,months:6,life:"~1–2 hrs on high; lithium cells lose punch over time",kind:"weapon light"};
+  if(k.has("laser"))return {type:"CR123A",count:/trinity|peq-?15|dbal/.test(t)?2:1,months:6,life:"~10–50 hrs depending on mode",kind:"IR laser"};
+  if(k.has("nvg"))return {type:"AA",count:1,months:3,life:"~40–50 hrs per AA",kind:"night vision"};
+  if(k.has("thermal"))return {type:"rechargeable",count:1,months:1,life:"~4–8 hrs per charge",kind:"thermal",charge:true};
+  if(k.has("headset"))return {type:"AAA",count:2,months:6,life:"~500 hrs",kind:"electronic hearing pro"};
+  if(k.has("radio"))return {type:"rechargeable",count:1,months:1,life:"~8–12 hrs per charge",kind:"radio",charge:true};
+  if(k.has("headlamp"))return {type:"AAA",count:3,months:6,life:"varies by mode",kind:"headlamp"};
+  if(i.category==="Lights & Lasers"||i.category==="NVG & Optics"||i.category==="Comms & Radios")return {type:"",count:1,months:6,life:"",kind:"electronics"};
+  return null;
+}
+function battInfo(i){
+  const g=battGuess(i);if(!g&&!i.battType)return null;if(i.battNone)return null;
+  let type=i.battType||(i.battery&&String(i.battery))||g?.type||"";type=type.replace(/^\s*cr ?123a?\s*$/i,"CR123A").replace(/^\s*cr ?2032\s*$/i,"CR2032").replace(/^\s*(aa|aaa)\s*$/i,m=>m.trim().toUpperCase());const months=+i.battMonths||g?.months||6;
+  const changed=i.battChanged||"";const next=changed?new Date(new Date(changed+"T12:00:00").getTime()+months*30.44*864e5).toISOString().slice(0,10):"";
+  const daysLeft=next?Math.round((new Date(next+"T12:00:00")-new Date())/864e5):null;
+  const status=!changed?"unknown":daysLeft<0?"over":daysLeft<=14?"soon":"ok";
+  return {type,count:+i.battCount||g?.count||1,months,life:i.battLife||g?.life||"",kind:g?.kind||"",charge:!!(g?.charge||/recharg/i.test(type)),changed,next,daysLeft,status,looked:!!i.battLooked};
+}
+const battItems=()=>live().filter(i=>battInfo(i)).map(i=>({i,b:battInfo(i)}));
+{const _bf=badgeFor;badgeFor=function(k){const n=_bf(k);return k==="maint"?n+battItems().filter(x=>x.b.status==="over").length:n}}
+let battEdit=null;
+{const _rm=RENDER.maint;RENDER.maint=()=>{_rm();const v=$("maintView");
+  const rows=battItems().sort((a,b)=>({over:0,soon:1,unknown:2,ok:3}[a.b.status]-{over:0,soon:1,unknown:2,ok:3}[b.b.status])||(a.b.daysLeft??9e9)-(b.b.daysLeft??9e9));
+  const spares={};rows.filter(x=>!x.b.charge&&x.b.type).forEach(x=>{spares[x.b.type]=(spares[x.b.type]||0)+x.b.count*(+x.i.qty||1)});
+  const pill=b=>b.status==="over"?`<span class="pill gap">${b.charge?"Charge now":"Change now"}</span>`:b.status==="soon"?`<span class="pill warn">${b.daysLeft}d left</span>`:b.status==="unknown"?`<span class="pill">Not logged</span>`:`<span class="pill ok">OK</span>`;
+  const html=`<div class="slotsHead" style="margin-top:6px">Batteries <span>${rows.length}</span></div>
+   ${rows.length?`<p class="hint" style="margin:6px 0">Tap <b>Changed today</b> when you swap batteries${rows.some(x=>x.b.charge)?" or charge something":""}. Intervals start from rules of thumb; <b>Look up</b> gets the exact battery and life for your model.</p>
+   <div class="battList">${rows.map(({i,b})=>`<div class="batt ${b.status}"><div class="bn"><b>${esc(i.name)}</b><small>${esc([b.count>1?b.count+"× "+b.type:b.type||"battery type not set",b.life].filter(Boolean).join(" · "))}</small>
+     <small>${b.changed?`${b.charge?"Charged":"Changed"} ${esc(fmtDate(b.changed))} · next by ${esc(fmtDate(b.next))}`:"No change logged yet"} · every ${b.months<1?"few weeks":b.months===1?"month":b.months+" months"}</small></div>
+     <div class="bb">${pill(b)}<button class="btn ghost" type="button" data-act="battnow" data-id="${esc(i.id)}">${b.charge?"Charged today":"Changed today"}</button><button class="btn ghost" type="button" data-act="battedit" data-id="${esc(i.id)}">Edit</button>${window.LOOKUP_URL&&!b.looked?`<button class="btn ghost" type="button" data-act="battlook" data-id="${esc(i.id)}">Look up</button>`:""}</div></div>`).join("")}</div>
+   ${Object.keys(spares).length?`<p class="hint">Spares to keep on hand (one full swap of everything): ${Object.entries(spares).map(([t,n])=>`<b>${n}× ${esc(t)}</b>`).join(" · ")}</p>`:""}`
+   :`<p class="hint">Add optics, lights, lasers, NODs, headsets or radios to your inventory and they show up here.</p>`}`;
+  const anchor=v.querySelector(".stats");if(anchor)anchor.insertAdjacentHTML("afterend",html);else v.insertAdjacentHTML("beforeend",html);
+  const st=v.querySelector(".stats .stat b");if(st){const over=rows.filter(x=>x.b.status==="over").length;if(over)st.textContent=String(+st.textContent+over)}
+  if(battEdit)renderBattSheet();
+}}
+function renderBattSheet(){const el=$("battSheet");const i=battEdit&&itemById(battEdit);if(!i){el.hidden=true;battEdit=null;syncLock();return}const b=battInfo(i)||{};
+  el.querySelector(".panel").innerHTML=`<h2>Battery: ${esc(i.name)}</h2>
+   <div class="f"><label for="bType">Battery</label><input id="bType" value="${esc(b.type||"")}" placeholder="CR123A, CR2032, AA, rechargeable"></div>
+   <div class="f"><label for="bCount">How many</label><input id="bCount" type="number" min="1" value="${b.count||1}"></div>
+   <div class="f"><label for="bMonths">Change every (months)</label><input id="bMonths" type="number" min="0.25" step="0.25" value="${b.months||6}"></div>
+   <div class="f"><label for="bDate">Last changed</label><input id="bDate" type="date" value="${esc(b.changed||"")}"></div>
+   <div class="f"><label for="bLife">Battery life note</label><input id="bLife" value="${esc(b.life||"")}" placeholder="~600 hrs at setting 12"></div>
+   <label class="keep"><input type="checkbox" id="bNone"> This doesn't use batteries</label>
+   <div class="actions"><span class="spacer"></span><button class="btn ghost" type="button" data-bs="close">Cancel</button><button class="btn" type="button" data-bs="save">Save</button></div>`;
+  el.hidden=false;syncLock()}
+$("battSheet").addEventListener("click",async e=>{const b=e.target.closest("[data-bs]");if(!b)return;const i=all.find(x=>x.id===battEdit&&!x.deleted);
+  if(b.dataset.bs==="save"&&i){i.battType=$("bType").value.trim();i.battCount=Math.max(1,parseInt($("bCount").value)||1);i.battMonths=Math.max(0.25,+$("bMonths").value||6);i.battChanged=$("bDate").value||"";i.battLife=$("bLife").value.trim();if($("bNone").checked)i.battNone=true;i.updatedAt=now();await persist()}
+  battEdit=null;renderBattSheet();renderExtra();updateBadges()});
+{const _am=ACT.maint;ACT.maint=async(act,b)=>{
+  const i=b?.dataset?.id&&all.find(x=>x.id===b.dataset.id&&!x.deleted);
+  if(act==="battnow"&&i){i.battChanged=today();if(!i.battType){const g=battGuess(i);if(g){i.battType=g.type;i.battCount=g.count}}i.updatedAt=now();await persist();toast(`${i.name}: logged`);renderExtra();updateBadges();return}
+  if(act==="battedit"&&i){battEdit=i.id;renderBattSheet();return}
+  if(act==="battlook"&&i){b.disabled=true;b.textContent="Looking…";try{const j=await apiPost("/battery",{name:i.name,brand:i.brand||"",category:i.category||"",type:i.armType||""});const r=j.result||{};
+      if(r.none){i.battNone=true;toast(`${i.name} doesn't use batteries`)}else{if(r.battery)i.battType=r.battery;if(+r.count)i.battCount=+r.count;if(+r.swapMonths)i.battMonths=+r.swapMonths;if(r.life)i.battLife=r.life;toast(`${i.name}: ${r.count||1}× ${r.battery||"?"}, change every ${r.swapMonths||"?"} months`,5000)}
+      i.battLooked=true;i.updatedAt=now();await persist()}catch(err){toast("Battery lookup: "+err.message,5000)}renderExtra();return}
+  return _am?_am(act,b):undefined}}
+// item screen: battery line
+{const _od=openDetail;openDetail=function(i,quiet){_od(i,quiet);const b=i&&battInfo(i);if(!b)return;const dl=$("detail").querySelector("dl");if(!dl)return;
+  dl.insertAdjacentHTML("beforeend",`<div><dt>Battery</dt><dd>${esc(b.count>1?b.count+"× "+b.type:b.type||"—")}<small>${b.changed?`${b.charge?"charged":"changed"} ${esc(fmtDate(b.changed))} · next ${esc(fmtDate(b.next))}`:"change not logged"}</small></dd></div>`)}}
+
 boot();
 </script>
 </body>
