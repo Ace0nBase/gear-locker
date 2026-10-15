@@ -322,6 +322,11 @@ body.sharing .fab,body.sharing .toast{display:none!important}
 .addSel{width:100%}
 .buildLink{display:block;margin:-2px 0 8px 4.6rem;font-size:.8rem}
 @media (max-width:700px){.buildLink{margin-left:3.7rem}}
+.wtGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:12px 0}
+.wtGrid div{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:10px}
+.wtGrid b{display:block;font-size:1.25rem}
+.wtGrid span{font-size:.75rem;color:var(--muted)}
+@media (max-width:700px){.wtGrid{grid-template-columns:repeat(2,1fr)}}
 .qtyPick{display:flex;align-items:center;gap:14px;margin:14px 0}
 .qtyPick b{font-size:2rem;min-width:2ch;text-align:center}
 .qtyPick .btn{width:52px;height:52px;font-size:1.5rem;padding:0}
@@ -1361,7 +1366,7 @@ function startCloud(){
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
   $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{[LS,LSK,LSD,"gearLocker.uid"].forEach(k=>localStorage.removeItem(k))}catch{};render();await auth.signOut()};
 }
-const APP_VERSION="16";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+const APP_VERSION="17";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 if("serviceWorker" in navigator&&location.protocol==="https:"){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
@@ -2480,6 +2485,55 @@ $("detail").addEventListener("click",e=>{const b=e.target.closest('[data-dact="b
 {const _ra=renderArms;renderArms=function(){_ra();document.querySelectorAll("#armsView .armRow").forEach(r=>{const g=itemById(r.dataset.id);if(g&&(classify(g).has("gun_long")||classify(g).has("gun_pistol"))&&!r.nextElementSibling?.classList?.contains("buildLink"))r.insertAdjacentHTML("afterend",`<button type="button" class="lnk buildLink" data-build="${esc(g.id)}">Build ${esc(g.name)} →</button>`)})}}
 $("armsView").addEventListener("click",e=>{const b=e.target.closest("[data-build]");if(b){e.stopPropagation();openBuild(b.dataset.build)}},true);
 
+/* ---------- v17: total kit weight, loaded mags ---------- */
+// heavier common load per round, in ounces
+const AMMO={"556":{oz:0.44,lbl:"5.56 M855 62gr",cap:30},"308":{oz:0.90,lbl:"7.62x51 M80 / 175gr",cap:20},"762x39":{oz:0.59,lbl:"7.62x39 123gr",cap:30},"300blk":{oz:0.62,lbl:".300 BLK 220gr",cap:30},"65cm":{oz:0.90,lbl:"6.5 CM 140gr",cap:20},"9":{oz:0.44,lbl:"9mm 147gr",cap:15},"45":{oz:0.76,lbl:".45 ACP 230gr",cap:8},"40":{oz:0.58,lbl:".40 S&W 180gr",cap:15},"10mm":{oz:0.63,lbl:"10mm 200gr",cap:15},"380":{oz:0.34,lbl:".380 ACP 95gr",cap:7},"22":{oz:0.12,lbl:".22 LR 40gr",cap:10},"12ga":{oz:1.4,lbl:"12 ga 00 buck",cap:6}};
+function calKey(t){t=String(t||"").toLowerCase();
+  if(/308|7\.62 ?x ?51|762x51|\b762 nato/.test(t))return "308";if(/7\.62 ?x ?39|\bak\b|762x39/.test(t))return "762x39";if(/300 ?(blk|blackout|aac)/.test(t))return "300blk";if(/6\.5/.test(t))return "65cm";
+  if(/5\.56|556|\.223|223|stanag|\bar-?15|\bm4\b|pmag|lancer/.test(t))return "556";if(/\.45|\b45\b|1911/.test(t))return "45";if(/\.40|\b40 ?s&?w/.test(t))return "40";if(/10 ?mm/.test(t))return "10mm";if(/\.380|\b380\b/.test(t))return "380";
+  if(/\.22|\b22 ?lr|\b22\b/.test(t))return "22";if(/12 ?ga|shotgun/.test(t))return "12ga";if(/9 ?mm|9x19|glock|p320|p365|\b365\b|m&p|pistol/.test(t))return "9";return ""}
+const PISTOL_CAP=[[/\bg?17\b|p320|m&p ?9|\b92\b|cz ?75|p226/,17],[/\bg?19\b|p229/,15],[/43x|48\b|\bmos\b/,10],[/\b365\b|p365|hellcat/,12],[/\bg?26\b/,10],[/\bg?43\b/,6],[/1911/,8]];
+function magSpec(name,brand,isPistol,gunCalTxt){
+  const t=` ${name||""} ${brand||""} `.toLowerCase();
+  let cal=calKey(t);if(!cal&&gunCalTxt)cal=calKey(gunCalTxt);if(!cal)cal=isPistol?"9":"556";
+  const a=AMMO[cal]||AMMO["556"];
+  let cap=(t.match(/\b(\d{1,3}) ?(rd|rnd|round|r)s?\b/)||t.match(/(?:pmag|mag|magazine|lancer)\s*(\d{2})\b/)||[])[1];cap=+cap||0;
+  if(!cap&&isPistol){const m=PISTOL_CAP.find(([re])=>re.test(t));cap=m?m[1]:a.cap}
+  if(!cap)cap=a.cap;
+  // empty mag weight when we don't have one: by material
+  const empty=isPistol?(/steel|metal/.test(t)?3.2:2.8):/steel/.test(t)?7.0:/lancer|l5/.test(t)?4.8:/alum|gi\b|usgi/.test(t)?4.2:/pmag|polymer|magpul/.test(t)?4.4:cal==="308"?6.5:4.6;
+  return {cal,cap,roundOz:a.oz,ammoLbl:a.lbl,emptyOz:empty,loadedOz:empty+cap*a.oz};
+}
+function kitWeightFull(kit){
+  const st=kstate(kit.id);const guns=[...(st.slots.primary||[]),...(st.slots.sidearm||[])].map(p=>itemById(p.id)).filter(Boolean);
+  const gunCal=pistol=>(guns.find(g=>(gunType(g)==="pistol")===pistol)?.caliber)||"";
+  let gear=0,gearN=0,mags=0,magN=0,ammo=0,gunsOz=0;const missing=[];const seen=new Set();const magLines=[];
+  const add=(it,q,custom,name,sid)=>{
+    const isMag=sid==="mags"||(it&&(classify(it).has("mag_rifle")||classify(it).has("mag_pistol")));
+    if(isMag){const pistol=it?classify(it).has("mag_pistol"):RX.pistolword.test(String(name).toLowerCase());const sp=magSpec(it?.name||name,it?.brand,pistol,gunCal(pistol));
+      const e=(it&&it.weight!=null&&it.weight!=="")?+it.weight:sp.emptyOz;const lo=(e+sp.cap*sp.roundOz)*q;mags+=e*q;ammo+=sp.cap*sp.roundOz*q;magN+=q;magLines.push(`${q}× ${it?.name||name}: ${sp.cap} rds ${sp.ammoLbl} ≈ ${fmtWt(e+sp.cap*sp.roundOz)} each`);return}
+    if(custom){missing.push(name);return}
+    if(it.weight==null||it.weight===""){missing.push(it.name);return}
+    if(classify(it).has("gun_long")||classify(it).has("gun_pistol"))gunsOz+=(+it.weight)*q;else{gear+=(+it.weight)*q;gearN+=q}
+  };
+  Object.entries(st.slots).forEach(([sid,arr])=>arr.forEach(p=>{const it=p.id?itemById(p.id):null;if(p.id&&!it)return;if(it){if(seen.has(it.id+"|"+sid))return;seen.add(it.id+"|"+sid)}add(it,+p.qty||1,!it,p.name,sid)}));
+  const box=containerFor(kit);if(box)add(box,1,false,"","");
+  (st.extras||[]).map(itemById).filter(Boolean).forEach(i=>add(i,1,false,"",""));
+  const ids=kitPacked(kit);ridersOf(ids).filter(i=>!ids.has(i.id)).forEach(i=>add(i,+i.qty||1,false,"",""));
+  return {total:gear+mags+ammo+gunsOz,gear,gearN,mags,ammo,magN,gunsOz,missing:[...new Set(missing)],magLines};
+}
+{const _rk=renderKits;renderKits=function(){_rk();const kit=KITS.find(k=>k.id===curKit)||KITS[0];const w=kitWeightFull(kit);
+  const m=$("kitDetail").querySelector(".meter");if(m){const spans=m.querySelectorAll("span");const last=spans[spans.length-1];if(last)last.innerHTML=`<b>${w.total?fmtWt(w.total):"—"}</b> total${w.missing.length?` · ${w.missing.length} not weighed`:""}`}
+  const lb=x=>x?`${(x/16).toFixed(1)} lb`:"—";
+  $("kitDetail").insertAdjacentHTML("beforeend",`<div class="slots wtBox"><div class="slotsHead">Total weight <span>${w.total?fmtWt(w.total):"—"}</span></div>
+   <div class="wtGrid"><div><b>${lb(w.gear)}</b><span>Gear (${w.gearN} weighed)</span></div><div><b>${lb(w.mags+w.ammo)}</b><span>${w.magN} loaded mag${w.magN===1?"":"s"}${w.ammo?` · ${lb(w.ammo)} is ammo`:""}</span></div><div><b>${lb(w.gunsOz)}</b><span>Guns (unloaded)</span></div><div><b>${w.total?`${(w.total/16).toFixed(1)} lb`:"—"}</b><span>All in${w.total>=16*2.2?` · ${(w.total/35.274).toFixed(1)} kg`:""}</span></div></div>
+   ${w.magLines.length?`<p class="hint">Mags counted full of the heavier common load: ${w.magLines.map(esc).join("; ")}.</p>`:""}
+   ${w.missing.length?`<p class="hint">Not in the total yet (no weight): ${w.missing.slice(0,12).map(esc).join(", ")}${w.missing.length>12?` and ${w.missing.length-12} more`:""}. </p>${window.LOOKUP_URL?`<button class="btn ghost" type="button" id="kitWeigh">Look up the missing weights</button>`:""}`:""}</div>`);
+}}
+
+$("kitDetail").addEventListener("click",e=>{if(e.target.id!=="kitWeigh")return;const kit=KITS.find(k=>k.id===curKit);const st=kstate(kit.id);const ids=new Set([...kitPacked(kit),...ridersOf(kitPacked(kit)).map(i=>i.id)]);
+  const need=[...ids].map(itemById).filter(i=>i&&(i.weight==null||i.weight==="")&&!(classify(i).has("mag_rifle")||classify(i).has("mag_pistol"))).map(i=>i.id);
+  if(!need.length){toast("Everything here has a weight");return}e.target.disabled=true;e.target.textContent=`Looking up ${need.length}…`;runLookups(need).then(()=>renderKits())});
 boot();
 </script>
 </body>
