@@ -178,6 +178,67 @@ Reply with ONLY this JSON object:
   const s = (v, n) => String(v || "").slice(0, n);
   return { name: s(j.name, 80), brand: s(j.brand, 80), category: CATS.includes(j.category) ? j.category : "", color: s(j.color, 40), confidence: ["high","medium","low"].includes(j.confidence) ? j.confidence : "low", summary: s(j.summary, 200) };
 }
+
+/* ---------- wishlist price watch ---------- */
+function dealPrompt(w) {
+  return `Find the LOWEST price someone in the US can buy this item for RIGHT NOW (an active listing or in-stock store price, not a sold listing).
+
+Item: ${w.name}
+Brand / model: ${w.brand || "any well-regarded brand"}
+Category: ${w.category || "unknown"}
+Notes: ${w.notes || "none"}
+The buyer's target price is $${w.target}.
+
+Use web search (at most 4 searches). Check TacSwap listings, eBay Buy It Now listings, Amazon, the maker's site and big retailers or sales. New or used in good condition both count; skip parts-only, wrong item or out-of-stock listings. Include shipping if it's clearly listed.
+
+When done, reply with ONLY this JSON object:
+{"price": number|null, "where": "site or seller, e.g. 'TacSwap' or 'Amazon'", "url": "https link to the listing", "condition": "new|used|like new", "note": "one short sentence, e.g. 'Used, good condition, ships free'"}`;
+}
+async function dealCheck(env, w) {
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 4 }];
+  const messages = [{ role: "user", content: dealPrompt(w) }];
+  let data, all = [];
+  for (let i = 0; i < 3; i++) {
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
+      headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 3000, tools, messages }) });
+    data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data?.error?.message || ("Claude API error " + r.status));
+    all.push(...(data.content || []));
+    if (data.stop_reason !== "pause_turn") break;
+    messages.push({ role: "assistant", content: data.content });
+  }
+  const t = textOf(data.content).replace(/```(?:json)?/gi, "");
+  let j = null; const ms = t.match(/\{[\s\S]*\}/g) || [];
+  for (const c of ms.reverse()) { try { const o = JSON.parse(c); if ("price" in o) { j = o; break } } catch {} }
+  const price = j && isFinite(+j.price) && +j.price > 0 ? Math.round(+j.price * 100) / 100 : null;
+  return { price, where: String(j?.where || "").slice(0, 40), url: /^https:\/\//.test(j?.url || "") ? String(j.url).slice(0, 400) : "",
+    condition: String(j?.condition || "").slice(0, 20), note: String(j?.note || "").slice(0, 160), date: new Date().toISOString().slice(0, 10),
+    hit: price != null && price <= +w.target };
+}
+const WKEY = uid => "w:" + uid;
+async function runDueWatches(env, budget) {
+  if (!env.WATCH) return 0;
+  let done = 0, cursor;
+  const dayMs = 20 * 3600e3;
+  do {
+    const page = await env.WATCH.list({ prefix: "w:", cursor });
+    cursor = page.list_complete ? null : page.cursor;
+    for (const k of page.keys) {
+      if (done >= budget) return done;
+      const rec = await env.WATCH.get(k.name, "json"); if (!rec || !Array.isArray(rec.list)) continue;
+      let changed = false;
+      for (const w of rec.list) {
+        if (done >= budget) break;
+        if (w.lastCheck && Date.now() - Date.parse(w.lastCheck) < dayMs) continue;
+        try { const b = await dealCheck(env, w); w.best = b; w.lastErr = ""; } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); }
+        w.lastCheck = new Date().toISOString(); changed = true; done++;
+      }
+      if (changed) await env.WATCH.put(k.name, JSON.stringify(rec));
+    }
+  } while (cursor);
+  return done;
+}
 async function lookupOne(env, it) {
   const clean = {
     id: String(it.id || "").slice(0, 80), name: String(it.name || "").slice(0, 120), brand: String(it.brand || "").slice(0, 120),
@@ -194,7 +255,7 @@ async function lookupOne(env, it) {
   return { id: clean.id, ok: true, ...parseResult(data) };
 }
 
-const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "" };
+const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", MAX_WATCHES: "10", WATCH_BATCH: "6" };
 
 export default {
   async fetch(req, rawEnv) {
@@ -204,7 +265,7 @@ export default {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: h });
     const url = new URL(req.url);
     if (url.pathname === "/" || url.pathname === "/health") return json({ ok: true, service: "gear-locker-api" }, 200, h);
-    if ((url.pathname !== "/lookup" && url.pathname !== "/identify") || req.method !== "POST") return json({ error: "Not found" }, 404, h);
+    if (!["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check"].includes(url.pathname) || req.method !== "POST") return json({ error: "Not found" }, 404, h);
     if (!env.ANTHROPIC_API_KEY) return json({ error: "Lookup service isn't set up yet (missing API key)." }, 503, h);
 
     let user;
@@ -215,6 +276,37 @@ export default {
 
     let body;
     try { body = await req.json(); } catch { return json({ error: "Bad request" }, 400, h); }
+    if (url.pathname.startsWith("/watch/")) {
+      if (!env.WATCH) return json({ error: "Price alerts aren't switched on yet" }, 503, h);
+      const key = WKEY(user.sub);
+      const rec = (await env.WATCH.get(key, "json")) || { list: [] };
+      const pub = () => rec.list.map(w => ({ id: w.id, target: w.target, best: w.best || null, lastCheck: w.lastCheck || "", lastErr: w.lastErr || "" }));
+      if (url.pathname === "/watch/sync") {
+        const max = +(env.MAX_WATCHES || 10);
+        const inList = Array.isArray(body.watches) ? body.watches : [];
+        const old = new Map(rec.list.map(w => [w.id, w]));
+        const next = inList.slice(0, max).filter(w => w && w.id && w.name && +w.target > 0).map(w => {
+          const o = old.get(String(w.id)) || {};
+          const same = o.name === String(w.name) && o.brand === String(w.brand || "");
+          return { id: String(w.id).slice(0, 80), name: String(w.name).slice(0, 120), brand: String(w.brand || "").slice(0, 120), category: String(w.category || "").slice(0, 60),
+            notes: String(w.notes || "").slice(0, 160), target: Math.round(+w.target), best: same ? (o.best ? { ...o.best, hit: o.best.price != null && o.best.price <= Math.round(+w.target) } : null) : null,
+            lastCheck: same ? (o.lastCheck || "") : "", lastErr: "" };
+        });
+        rec.list = next; rec.email = String(user.email || ""); rec.updatedAt = new Date().toISOString();
+        if (next.length) await env.WATCH.put(key, JSON.stringify(rec)); else await env.WATCH.delete(key);
+        return json({ ok: true, watches: pub(), max, dropped: Math.max(0, inList.length - max) }, 200, h);
+      }
+      if (url.pathname === "/watch/check") {
+        const w = rec.list.find(x => x.id === String(body.id || ""));
+        if (!w) return json({ error: "Set an alert price on this item first" }, 400, h);
+        if (w.lastCheck && Date.now() - Date.parse(w.lastCheck) < 10 * 60e3) return json({ watches: pub() }, 200, h);
+        try { w.best = await dealCheck(env, w); w.lastErr = ""; } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); }
+        w.lastCheck = new Date().toISOString();
+        await env.WATCH.put(key, JSON.stringify(rec));
+        return json({ watches: pub() }, 200, h);
+      }
+      return json({ watches: pub() }, 200, h);
+    }
     if (url.pathname === "/identify") {
       const img = String(body.image || "");
       if (!img || img.length > 2_800_000 || !/^[A-Za-z0-9+/=]+$/.test(img.slice(0, 200))) return json({ error: "Send a photo (JPEG, under 2 MB)" }, 400, h);
@@ -229,5 +321,11 @@ export default {
     const firstErr = results.find(r => !r.ok)?.error;
     if (results.every(r => !r.ok)) return json({ error: firstErr || "Lookup failed", results }, 502, h);
     return json({ results }, 200, h);
+  },
+  async scheduled(event, rawEnv, ctx) {
+    const env = { ...DEFAULTS };
+    for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
+    if (!env.ANTHROPIC_API_KEY) return;
+    ctx.waitUntil(runDueWatches(env, +(env.WATCH_BATCH || 6)));
   },
 };
