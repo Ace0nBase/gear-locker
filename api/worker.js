@@ -70,41 +70,81 @@ Color: ${it.color || "n/a"}
 Condition: ${it.condition || "Good"}
 Notes: ${it.notes || "none"}
 
-Use web search. Do separate searches as needed:
-- the manufacturer or a major retailer page for the current NEW price and the published WEIGHT (spec sheet)
-- eBay sold/completed listings and TacSwap for USED prices${firearm ? "\nThis is a firearm: do NOT price it (set retailNew, usedLow, usedHigh, value to null). Only find the listed unloaded weight." : ""}${wish ? "\nThis is a wishlist item the user wants to buy. If the brand is blank the name may be a generic need (e.g. \"Eye protection\"): pick a well-regarded mid-range product, price it, and name it in priceNote." : ""}
+Use web search (at most 4 searches). Good searches:
+- "<brand> <name> price" for the manufacturer, Amazon or a major retailer: the current NEW price and the published WEIGHT
+- "<brand> <name> amazon" for the Amazon price
+- "<brand> <name> ebay sold" and "<brand> <name> tacswap" for USED prices${firearm ? "\nThis is a firearm: do NOT price it (set retailNew, usedLow, usedHigh, value to null). Only find the listed unloaded weight." : ""}${wish ? "\nThis is a wishlist item the user wants to buy. If the brand is blank the name may be a generic need (e.g. \"Eye protection\"): pick a well-regarded mid-range product, price it, and name it in priceNote." : ""}
 
+Always give a price even if used comps are thin: if you only find new prices, set retailNew from them and estimate usedLow/usedHigh as about 50-75% of new.
 value = the per-unit value for THIS item's condition (${CONDITION[it.condition] || CONDITION.Good}).
 weightOz = the weight of ONE unit in ounces (1 lb = 16 oz, 1 g = 0.035274 oz), rounded to 0.1. If sizes differ and none is given, use size Medium and say so in weightNote.
-Use null for anything you could not find with reasonable confidence. Never invent numbers.
+Use null only for things you truly could not find. Never invent numbers.
 
-Reply with ONLY this JSON object and nothing else:
-{"retailNew": number|null, "usedLow": number|null, "usedHigh": number|null, "value": number|null, "weightOz": number|null, "priceNote": "one short sentence with the comps you found, e.g. '6 eBay sold $85–120, TacSwap ~$110, Crye retail $175'", "weightNote": "short source, e.g. 'Crye spec, size M'", "sources": [{"label": "eBay sold", "url": "https://..."}]}`;
+When done searching, your final message must be ONLY this JSON object, no other words before or after it:
+{"retailNew": number|null, "usedLow": number|null, "usedHigh": number|null, "value": number|null, "weightOz": number|null, "priceNote": "one short sentence with the comps you found, e.g. 'Amazon $129, eBay sold $85-120, TacSwap ~$110'", "weightNote": "short source, e.g. 'Crye spec, size M'", "sources": [{"label": "Amazon", "url": "https://..."}]}`;
+}
+
+const textOf = blocks => (blocks || []).filter(b => b.type === "text").map(b => b.text).join("");
+function findJson(text) {
+  const t = String(text || "").replace(/```(?:json)?/gi, "");
+  const starts = [];
+  for (let i = 0; i < t.length; i++) if (t[i] === "{") starts.push(i);
+  for (let k = starts.length - 1; k >= 0; k--) {
+    let depth = 0, inStr = false, esc = false;
+    for (let j = starts[k]; j < t.length; j++) {
+      const c = t[j];
+      if (inStr) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true;
+      else if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) {
+        const raw = t.slice(starts[k], j + 1);
+        for (const cand of [raw, raw.replace(/[\r\n]+/g, " ")]) {
+          try { const o = JSON.parse(cand); if (o && typeof o === "object" && ("value" in o || "weightOz" in o || "retailNew" in o)) return o; } catch {}
+        }
+        break;
+      }
+    }
+  }
+  return null;
 }
 
 async function callClaude(env, model, it) {
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({
-      model,
-      max_tokens: 1200,
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 4 }],
-      messages: [{ role: "user", content: prompt(it) }],
-    }),
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.status = r.status; throw e; }
-  return data;
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 4 }];
+  const messages = [{ role: "user", content: prompt(it) }];
+  const send = async () => {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model, max_tokens: 4000, tools, messages }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.status = r.status; throw e; }
+    return data;
+  };
+  const all = [];
+  let data;
+  // A long web-search turn can pause; continue it until Claude finishes.
+  for (let i = 0; i < 4; i++) {
+    data = await send();
+    all.push(...(data.content || []));
+    if (data.stop_reason !== "pause_turn") break;
+    messages.push({ role: "assistant", content: data.content });
+  }
+  if (findJson(textOf(data.content))) return { content: all, final: data.content };
+  // No JSON yet: ask once more for just the JSON, from what it already found.
+  const prev = (data.content || []).filter(b => b.type !== "text" || (b.text || "").trim());
+  if (prev.length) messages.push({ role: "assistant", content: prev });
+  messages.push({ role: "user", content: "Now reply with ONLY the JSON object described above, filled in from what you found. No other text." });
+  data = await send();
+  all.push(...(data.content || []));
+  return { content: all, final: data.content };
 }
 function parseResult(data) {
   const blocks = data.content || [];
-  const text = blocks.filter(b => b.type === "text").map(b => b.text).join("\n");
   const cited = [];
   blocks.forEach(b => (b.citations || []).forEach(c => { if (c.url && !cited.some(x => x.url === c.url)) cited.push({ label: (c.title || "source").slice(0, 40), url: c.url }); }));
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error("no JSON in answer");
-  const j = JSON.parse(m[0]);
+  const j = findJson(textOf(data.final)) || findJson(textOf(blocks));
+  if (!j) throw new Error("couldn't read the lookup answer, try again");
   const num = v => (v === null || v === undefined || v === "" || !isFinite(+v)) ? null : +v;
   let sources = Array.isArray(j.sources) ? j.sources.filter(s => s && /^https:\/\//.test(s.url || "")) : [];
   if (!sources.length) sources = cited;

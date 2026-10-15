@@ -433,7 +433,7 @@ const today=()=>new Date().toISOString().slice(0,10);
 let all=[], filter="All", editing=null, delArmed=false, dir=null, valueTouched=false;
 const live=()=>all.filter(i=>!i.deleted);
 $("fCat").innerHTML=CATS.map(c=>`<option>${c}</option>`).join("");
-function toast(t){const el=$("toast");el.textContent=t;el.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>el.hidden=true,2200)}
+function toast(t,ms){const el=$("toast");el.textContent=t;el.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>el.hidden=true,ms||2200)}
 
 /* ---------- storage: gear.json in the chosen folder, plus a local mirror ---------- */
 function idb(){return new Promise((res,rej)=>{const r=indexedDB.open("gearLocker",1);r.onupgradeneeded=()=>r.result.createObjectStore("kv");r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
@@ -513,7 +513,7 @@ function render(){
   const q=$("q").value.trim().toLowerCase(), sort=$("sort").value;
   const totQty=items.reduce((a,i)=>a+(+i.qty||0),0), totVal=items.reduce((a,i)=>a+(+i.qty||0)*(+i.value||0),0);
   $("sItems").textContent=items.length;$("sQty").textContent=totQty;$("sCats").textContent=new Set(items.map(i=>i.category)).size;$("sVal").textContent=money(totVal);
-  const queued=items.filter(i=>i.marketCheck==="requested").length;
+  const queued=window.LOOKUP_URL?0:items.filter(i=>i.marketCheck==="requested").length;
   $("sub").textContent=`KIT INVENTORY · ${items.length} LINE ITEMS${queued?` · ${queued} QUEUED FOR MARKET CHECK`:""}`;
   const counts={};items.forEach(i=>counts[i.category]=(counts[i.category]||0)+1);
   if(filter!=="All"&&!counts[filter])filter="All";
@@ -533,7 +533,7 @@ function render(){
       <span class="meta">${i.mountedOn&&itemById(i.mountedOn)?`on <em>${esc(itemById(i.mountedOn).name)}</em>`:i.setupOn?`<em>${esc(i.setupOn)}</em>`:"Spare"}${onLoan(i.id)?`<span class="tag" style="display:block">on loan · ${esc(onLoan(i.id).borrower)}</span>`:""}</span>
       <span class="meta">${esc(i.location||"—")}</span>
       <span class="cond ${esc(i.condition)}">${esc((i.condition||"").replace("-"," "))}</span>
-      <span class="val">${i.value?money(i.qty*i.value):"—"}${lookingUp.has(i.id)?`<span class="tag">looking up…</span>`:i.marketCheck==="requested"?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
+      <span class="val">${i.value?money(i.qty*i.value):"—"}${lookingUp.has(i.id)?`<span class="tag">looking up…</span>`:(i.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
 }
 
 /* ---------- pricing ---------- */
@@ -546,7 +546,8 @@ $("fRetail").oninput=autoValue;$("fCond").onchange=autoValue;
 $("fVal").oninput=()=>{valueTouched=$("fVal").value!==""};
 function showPrice(i){
   const out=$("priceOut");
-  if(i?.marketCheck==="requested"){out.innerHTML=`<span class="tag">Market check queued</span><br>Real eBay, TacSwap and store prices fill in on the next check run.`;return}
+  if(i&&lookingUp.has(i.id)){out.innerHTML=`<span class="tag">Looking up…</span><br>Checking eBay, TacSwap and store prices plus the weight.`;return}
+  if(i?.marketCheck==="requested"&&!window.LOOKUP_URL){out.innerHTML=`<span class="tag">Market check queued</span><br>Real eBay, TacSwap and store prices fill in on the next check run.`;return}
   if(i?.priceSource==="market"){
     const links=(Array.isArray(i.marketSources)?i.marketSources:[]).filter(s=>/^https:\/\//.test(s?.url||"")).slice(0,4).map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label||"source")}</a>`).join(" · ");
     out.innerHTML=`<span class="tag">Market check ${esc(i.priceDate||"")}</span><br>${i.retailNew?`New retail <b>${money(i.retailNew)}</b> · `:""}${(i.usedLow||i.usedHigh)?`Used <b>${money(i.usedLow)}–${money(i.usedHigh)}</b> · `:""}This one <b>${money(i.value)}</b>${i.priceNote?`<br>${esc(i.priceNote)}`:""}${links?`<br>${links}`:""}`;return}
@@ -564,7 +565,7 @@ function openForm(item){
   $("fQty").value=item?.qty??1;$("fColor").value=item?.color||"";$("fCond").value=item?.condition||"Good";
   $("fRetail").value=item?.retailNew||"";$("fVal").value=item?.value||"";$("fOn").value=item?.setupOn||"";$("fLoc").value=item?.location||"";$("fNotes").value=item?.notes||"";
   $("delBtn").hidden=!item;$("delBtn").className="btn ghost";$("delBtn").textContent="Delete";
-  $("mktBtn").disabled=item?.marketCheck==="requested";$("mktBtn").textContent=item?.marketCheck==="requested"?"Check queued":"Market check";
+  if(window.LOOKUP_URL){const busy=!!item&&lookingUp.has(item.id);$("mktBtn").disabled=busy;$("mktBtn").textContent=busy?"Looking up…":"Market check"}else{$("mktBtn").disabled=item?.marketCheck==="requested";$("mktBtn").textContent=item?.marketCheck==="requested"?"Check queued":"Market check"}
   $("fMount").innerHTML=mountOpts(item?.id);$("fMount").value=item?.mountedOn||"";
   $("fGun").innerHTML=gunOpts();$("fGun").value=item?.forGun||"";$("fNick").value=item?.nick||"";
   $("fWt").value=item?.weight??"";$("fCal").value=item?.caliber||"";$("fBase").value=item?.baseRounds??"";fireFields();
@@ -587,7 +588,8 @@ async function saveCurrent(extra){
   if(!data.name){$("fName").focus();return null}
   let rec;
   if(editing){
-    rec={...editing,...data};
+    const cur=all.find(i=>i.id===editing.id)||editing;
+    rec={...cur,...data};
     if(editing.priceSource==="market"&&Math.round(editing.value)!==data.value&&!extra)rec.priceSource="manual";
     all=all.map(i=>i.id===rec.id?rec:i);
   }else{
@@ -1133,7 +1135,7 @@ RENDER.wish=()=>{
   $("wishView").innerHTML=`<div class="vhead"><div><h2>Wishlist</h2><p>Gear you want, with kit gaps added for you. Market check prices them. Got it moves the item into your inventory.</p></div><div class="vbtns"><button class="btn ghost" type="button" data-act="gaps">Add kit gaps</button><button class="btn ghost" type="button" data-act="checkall">Market check all</button><button class="btn" type="button" data-act="new">+ Add item</button></div></div>
   ${form}
   <section class="stats"><div class="stat"><b>${want.length}</b><span>On the list</span></div><div class="stat"><b>${money(cost)}</b><span>Est. total</span></div><div class="stat"><b>${want.filter(w=>w.priority==="High").length}</b><span>High priority</span></div><div class="stat"><b>${got.length}</b><span>Bought</span></div></section>
-  ${want.length?`<div class="scroll"><table class="tbl"><thead><tr><th>Priority</th><th>Item</th><th>Needed for</th><th class="n">Est. price</th><th></th></tr></thead><tbody>${want.map(w=>`<tr class="click" data-act="edit" data-id="${esc(w.id)}"><td><span class="pill ${w.priority==="High"?"gap":w.priority==="Medium"?"warn":""}">${esc(w.priority||"Medium")}</span></td><td><b>${esc(w.name)}</b><small>${esc([w.brand,w.category].filter(Boolean).join(" · "))}${w.link&&/^https?:\/\//.test(w.link)?` · <a href="${esc(w.link)}" target="_blank" rel="noopener">link</a>`:""}</small></td><td>${esc((w.kitsNeeding||[]).join(", ")||"—")}</td><td class="n">${+w.estPrice?money(w.estPrice):"—"}${w.marketCheck==="requested"?`<span class="tag" style="display:block">check queued</span>`:w.priceSource==="market"?`<span class="tag" style="display:block">market</span>`:""}</td><td><span class="vbtns">${w.marketCheck!=="requested"?`<button class="btn ghost" type="button" data-act="check" data-id="${esc(w.id)}">Price check</button>`:""}<button class="btn" type="button" data-act="got" data-id="${esc(w.id)}">Got it</button></span></td></tr>`).join("")}</tbody></table></div>`
+  ${want.length?`<div class="scroll"><table class="tbl"><thead><tr><th>Priority</th><th>Item</th><th>Needed for</th><th class="n">Est. price</th><th></th></tr></thead><tbody>${want.map(w=>`<tr class="click" data-act="edit" data-id="${esc(w.id)}"><td><span class="pill ${w.priority==="High"?"gap":w.priority==="Medium"?"warn":""}">${esc(w.priority||"Medium")}</span></td><td><b>${esc(w.name)}</b><small>${esc([w.brand,w.category].filter(Boolean).join(" · "))}${w.link&&/^https?:\/\//.test(w.link)?` · <a href="${esc(w.link)}" target="_blank" rel="noopener">link</a>`:""}</small></td><td>${esc((w.kitsNeeding||[]).join(", ")||"—")}</td><td class="n">${+w.estPrice?money(w.estPrice):"—"}${(w.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag" style="display:block">check queued</span>`:w.priceSource==="market"?`<span class="tag" style="display:block">market</span>`:""}</td><td><span class="vbtns">${(window.LOOKUP_URL||w.marketCheck!=="requested")?`<button class="btn ghost" type="button" data-act="check" data-id="${esc(w.id)}">Price check</button>`:""}<button class="btn" type="button" data-act="got" data-id="${esc(w.id)}">Got it</button></span></td></tr>`).join("")}</tbody></table></div>`
   :`<div class="empty"><b>Wishlist is empty</b>Click <em>Add kit gaps</em> to fill it from what your kits are missing, or add items yourself.</div>`}
   ${got.length?`<div class="slotsHead">Bought <span>${got.length}</span></div><p class="hint">${got.map(w=>esc(w.name)).join(" · ")}</p>`:""}`;
 };
@@ -1242,7 +1244,7 @@ function subscribeCloud(){
     if(first)maybeFirstPush();
   },e=>setSync("off","Sync error: "+(e.code||e.message))));
 }
-function maybeFirstPush(){if(cloudReady.size===CLOUD_COLS.length+1){pushCloud();if(firstLoad){firstLoad=false;render()}}}
+function maybeFirstPush(){if(cloudReady.size===CLOUD_COLS.length+1){pushCloud();if(firstLoad){firstLoad=false;render();if(window.LOOKUP_URL)setTimeout(()=>{const q=live().filter(i=>i.marketCheck==="requested").map(i=>i.id);if(q.length)runLookups(q,true)},800)}}}
 function gateErr(t){$("gErr").textContent=t||""}
 const AUTH_MSG={"auth/invalid-credential":"Email or password is wrong.","auth/wrong-password":"Email or password is wrong.","auth/user-not-found":"No account with that email.","auth/email-already-in-use":"That email already has an account. Sign in instead.","auth/weak-password":"Use at least 8 characters.","auth/invalid-email":"That email doesn't look right.","auth/too-many-requests":"Too many tries. Wait a few minutes.","auth/network-request-failed":"No connection. Check your signal and try again.","auth/operation-not-allowed":"New accounts are turned off for this locker.","auth/admin-restricted-operation":"New accounts are turned off for this locker."};
 const authMsg=e=>AUTH_MSG[e?.code]||"Something went wrong. Try again.";
@@ -1291,10 +1293,10 @@ function openDetail(i,quiet){
   const links=(Array.isArray(i.marketSources)?i.marketSources:[]).filter(s=>/^https:\/\//.test(s?.url||"")).slice(0,4);
   const f=(label,val,sub,opt)=>(!val&&opt)?"":`<div><dt>${esc(label)}</dt><dd>${val||"—"}${sub?`<small>${sub}</small>`:""}</dd></div>`;
   const wt=i.weight!=null&&i.weight!==""?esc(fmtWt(i.weight)):lookingUp.has(i.id)?"Looking up…":lookupsOn()?(i.weightStatus==="notfound"?"Not found":"Pending"):"—";
-  const priceState=i.marketCheck==="requested"?"Market check queued":i.priceSource==="market"?`Market check ${esc(i.priceDate||"")}`:i.priceSource==="manual"?"Entered by you":"";
+  const priceState=lookingUp.has(i.id)?"Looking up…":(i.marketCheck==="requested"&&!window.LOOKUP_URL)?"Market check queued":i.priceSource==="market"?`Market check ${esc(i.priceDate||"")}`:i.priceSource==="manual"?"Entered by you":"";
   $("detail").innerHTML=`
    <div class="dh"><div><h2>${esc(i.name)}${i.nick?` <span class="tag" style="font-size:.8rem">${esc(i.nick)}</span>`:""}</h2><div class="dsub">${esc([i.brand,i.color,i.category].filter(Boolean).join(" · "))}</div></div>
-     <div class="vbtns"><button class="btn" type="button" data-dact="edit">Edit</button>${lookupsOn()&&i.marketCheck!=="requested"&&!isGun?`<button class="btn ghost" type="button" data-dact="mkt">Market check</button>`:""}</div></div>
+     <div class="vbtns"><button class="btn" type="button" data-dact="edit">Edit</button>${lookupsOn()&&(window.LOOKUP_URL||(i.marketCheck!=="requested"&&!isGun))?(lookingUp.has(i.id)?`<button class="btn ghost" type="button" disabled>Looking up…</button>`:`<button class="btn ghost" type="button" data-dact="mkt">${isGun?"Look up weight":"Market check"}</button>`):""}</div></div>
    <dl>
      ${f("Quantity",esc(String(+i.qty||0)))}${f("Condition",esc((i.condition||"").replace("-"," ")))}
      ${f("Value each",i.value?money(i.value):"",priceState)}${f("Total value",i.value?money((+i.value)*(+i.qty||1)):"")}
@@ -1306,6 +1308,7 @@ function openDetail(i,quiet){
      ${f("On loan",ln?`${esc(ln.borrower)}`:"",ln?`since ${esc(fmtDate(ln.out))}${ln.due?` · due ${esc(fmtDate(ln.due))}`:""}`:"",1)}
    </dl>
    ${i.priceNote||links.length?`<div class="sect"><h3>Market data</h3>${i.priceNote?`<div class="note">${esc(i.priceNote)}</div>`:""}${links.length?`<div class="links" style="margin-top:6px">${links.map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label||"source")}</a>`).join(" · ")}</div>`:""}</div>`:""}
+   ${i.lookupError&&!lookingUp.has(i.id)?`<div class="sect"><h3>Market check</h3><div class="note">Last lookup didn't work: ${esc(i.lookupError)}</div></div>`:""}
    ${kids.length?`<div class="sect"><h3>Mounted on this (${kids.length})</h3><div class="links">${kids.map(k=>`<button class="lnk" type="button" data-dview="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
    ${gunGear.length?`<div class="sect"><h3>Gear for this gun (${gunGear.length})</h3><div class="links">${gunGear.map(k=>`<button class="lnk" type="button" data-dview="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
    ${ks.length?`<div class="sect"><h3>Packed in kits (${ks.length})</h3><div class="links">${ks.map(k=>`<button class="lnk" type="button" data-dkit="${k.id}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
@@ -1320,7 +1323,7 @@ $("detail").addEventListener("click",async e=>{
   const a=b.dataset.dact;
   if(a==="close"){closeDetail();return}
   if(a==="edit"){openForm(viewing);return}
-  if(a==="mkt"){const r=all.find(x=>x.id===viewing.id);if(!r)return;if(window.LOOKUP_URL){runLookups([r.id]);openDetail(r,true);return}Object.assign(r,{marketCheck:"requested",marketCheckAt:now(),updatedAt:now()});render();await persist();openDetail(r);toast("Market check queued")}
+  if(a==="mkt"){const r=all.find(x=>x.id===viewing.id);if(!r)return;if(window.LOOKUP_URL){const p=runLookups([r.id]);openDetail(r,true);await p;return}Object.assign(r,{marketCheck:"requested",marketCheckAt:now(),updatedAt:now()});render();await persist();openDetail(r);toast("Market check queued")}
 });
 
 /* ---------- lookup API (instant prices + weights) ---------- */
@@ -1340,12 +1343,14 @@ function applyLookup(id,res){
     if(n(res.usedLow)!=null)it.usedLow=n(res.usedLow);
     if(n(res.usedHigh)!=null)it.usedHigh=n(res.usedHigh);
     if(n(res.value)!=null&&it.valueSource!=="manual")it.value=n(res.value);
+    else if(it.valueSource!=="manual"&&it.retailNew&&n(res.value)==null)it.value=Math.round(it.retailNew*(FACTOR[it.condition]??0.6));
     it.priceSource="market";it.priceDate=today();it.priceNote=String(res.priceNote||"").slice(0,240);
     it.marketSources=(Array.isArray(res.sources)?res.sources:[]).filter(s=>/^https:\/\//.test(s?.url||"")).slice(0,4).map(s=>({label:String(s.label||"source").slice(0,40),url:s.url}));
   }
   if(res.weightOz!=null&&isFinite(+res.weightOz)&&+res.weightOz>0&&it.weightSource!=="manual"){it.weight=Math.round(+res.weightOz*10)/10;it.weightSource="lookup";it.weightStatus="done";it.weightNote=String(res.weightNote||"").slice(0,80)}
   else if(it.weight==null||it.weight==="")it.weightStatus="notfound";
-  it.marketCheck="done";it.updatedAt=now();
+  it.marketCheck="done";delete it.lookupError;it.updatedAt=now();
+  if(!$("form").hidden&&editing&&editing.id===it.id){editing=it;$("fRetail").value=it.retailNew||"";if(!valueTouched)$("fVal").value=it.value||"";if(!$("fWt").value&&it.weight!=null)$("fWt").value=it.weight;showPrice(it)}
   return true;
 }
 async function runLookups(ids,quiet){
@@ -1356,12 +1361,13 @@ async function runLookups(ids,quiet){
   let ok=0,fail="";
   for(let k=0;k<ids.length;k+=4){
     const chunk=ids.slice(k,k+4);
-    try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++})}
-    catch(e){fail=e.message||"Lookup failed"}
+    try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){it.lookupError=String(r.error||"No result").slice(0,160);fail=fail||it.lookupError}}})}
+    catch(e){fail=e.message||"Lookup failed";chunk.forEach(id=>{const it=all.find(x=>x.id===id);if(it&&!it.deleted)it.lookupError=fail.slice(0,160)})}
     chunk.forEach(id=>lookingUp.delete(id));render();await persist();
     if(viewing&&!$("detail").hidden&&chunk.includes(viewing.id))openDetail(all.find(i=>i.id===viewing.id),true);
   }
-  if(fail)toast(fail);else if(!quiet||ids.length>1)toast(`Looked up ${ok} item${ok===1?"":"s"}`);
+  if(!$("form").hidden&&editing){const busy=lookingUp.has(editing.id);$("mktBtn").disabled=busy;$("mktBtn").textContent=busy?"Looking up…":"Market check"}
+  if(fail)toast("Market check: "+fail,6000);else if(!quiet||ids.length>1)toast(`Looked up ${ok} item${ok===1?"":"s"}`);
 }
 const _saveCurrent=saveCurrent;
 saveCurrent=async function(extra){
@@ -1376,7 +1382,7 @@ saveCurrent=async function(extra){
   return rec;
 };
 if(window.LOOKUP_URL){
-  $("mktBtn").onclick=async()=>{const rec=await saveCurrent({});if(rec)runLookups([rec.id])};
+  $("mktBtn").onclick=async()=>{if(!$("form").reportValidity())return;const rec=await saveCurrent({});if(!rec)return;closeForm();formFrom=null;lookingUp.add(rec.id);openDetail(all.find(i=>i.id===rec.id),true);lookingUp.delete(rec.id);runLookups([rec.id])};
   $("bulkMktBtn").onclick=()=>{const ids=live().filter(i=>i.priceSource!=="market"||i.weight==null||i.weight==="").map(i=>i.id);if(!ids.length){toast("Everything already has prices and weights");return}toast(`Looking up ${ids.length} item${ids.length>1?"s":""}…`);runLookups(ids)};
   $("bulkMktBtn").textContent="Look up all";
   const _wish=ACT.wish;
