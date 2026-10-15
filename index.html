@@ -229,6 +229,42 @@ body.nolookups #mktBtn,body.nolookups #bulkMktBtn,body.nolookups [data-act="chec
 .gate .row2{display:flex;gap:8px;flex-wrap:wrap}
 .gate .row2 .btn{flex:1}
 .gate .link{background:none;border:0;color:var(--accent);padding:0;text-decoration:underline;font-size:.9rem;align-self:flex-start}
+/* camo landing */
+.gate{overflow:hidden;background:#1a1b14}
+body:has(#gate:not([hidden])) .fab{display:none!important}
+.camoBg{position:absolute;inset:0;z-index:0;pointer-events:none}
+.camoL{position:absolute;inset:-6%;background-size:cover;background-position:center;opacity:0;transition:opacity 2.2s ease;will-change:transform,opacity}
+.camoL.on{opacity:1}
+.camoWeave{position:absolute;inset:0;opacity:.22;mix-blend-mode:multiply;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .5 0 0 0 0 .5 0 0 0 0 .45 0 0 0 .9 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E"),repeating-linear-gradient(45deg,rgba(0,0,0,.05) 0 1px,transparent 1px 3px),repeating-linear-gradient(-45deg,rgba(0,0,0,.05) 0 1px,transparent 1px 3px)}
+.camoShade{position:absolute;inset:0;background:radial-gradient(120% 90% at 50% 40%,rgba(10,11,8,.25) 0%,rgba(10,11,8,.62) 70%,rgba(10,11,8,.82) 100%)}
+.camoTag{position:absolute;left:max(16px,env(safe-area-inset-left,0px));bottom:calc(14px + env(safe-area-inset-bottom,0px));pointer-events:auto;cursor:pointer;display:flex;flex-direction:column;gap:2px;padding:7px 11px;border-left:3px solid #c9b98c;background:rgba(12,13,9,.55);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);color:#e9e2cc;font-family:var(--mono);text-transform:uppercase;letter-spacing:.12em}
+.camoTag b{font-size:.72rem;font-weight:600}.camoTag span{font-size:.62rem;opacity:.7}
+.gate .gateCard{position:relative;z-index:1;padding:26px 22px 20px;border-radius:14px;background:rgba(20,22,15,.74);border:1px solid rgba(233,226,204,.14);box-shadow:0 30px 80px rgba(0,0,0,.45);backdrop-filter:blur(14px) saturate(1.1);-webkit-backdrop-filter:blur(14px) saturate(1.1);color:#ece6d2}
+.gate .gateCard h1{display:flex;flex-direction:column;align-items:flex-start;gap:12px;font-size:2.4rem;color:#ece6d2;letter-spacing:.08em}
+.gate .gateCard p{color:#bdb7a2}
+.gateIcon{border-radius:14px;box-shadow:0 6px 20px rgba(0,0,0,.4)}
+.stencil{display:inline-flex}.stencil i{font-style:normal;display:inline-block}
+.gate .gateCard input{background:rgba(255,255,255,.06);border-color:rgba(233,226,204,.22);color:#f2ecd8}
+.gate .gateCard input:focus{border-color:#c9b98c;outline:none;box-shadow:0 0 0 3px rgba(201,185,140,.25)}
+.gate .gateCard label{color:#cfc8b1}
+.gate .gateCard .btn{background:#6d7a42;border-color:#6d7a42;color:#f6f2e4}
+.gate .gateCard .btn.ghost{background:transparent;color:#ece6d2;border-color:rgba(233,226,204,.35)}
+.gate .gateCard .link{color:#d9c99a}
+.gate .gateCard .keep{color:#d8d1bb}
+.gate .gateCard .err{color:#f0a08f}
+@media (prefers-reduced-motion:no-preference){
+  .camoL.on{animation:camoDrift 28s ease-in-out infinite alternate}
+  @keyframes camoDrift{from{transform:scale(1.02) translate3d(-1.5%,-1%,0)}to{transform:scale(1.1) translate3d(1.5%,1%,0)}}
+  .gate .gateCard{animation:cardIn .9s cubic-bezier(.2,.8,.2,1) both .15s}
+  @keyframes cardIn{from{opacity:0;transform:translateY(18px) scale(.98)}to{opacity:1;transform:none}}
+  .gateIcon{animation:iconIn .8s cubic-bezier(.2,.9,.3,1.3) both .35s}
+  @keyframes iconIn{from{opacity:0;transform:translateY(-14px) rotate(-6deg) scale(.85)}to{opacity:1;transform:none}}
+  .stencil i{animation:stencilIn .5s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(.55s + var(--d)*45ms)}
+  @keyframes stencilIn{from{opacity:0;transform:translateY(8px);filter:blur(4px)}to{opacity:1;transform:none;filter:none}}
+  .camoTag.in{animation:tagIn .7s ease both}
+  @keyframes tagIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
+}
+
 .acct{font-size:.78rem;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .acct button{background:none;border:0;color:var(--accent);text-decoration:underline;padding:0;font-size:.78rem}
 .sync{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted)}
@@ -1401,7 +1437,7 @@ function startCloud(){
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
   $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{[LS,LSK,LSD,"gearLocker.uid"].forEach(k=>localStorage.removeItem(k))}catch{};render();await auth.signOut();try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch{}try{["gearLocker.curKit","gearLocker.tab"].forEach(k=>localStorage.removeItem(k))}catch{}location.reload()};
 }
-const APP_VERSION="22";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+const APP_VERSION="23";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 if("serviceWorker" in navigator&&location.protocol==="https:"){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
@@ -2892,6 +2928,54 @@ $("secSheet").querySelector(".sheetBg").addEventListener("click",()=>{$("secShee
 $("acct").insertAdjacentHTML("beforeend",`<button type="button" id="secBtn">Security</button>`);$("secBtn").onclick=openSecurity;
 // honor "never send Arms Room items" in every lookup path
 {const _rl=runLookups;runLookups=function(ids,quiet){if(kits._settings?.privateArms){const skip=ids.filter(id=>{const i=itemById(id);return i&&armOf(i)});ids=ids.filter(id=>!skip.includes(id));if(skip.length&&!quiet)toast(`Skipped ${skip.length} Arms Room item${skip.length>1?"s":""} (private)`)}return _rl(ids,quiet)}}
+
+/* ---------- v23: camo landing screen ---------- */
+(function(){
+  // seeded random so each pattern looks the same every time
+  const rng=s=>()=>((s=Math.imul(s^s>>>15,1|s)+0x6D2B79F5|0,s=(s^s+Math.imul(s^s>>>7,61|s))^s>>>14)>>>0)/4294967296;
+  const W=1200,H=900;
+  // smooth closed blob from a jittered ellipse
+  function blob(r,cx,cy,rx,ry,n=9,j=0.38,rot=0){let pts=[];for(let k=0;k<n;k++){const a=k/n*Math.PI*2;const f=1-j/2+r()*j;let x=Math.cos(a)*rx*f,y=Math.sin(a)*ry*f;const c=Math.cos(rot),s=Math.sin(rot);pts.push([cx+x*c-y*s,cy+x*s+y*c])}
+    let d=`M${((pts[0][0]+pts[1][0])/2).toFixed(1)} ${((pts[0][1]+pts[1][1])/2).toFixed(1)}`;for(let k=1;k<=n;k++){const p=pts[k%n],q=pts[(k+1)%n];d+=` Q${p[0].toFixed(1)} ${p[1].toFixed(1)} ${((p[0]+q[0])/2).toFixed(1)} ${((p[1]+q[1])/2).toFixed(1)}`}return d+"Z"}
+  // tapered brush stroke
+  function stroke(r,x,y,len,th,ang){const n=7;const top=[],bot=[];for(let k=0;k<=n;k++){const t=k/n;const px=x+Math.cos(ang)*len*t,py=y+Math.sin(ang)*len*t;const w=th*Math.sin(Math.PI*Math.min(1,t*1.15))*(0.7+r()*0.6);const nx=-Math.sin(ang),ny=Math.cos(ang);top.push([px+nx*w/2,py+ny*w/2+(r()-.5)*th*.25]);bot.push([px-nx*w/2,py-ny*w/2+(r()-.5)*th*.25])}
+    const p=[...top,...bot.reverse()];const m=(a,b)=>`${((a[0]+b[0])/2).toFixed(1)} ${((a[1]+b[1])/2).toFixed(1)}`;let d=`M${m(p[0],p[1])}`;for(let k=1;k<=p.length;k++){const a=p[k%p.length],b=p[(k+1)%p.length];d+=` Q${a[0].toFixed(1)} ${a[1].toFixed(1)} ${m(a,b)}`}return d+"Z"}
+  const svg=(bg,body)=>`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid slice"><rect width="${W}" height="${H}" fill="${bg}"/>${body}</svg>`;
+  const P=[];
+  // Desert Battle Dress "chocolate chip" — sand base, two browns, rocks with white halos
+  P.push({name:"Desert Chocolate Chip",era:"US DBDU · 1981",make(){const r=rng(11);let b="";
+    [["#c8ab7e",40,130,90],["#a07a52",34,100,66]].forEach(([c,n,rx,ry])=>{for(let k=0;k<n;k++)b+=`<path fill="${c}" d="${blob(r,r()*W,r()*H,rx*(.6+r()*.8),ry*(.6+r()*.8),10,.45,r()*3)}"/>`});
+    for(let k=0;k<120;k++){const x=r()*W,y=r()*H,s=5+r()*8;b+=`<path fill="#f3efe4" d="${blob(r,x+s*.35,y-s*.3,s*1.05,s*.85,7,.5,r()*3)}"/><path fill="#2b241d" d="${blob(r,x,y,s,s*.8,7,.55,r()*3)}"/>`}
+    return svg("#e2d2b0",b)}});
+  // Vietnam tiger stripe — olive base, horizontal brushstrokes
+  P.push({name:"Tiger Stripe",era:"Vietnam · 1960s",make(){const r=rng(23);let b="";
+    for(let k=0;k<26;k++)b+=`<path fill="#8f8a52" d="${stroke(r,r()*W-200,r()*H,260+r()*420,40+r()*40,(r()-.5)*.25)}"/>`;
+    for(let k=0;k<34;k++)b+=`<path fill="#3e4227" d="${stroke(r,r()*W-200,r()*H,240+r()*460,22+r()*30,(r()-.5)*.22)}"/>`;
+    for(let k=0;k<30;k++)b+=`<path fill="#17170f" d="${stroke(r,r()*W-200,r()*H,200+r()*380,12+r()*18,(r()-.5)*.22)}"/>`;
+    return svg("#6d6f3c",b)}});
+  // Rhodesian brushstroke — sand base, big diagonal green and brown strokes
+  P.push({name:"Rhodesian Brushstroke",era:"Rhodesia · 1960s",make(){const r=rng(37);let b="";
+    [["#4f5a2c",26,70],["#6b4a2b",24,62]].forEach(([c,n,th])=>{for(let k=0;k<n;k++){const a=-.7+(r()-.5)*.6;b+=`<path fill="${c}" d="${stroke(r,r()*W-150,r()*H+120,300+r()*360,th*(.7+r()*.6),a)}"/>`}});
+    return svg("#c9b98c",b)}});
+  // ERDL leaf — green base, brown and black leaf shapes
+  P.push({name:"ERDL Leaf",era:"US Marine Corps · 1967",make(){const r=rng(53);let b="";
+    [["#7d8a4a",60,70,42],["#5b4630",54,62,36],["#1f2016",60,36,19]].forEach(([c,n,rx,ry])=>{for(let k=0;k<n;k++)b+=`<path fill="${c}" d="${blob(r,r()*W,r()*H,rx*(.6+r()*.8),ry*(.6+r()*.8),9,.5,r()*3)}"/>`});
+    return svg("#5d6b3a",b)}});
+  const urls=P.map(p=>URL.createObjectURL(new Blob([p.make()],{type:"image/svg+xml"})));
+  const gate=$("gate");const bg=document.createElement("div");bg.className="camoBg";bg.setAttribute("aria-hidden","true");
+  bg.innerHTML=urls.map((u,k)=>`<div class="camoL${k===0?" on":""}" style="background-image:url('${u}')"></div>`).join("")+`<div class="camoWeave"></div><div class="camoShade"></div><div class="camoTag"><b></b><span></span></div>`;
+  gate.prepend(bg);
+  const form=$("gateForm");form.classList.add("gateCard");
+  const h=form.querySelector("h1");if(h){h.innerHTML=`<img class="gateIcon" src="icon-192.png" alt="" width="64" height="64"><span class="stencil">${"GEAR LOCKER".split("").map((c,k)=>`<i style="--d:${k}">${c===" "?"&nbsp;":c}</i>`).join("")}</span>`}
+  let cur=Math.floor(Math.random()*P.length);const tag=bg.querySelector(".camoTag");
+  const show=k=>{bg.querySelectorAll(".camoL").forEach((l,i)=>l.classList.toggle("on",i===k));tag.querySelector("b").textContent=P[k].name;tag.querySelector("span").textContent=P[k].era;tag.classList.remove("in");void tag.offsetWidth;tag.classList.add("in")};
+  show(cur);
+  const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let timer=null;const tick=()=>{if(gate.hidden)return;cur=(cur+1)%P.length;show(cur)};
+  if(!reduce)timer=setInterval(tick,9000);
+  // tap the pattern tag to flip to the next one
+  tag.addEventListener("click",()=>{tick();if(timer){clearInterval(timer);timer=setInterval(tick,9000)}});
+})();
 
 boot();
 </script>
