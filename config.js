@@ -8,3 +8,6 @@ window.FIREBASE_CONFIG = {
   messagingSenderId: "631959211168",
   appId: "1:631959211168:web:7ae416380bb1a91fa3cdc5"
 };
+
+// Price + weight lookup service (Cloudflare Worker). Works for every signed-in user.
+window.LOOKUP_URL = "https://gear-locker-api.blakegolden1.workers.dev";

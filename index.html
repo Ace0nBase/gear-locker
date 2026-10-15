@@ -88,7 +88,7 @@ form.panel h2{grid-column:1/-1;margin:0;font-family:var(--display);text-transfor
 .empty{border:1px dashed var(--line);border-radius:6px;padding:28px;text-align:center;color:var(--muted)}
 .empty b{color:var(--ink);display:block;font-family:var(--display);font-size:1.4rem;text-transform:uppercase;margin-bottom:6px}
 .note{font-size:.82rem;color:var(--muted);margin:0}
-.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:20px;background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:4px;font-size:.88rem}
+.toast{position:fixed;z-index:80;left:50%;transform:translateX(-50%);bottom:calc(24px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:4px;font-size:.88rem}
 [hidden]{display:none!important}
 .tabs{display:flex;gap:4px;border-bottom:2px solid var(--ink)}
 .tab{background:transparent;border:0;border-bottom:4px solid transparent;margin-bottom:-2px;padding:8px 16px;font-family:var(--display);font-size:1.15rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
@@ -231,6 +231,54 @@ body.nolookups #mktBtn,body.nolookups #bulkMktBtn,body.nolookups [data-act="chec
 .acct button{background:none;border:0;color:var(--accent);text-decoration:underline;padding:0;font-size:.78rem}
 .sync{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted)}
 .sync.on{background:var(--accent)} .sync.off{background:var(--danger)}
+/* sheets: details and forms open over the page, right where you are */
+.sheetWrap{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:24px}
+.sheetWrap[hidden]{display:none!important}
+#formSheet:not(:has(#form:not([hidden]))),#detailSheet:not(:has(#detail:not([hidden]))){display:none}
+.sheetBg{position:absolute;inset:0;background:rgba(15,17,12,.55)}
+.sheet{position:relative;width:100%;max-width:760px;max-height:calc(100dvh - 48px);overflow:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;background:var(--surface);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35)}
+.sheet>form.panel,.sheet>.panel{border:0;border-radius:0;background:transparent;margin:0}
+.sheetTop{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:flex-end;padding:8px 10px 0;background:linear-gradient(var(--surface) 70%,transparent)}
+.sheetTop .grab{display:none}
+.xBtn{border:0;background:var(--chip);color:var(--ink);width:36px;height:36px;border-radius:50%;font-size:1.05rem;line-height:1}
+.sheet .actions{position:sticky;bottom:0;background:var(--surface);padding:12px 0 calc(4px + env(safe-area-inset-bottom,0px));margin-top:4px;border-top:1px solid var(--line);z-index:2}
+@media (max-width:700px){
+  .sheetWrap{align-items:flex-end;padding:0}
+  .sheet{max-width:none;max-height:calc(100dvh - 40px - env(safe-area-inset-top,0px));border-radius:16px 16px 0 0}
+  .sheetTop{justify-content:space-between}
+  .sheetTop .grab{display:block;width:40px;height:5px;border-radius:3px;background:var(--line);margin:4px auto 0}
+  @media (prefers-reduced-motion:no-preference){.sheet{animation:sheetUp .22s ease-out}}
+}
+@keyframes sheetUp{from{transform:translateY(40px);opacity:.6}to{transform:none;opacity:1}}
+body.locked{position:fixed;left:0;right:0;overflow:hidden}
+.tabs{position:sticky;top:0;z-index:40;background:var(--bg);padding-top:env(safe-area-inset-top,0px)}
+.fab{display:none}
+@media (max-width:700px){
+  .fab{display:flex;position:fixed;z-index:50;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(18px + env(safe-area-inset-bottom,0px));width:58px;height:58px;border-radius:50%;border:0;background:var(--accent);color:var(--accent-ink);font-size:2rem;line-height:1;align-items:center;justify-content:center;box-shadow:0 6px 18px rgba(0,0,0,.3)}
+  .fab[hidden]{display:none}
+  #addBtn,.vhead [data-act="new"]{display:none}
+  .toast{bottom:calc(90px + env(safe-area-inset-bottom,0px))}
+  .wrap{padding-bottom:calc(100px + env(safe-area-inset-bottom,0px))}
+}
+.row{-webkit-tap-highlight-color:transparent}
+.row:active{background:var(--chip)}
+.sheet .detail{padding:2px 20px 22px}
+.sheet form.panel{padding:2px 20px 0}
+@media (max-width:700px){
+  .row{grid-template-columns:2.2rem minmax(0,1fr) auto;row-gap:0;padding:12px 4px;align-items:center}
+  .row .meta,.row .cond{display:none}
+  .row .nm small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .val{align-self:center}
+  .stats{grid-template-columns:repeat(4,1fr)}
+  .stat{padding:10px 8px;border-top:0!important;border-left:1px solid var(--line)!important}
+  .stat:first-child{border-left:0!important}
+  .stat b{font-size:1.25rem}
+  .stat span{font-size:.58rem;letter-spacing:.04em}
+  .ghead h3{font-size:1.15rem}
+  .detail h2{font-size:1.35rem}
+  .detail .dh .vbtns{width:100%}
+  .detail .dh .vbtns .btn{flex:1}
+}
 #printSheet{display:none}
 @media print{
   @page{size:letter landscape;margin:.45in}
@@ -298,7 +346,9 @@ body.nolookups #mktBtn,body.nolookups #bulkMktBtn,body.nolookups [data-act="chec
     <div class="stat"><b id="sVal">$0</b><span>Current value</span></div>
   </section>
 
-  <section class="panel detail" id="detail" hidden aria-live="polite"></section>
+  <div class="sheetWrap" id="detailSheet"><div class="sheetBg" data-close="detail"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Item details"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-close="detail" aria-label="Close">✕</button></div>
+  <section class="panel detail" id="detail" hidden aria-live="polite"></section></div></div>
+  <div class="sheetWrap" id="formSheet"><div class="sheetBg" data-close="form"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Item form"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-close="form" aria-label="Close">✕</button></div>
   <form class="panel" id="form" hidden>
     <h2 id="formTitle">Add item</h2>
     <div class="f span2"><label for="fName">Item</label><input id="fName" required placeholder="Double M4 mag pouch"></div>
@@ -326,9 +376,10 @@ body.nolookups #mktBtn,body.nolookups #bulkMktBtn,body.nolookups [data-act="chec
       <button class="btn ghost" type="button" id="delBtn" hidden>Delete</button>
       <span class="spacer"></span>
       <button class="btn ghost" type="button" id="cancelBtn">Cancel</button>
-      <button class="btn" type="submit" id="saveBtn">Save item</button>
+      <button class="btn ghost" type="button" id="saveMoreBtn">Save &amp; add another</button>
+      <button class="btn" type="submit" id="saveBtn">Save</button>
     </div>
-  </form>
+  </form></div></div>
   <datalist id="colors"><option>Black</option><option>Coyote</option><option>Ranger Green</option><option>Multicam</option><option>Wolf Grey</option><option>FDE</option><option>Tan 499</option></datalist>
   <datalist id="loadouts"></datalist>
   <datalist id="locations"></datalist>
@@ -359,6 +410,7 @@ body.nolookups #mktBtn,body.nolookups #bulkMktBtn,body.nolookups [data-act="chec
   <p class="note" id="status"></p>
 </div>
 <div id="printSheet"></div>
+<button class="fab" id="fab" type="button" aria-label="Add">+</button>
 <div class="toast" id="toast" hidden></div>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
@@ -502,7 +554,9 @@ function showPrice(i){
 }
 
 /* ---------- form ---------- */
+let formFrom=null;
 function openForm(item){
+  formFrom=item&&viewing&&!$("detail").hidden?item.id:null;
   $("detail").hidden=true;
   editing=item||null;delArmed=false;valueTouched=!!(item&&item.value&&!(item.retailNew&&Math.round(item.retailNew*(FACTOR[item.condition]??0.6))===Math.round(item.value)));
   $("formTitle").textContent=item?"Edit item":"Add item";
@@ -515,9 +569,11 @@ function openForm(item){
   $("fGun").innerHTML=gunOpts();$("fGun").value=item?.forGun||"";$("fNick").value=item?.nick||"";
   $("fWt").value=item?.weight??"";$("fCal").value=item?.caliber||"";$("fBase").value=item?.baseRounds??"";fireFields();
   showPrice(item);
-  $("form").hidden=false;$("fName").focus();$("form").scrollIntoView({block:"nearest"});
+  $("saveMoreBtn").hidden=!!item;$("saveBtn").textContent=item?"Save changes":"Save";
+  $("form").hidden=false;resetSheetScroll("formSheet");if(!item)setTimeout(()=>$("fName").focus(),60);syncLock();
 }
-function closeForm(){$("form").hidden=true;editing=null}
+function closeForm(){$("form").hidden=true;editing=null;syncLock()}
+function cancelForm(){const back=formFrom;closeForm();formFrom=null;if(back){const it=all.find(i=>i.id===back&&!i.deleted);if(it)openDetail(it,true)}}
 function readForm(){
   return {name:$("fName").value.trim(),brand:$("fBrand").value.trim(),category:$("fCat").value,qty:Math.max(0,parseInt($("fQty").value)||0),
     color:$("fColor").value.trim(),condition:$("fCond").value,retailNew:Math.max(0,Math.round(parseFloat($("fRetail").value)||0)),value:Math.max(0,Math.round(parseFloat($("fVal").value)||0)),
@@ -544,7 +600,7 @@ async function saveCurrent(extra){
   render();await persist();return rec;
 }
 $("addBtn").onclick=()=>openForm();
-$("cancelBtn").onclick=closeForm;
+$("cancelBtn").onclick=cancelForm;
 $("q").oninput=render;$("sort").onchange=render;
 $("chips").onclick=e=>{const b=e.target.closest(".chip");if(!b)return;filter=b.dataset.c;render()};
 $("list").onclick=e=>{const r=e.target.closest(".row[data-id]");if(!r)return;openDetail(all.find(i=>i.id===r.dataset.id))};
@@ -552,14 +608,21 @@ $("form").onsubmit=async e=>{
   e.preventDefault();
   const wasEdit=!!editing;
   const rec=await saveCurrent();if(!rec)return;
-  toast(wasEdit?"Item updated":"Item added");
-  if(wasEdit){closeForm();openDetail(all.find(i=>i.id===rec.id))}else{const k={c:rec.category,l:rec.location,o:rec.setupOn};openForm();$("fCat").value=k.c;$("fLoc").value=k.l;$("fOn").value=k.o}
+  toast(wasEdit?"Saved":"Added "+rec.name);
+  closeForm();formFrom=null;openDetail(all.find(i=>i.id===rec.id),true);
+};
+$("saveMoreBtn").onclick=async()=>{
+  if(!$("form").reportValidity())return;
+  const rec=await saveCurrent();if(!rec)return;
+  toast("Added "+rec.name);
+  const k={c:rec.category,l:rec.location,o:rec.setupOn,m:rec.mountedOn,g:rec.forGun};
+  openForm();$("fCat").value=k.c;fireFields();$("fLoc").value=k.l;$("fOn").value=k.o;$("fMount").value=k.m||"";$("fGun").value=k.g||"";
 };
 $("delBtn").onclick=async()=>{
   if(!editing)return;
   if(!delArmed){delArmed=true;$("delBtn").className="btn danger";$("delBtn").textContent="Confirm delete";return}
   all=all.map(i=>i.id===editing.id?{id:i.id,deleted:true,updatedAt:now()}:i);
-  closeForm();render();await persist();toast("Item deleted");
+  closeForm();formFrom=null;viewing=null;$("detail").hidden=true;syncLock();render();await persist();toast("Deleted");
 };
 $("mktBtn").onclick=async()=>{
   const rec=await saveCurrent({marketCheck:"requested",marketCheckAt:now()});if(!rec)return;
@@ -818,7 +881,7 @@ const optList=(arr,val)=>arr.map(([v,l])=>`<option value="${esc(v)}"${String(v)=
 const ED={};
 const COLOF={range:"sessions",dope:"dope",ammo:"ammo",maint:"maint",wish:"wish",loans:"loans"};
 const VIEWS=Object.keys(COLOF);
-function openEd(view,rec){ED[view]={draft:JSON.parse(JSON.stringify(rec||{})),isNew:!rec||!rec.id,armed:false};renderExtra();setTimeout(()=>{const f=document.querySelector(`#${view}View form[data-ed]`);if(f){f.scrollIntoView({block:"nearest"});f.querySelector("input,select")?.focus()}})}
+function openEd(view,rec){ED[view]={draft:JSON.parse(JSON.stringify(rec||{})),isNew:!rec||!rec.id,armed:false};renderExtra();const sh=document.querySelector(`#${view}View .sheet`);if(sh)sh.scrollTop=0}
 function setPath(o,path,v){const ks=path.split(".");let t=o;for(let k=0;k<ks.length-1;k++){const key=ks[k];if(t[key]==null)t[key]=/^\d+$/.test(ks[k+1])?[]:{};t=t[key]}t[ks[ks.length-1]]=v}
 function collect(view){const ed=ED[view];if(!ed)return;const f=document.querySelector(`#${view}View form[data-ed]`);if(!f)return;f.querySelectorAll("[name]").forEach(el=>{let v=el.type==="checkbox"?el.checked:el.value;if(el.type==="number")v=el.value===""?"":+el.value;setPath(ed.draft,el.name,v)})}
 function fld(name,label,val,o={}){
@@ -836,7 +899,7 @@ function cell(name,label,val,o={}){
 const rmBtn=(k,i)=>`<button type="button" class="rm" data-act="rmline" data-k="${k}" data-i="${i}" aria-label="Remove line">×</button>`;
 function edForm(view,title,body){
   const ed=ED[view];
-  return `<form class="panel" data-ed="${view}"><h2>${esc(title)}</h2>${body}<div class="actions">${!ed.isNew?`<button class="btn ${ed.armed?"danger":"ghost"}" type="button" data-act="del">${ed.armed?"Confirm delete":"Delete"}</button>`:""}<span class="spacer"></span><button class="btn ghost" type="button" data-act="cancel">Cancel</button><button class="btn" type="submit">Save</button></div></form>`;
+  return `<div class="sheetWrap edSheet"><div class="sheetBg" data-act="cancel"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-act="cancel" aria-label="Close">✕</button></div><form class="panel" data-ed="${view}"><h2>${esc(title)}</h2>${body}<div class="actions">${!ed.isNew?`<button class="btn ${ed.armed?"danger":"ghost"}" type="button" data-act="del">${ed.armed?"Confirm delete":"Delete"}</button>`:""}<span class="spacer"></span><button class="btn ghost" type="button" data-act="cancel">Cancel</button><button class="btn" type="submit">Save</button></div></form></div></div>`;
 }
 async function upsertC(c,rec){rec={...rec,updatedAt:now()};if(!rec.id){rec.id=uid();rec.createdAt=rec.updatedAt}const i=db[c].findIndex(x=>x.id===rec.id);if(i>=0)db[c][i]=rec;else db[c].push(rec);await persist();return rec}
 async function removeC(c,id){db[c]=db[c].map(x=>x.id===id?{id,deleted:true,updatedAt:now()}:x);await persist()}
@@ -856,7 +919,7 @@ VIEWS.forEach(v=>{
   });
   el.addEventListener("change",e=>{if(ACT[v])ACT[v]("change",e.target,e)});
 });
-function renderExtra(){if(!COLOF[curTab])return;collect(curTab);RENDER[curTab]()}
+function renderExtra(){if(!COLOF[curTab])return;collect(curTab);const v=$(curTab+"View");const sh=v.querySelector(".sheet");const st=sh?sh.scrollTop:0;RENDER[curTab]();const sh2=v.querySelector(".sheet");if(sh2&&st)sh2.scrollTop=st;syncLock()}
 
 /* ---------- AMMO ---------- */
 function ammoSummary(){
@@ -1231,7 +1294,7 @@ function openDetail(i,quiet){
   const priceState=i.marketCheck==="requested"?"Market check queued":i.priceSource==="market"?`Market check ${esc(i.priceDate||"")}`:i.priceSource==="manual"?"Entered by you":"";
   $("detail").innerHTML=`
    <div class="dh"><div><h2>${esc(i.name)}${i.nick?` <span class="tag" style="font-size:.8rem">${esc(i.nick)}</span>`:""}</h2><div class="dsub">${esc([i.brand,i.color,i.category].filter(Boolean).join(" · "))}</div></div>
-     <div class="vbtns"><button class="btn" type="button" data-dact="edit">Edit</button>${lookupsOn()&&i.marketCheck!=="requested"&&!isGun?`<button class="btn ghost" type="button" data-dact="mkt">Market check</button>`:""}<button class="btn ghost" type="button" data-dact="close">Close</button></div></div>
+     <div class="vbtns"><button class="btn" type="button" data-dact="edit">Edit</button>${lookupsOn()&&i.marketCheck!=="requested"&&!isGun?`<button class="btn ghost" type="button" data-dact="mkt">Market check</button>`:""}</div></div>
    <dl>
      ${f("Quantity",esc(String(+i.qty||0)))}${f("Condition",esc((i.condition||"").replace("-"," ")))}
      ${f("Value each",i.value?money(i.value):"",priceState)}${f("Total value",i.value?money((+i.value)*(+i.qty||1)):"")}
@@ -1248,14 +1311,14 @@ function openDetail(i,quiet){
    ${ks.length?`<div class="sect"><h3>Packed in kits (${ks.length})</h3><div class="links">${ks.map(k=>`<button class="lnk" type="button" data-dkit="${k.id}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
    ${tasks.length?`<div class="sect"><h3>Maintenance</h3>${tasks.map(r=>`<div>${esc(r.m.task)} · <span class="pill ${r.status==="over"?"gap":r.status==="soon"?"warn":"ok"}">${r.status==="over"?"Overdue":r.status==="soon"?"Due soon":"OK"}</span> <small>${esc(r.txt)}</small></div>`).join("")}</div>`:""}
    ${i.notes?`<div class="sect"><h3>Notes</h3><div class="note">${esc(i.notes)}</div></div>`:""}`;
-  $("detail").hidden=false;if(!quiet)$("detail").scrollIntoView({block:"start",behavior:"smooth"});
+  const wasOpen=!$("detail").hidden;$("detail").hidden=false;if(!wasOpen||!quiet)resetSheetScroll("detailSheet");syncLock();
 }
 $("detail").addEventListener("click",async e=>{
   const b=e.target.closest("[data-dact],[data-dview],[data-dkit]");if(!b||!viewing)return;
   if(b.dataset.dview){openDetail(itemById(b.dataset.dview));return}
-  if(b.dataset.dkit){curKit=b.dataset.dkit;$("detail").hidden=true;showTab("kits");return}
+  if(b.dataset.dkit){curKit=b.dataset.dkit;closeDetail();showTab("kits");return}
   const a=b.dataset.dact;
-  if(a==="close"){$("detail").hidden=true;viewing=null;return}
+  if(a==="close"){closeDetail();return}
   if(a==="edit"){openForm(viewing);return}
   if(a==="mkt"){const r=all.find(x=>x.id===viewing.id);if(!r)return;if(window.LOOKUP_URL){runLookups([r.id]);openDetail(r,true);return}Object.assign(r,{marketCheck:"requested",marketCheckAt:now(),updatedAt:now()});render();await persist();openDetail(r);toast("Market check queued")}
 });
@@ -1331,6 +1394,34 @@ if(window.LOOKUP_URL){
     await persist();render();
   };
 }
+
+/* ---------- sheets, scroll lock, add button ---------- */
+let lockY=0;
+function anySheetOpen(){return !$("form").hidden||!$("detail").hidden||!!document.querySelector(".view:not([hidden]) .edSheet")}
+function syncLock(){
+  const want=anySheetOpen(),has=document.body.classList.contains("locked");
+  if(want&&!has){lockY=window.scrollY;document.body.style.top=`-${lockY}px`;document.body.classList.add("locked")}
+  else if(!want&&has){document.body.classList.remove("locked");document.body.style.top="";window.scrollTo(0,lockY)}
+}
+function resetSheetScroll(id){const sh=document.querySelector(`#${id} .sheet`);if(sh)sh.scrollTop=0}
+function closeDetail(){$("detail").hidden=true;viewing=null;syncLock()}
+document.addEventListener("click",e=>{
+  const c=e.target.closest("[data-close]");if(!c)return;
+  if(c.dataset.close==="form")cancelForm();else if(c.dataset.close==="detail")closeDetail();
+});
+document.addEventListener("keydown",e=>{
+  if(e.key!=="Escape")return;
+  if(!$("form").hidden){cancelForm();return}
+  if(!$("detail").hidden){closeDetail();return}
+  if(COLOF[curTab]&&ED[curTab]){ED[curTab]=null;renderExtra()}
+});
+$("fab").onclick=()=>{if(curTab==="inv")openForm();else if(COLOF[curTab])openEd(curTab,NEWREC[curTab]?NEWREC[curTab]():{})};
+const _showTab=showTab;
+showTab=function(k){
+  if(!$("form").hidden)closeForm();if(!$("detail").hidden)closeDetail();
+  VIEWS.forEach(v=>{if(ED[v])ED[v]=null});
+  _showTab(k);$("fab").hidden=!(curTab==="inv"||COLOF[curTab]);syncLock();window.scrollTo(0,0);
+};
 
 boot();
 </script>

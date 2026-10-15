@@ -130,8 +130,12 @@ async function lookupOne(env, it) {
   return { id: clean.id, ok: true, ...parseResult(data) };
 }
 
+const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "" };
+
 export default {
-  async fetch(req, env) {
+  async fetch(req, rawEnv) {
+    const env = { ...DEFAULTS };
+    for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
     const h = cors(env, req);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: h });
     const url = new URL(req.url);
