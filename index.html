@@ -251,7 +251,9 @@ body.nolookups #mktBtn,body.nolookups #bulkMktBtn,body.nolookups [data-act="chec
 }
 @keyframes sheetUp{from{transform:translateY(40px);opacity:.6}to{transform:none;opacity:1}}
 body.locked{position:fixed;left:0;right:0;overflow:hidden}
-.tabs{position:sticky;top:0;z-index:40;background:var(--bg);padding-top:env(safe-area-inset-top,0px)}
+.tabs{position:sticky;top:env(safe-area-inset-top,0px);z-index:40;background:var(--bg);padding-top:0;overflow-y:hidden;touch-action:pan-x;overscroll-behavior:contain}
+body::before{content:"";position:fixed;top:0;left:0;right:0;height:env(safe-area-inset-top,0px);background:var(--bg);z-index:45;pointer-events:none}
+.ver{font-size:.7rem;color:var(--muted);margin-left:6px}
 .fab{display:none}
 @media (max-width:700px){
   .fab{display:flex;position:fixed;z-index:50;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(18px + env(safe-area-inset-bottom,0px));width:58px;height:58px;border-radius:50%;border:0;background:var(--accent);color:var(--accent-ink);font-size:2rem;line-height:1;align-items:center;justify-content:center;box-shadow:0 6px 18px rgba(0,0,0,.3)}
@@ -354,7 +356,7 @@ body.sharing .fab,body.sharing .toast{display:none!important}
     <div>
       <h1>Gear Locker</h1>
       <div class="sub" id="sub">KIT INVENTORY</div>
-      <div class="acct" id="acct" hidden><span class="sync" id="syncDot"></span><span id="acctTxt"></span><button type="button" id="signOut">Sign out</button></div>
+      <div class="acct" id="acct" hidden><span class="sync" id="syncDot"></span><span id="acctTxt"></span><button type="button" id="signOut">Sign out</button><span class="ver" id="ver"></span></div>
     </div>
     <div class="hbtns">
       <button class="btn ghost" id="printBtn" type="button">Print</button>
@@ -1345,7 +1347,12 @@ function startCloud(){
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
   $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{[LS,LSK,LSD,"gearLocker.uid"].forEach(k=>localStorage.removeItem(k))}catch{};render();await auth.signOut()};
 }
-if("serviceWorker" in navigator&&location.protocol==="https:")navigator.serviceWorker.register("sw.js").catch(()=>{});
+const APP_VERSION="15";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+if("serviceWorker" in navigator&&location.protocol==="https:"){
+  const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
+  navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
+  navigator.serviceWorker.addEventListener("controllerchange",()=>{if(!hadSW||reloading)return;reloading=true;if(!anySheetOpen())location.reload();else toast("Gear Locker updated. Close and reopen to finish.",6000)});
+}
 
 /* ---------- item detail ---------- */
 let viewing=null;
