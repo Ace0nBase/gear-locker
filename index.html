@@ -1242,7 +1242,7 @@ RENDER.wish=()=>{
     fld("name","Item",d.name,{span:2,req:1,ph:"Ballistic glasses"})+fld("brand","Brand / model",d.brand,{ph:"Revision StingerHawk"})+fld("category","Category",d.category,{type:"select",opts:CATS.map(c=>[c,c])})+
     fld("estPrice","Est. price ($)",d.estPrice,{type:"number",step:1})+fld("priority","Priority",d.priority,{type:"select",opts:[["High","High"],["Medium","Medium"],["Low","Low"]]})+fld("link","Link",d.link,{type:"url",span:2,ph:"https://"})+
     fld("notes","Notes",d.notes,{span:4})+(d.priceSource==="market"?`<p class="hint span4" style="grid-column:1/-1">Market check ${esc(d.priceDate||"")}: ${esc(d.priceNote||"")}</p>`:"")):"";
-  $("wishView").innerHTML=`<div class="vhead"><div><h2>Wishlist</h2><p>Gear you want, with kit gaps added for you. Market check prices them. Got it moves the item into your inventory.</p></div><div class="vbtns"><button class="btn ghost" type="button" data-act="gaps">Add kit gaps</button><button class="btn ghost" type="button" data-act="checkall">Market check all</button><button class="btn" type="button" data-act="new">+ Add item</button></div></div>
+  $("wishView").innerHTML=`<div class="vhead"><div><h2>Wishlist</h2><p>Gear you want. <em>Add kit gaps</em> adds essentials you don't own anything for, from the kits you've packed. Market check prices them. Got it moves the item into your inventory.</p></div><div class="vbtns"><button class="btn ghost" type="button" data-act="gaps">Add kit gaps</button><button class="btn ghost" type="button" data-act="checkall">Market check all</button><button class="btn" type="button" data-act="new">+ Add item</button></div></div>
   ${form}
   <section class="stats"><div class="stat"><b>${want.length}</b><span>On the list</span></div><div class="stat"><b>${money(cost)}</b><span>Est. total</span></div><div class="stat"><b>${want.filter(w=>w.priority==="High").length}</b><span>High priority</span></div><div class="stat"><b>${got.length}</b><span>Bought</span></div></section>
   ${want.length?`<div class="scroll"><table class="tbl"><thead><tr><th>Priority</th><th>Item</th><th>Needed for</th><th class="n">Est. price</th><th></th></tr></thead><tbody>${want.map(w=>`<tr class="click" data-act="edit" data-id="${esc(w.id)}"><td><span class="pill ${w.priority==="High"?"gap":w.priority==="Medium"?"warn":""}">${esc(w.priority||"Medium")}</span></td><td><b>${esc(w.name)}</b><small>${esc([w.brand,w.category].filter(Boolean).join(" · "))}${w.link&&/^https?:\/\//.test(w.link)?` · <a href="${esc(w.link)}" target="_blank" rel="noopener">link</a>`:""}</small></td><td>${esc((w.kitsNeeding||[]).join(", ")||"—")}</td><td class="n">${+w.estPrice?money(w.estPrice):"—"}${(w.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag" style="display:block">check queued</span>`:w.priceSource==="market"?`<span class="tag" style="display:block">market</span>`:""}</td><td><span class="vbtns">${(window.LOOKUP_URL||w.marketCheck!=="requested")?`<button class="btn ghost" type="button" data-act="check" data-id="${esc(w.id)}">Price check</button>`:""}<button class="btn" type="button" data-act="got" data-id="${esc(w.id)}">Got it</button></span></td></tr>`).join("")}</tbody></table></div>`
@@ -1388,7 +1388,7 @@ function startCloud(){
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
   $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{[LS,LSK,LSD,"gearLocker.uid"].forEach(k=>localStorage.removeItem(k))}catch{};render();await auth.signOut()};
 }
-const APP_VERSION="19";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+const APP_VERSION="20";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 if("serviceWorker" in navigator&&location.protocol==="https:"){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
@@ -2783,6 +2783,25 @@ $("timerSheet").addEventListener("click",async e=>{const b=e.target.closest("[da
     await upsertC("sessions",s);curDrill=name;TM.shots=[];renderTimerShots();render();toast(`Saved: ${name} ${total.toFixed(2)}s (first ${first.toFixed(2)})`,4000);return}
 });
 $("timerSheet").querySelector(".sheetBg").addEventListener("click",closeTimer);
+
+/* ---------- v20: kit gaps = things you don't own at all ---------- */
+const NO_GAP=new Set(["primary","sidearm"]);
+function ownedFor(sid){const kinds=slotDef(sid)[1];return live().some(i=>kinds.some(k=>classify(i).has(k)))}
+const kitStarted=k=>{const st=kstate(k.id);return Object.values(st.slots||{}).some(a=>a.length)||!!st.container||(st.extras||[]).length>0};
+function realGaps(){const gaps={};KITS.filter(kitStarted).forEach(k=>{const st=kstate(k.id);k.req.forEach(s=>{if(NO_GAP.has(s))return;if((st.slots[s]||[]).length)return;if(ownedFor(s))return;(gaps[s]=gaps[s]||[]).push(k.name)})});return gaps}
+function staleGapWishes(){return db.wish.filter(w=>!w.deleted&&w.gapSlot&&w.status!=="got"&&!+w.target&&!w.link&&(NO_GAP.has(w.gapSlot)||ownedFor(w.gapSlot)))}
+async function cleanGapWishes(){const old=staleGapWishes();if(!old.length)return 0;const t=now();old.forEach(w=>{w.deleted=true;w.updatedAt=t});await persist();return old.length}
+{const _aw=ACT.wish;ACT.wish=async(act,b)=>{
+  if(act!=="gaps")return _aw(act,b);
+  const removed=await cleanGapWishes();if(!KITS.some(kitStarted)){render();toast("Pack a kit first (try Build it for me on the Kits tab). Gaps come from the kits you use.",6000);return}const gaps=realGaps();let n=0,u=0;
+  for(const [s,ks] of Object.entries(gaps)){const ex=db.wish.find(w=>!w.deleted&&w.gapSlot===s&&w.status!=="got");
+    if(ex){ex.kitsNeeding=ks;ex.updatedAt=now();u++;continue}
+    const d=slotDef(s);db.wish.push({id:uid(),name:d[0],category:(S[s]?.[1]?.[0])||"Misc",gapSlot:s,kitsNeeding:ks,priority:ks.length>=4?"High":ks.length>=2?"Medium":"Low",status:"want",notes:d[2]||"",createdAt:now(),updatedAt:now()});n++}
+  await persist();render();
+  toast([n?`Added ${n} thing${n>1?"s":""} you don't own yet`:"You own something for every essential",removed?`removed ${removed} you already have`:""].filter(Boolean).join(" · "),5000);
+}}
+// one-time cleanup of the bad suggestions
+{const _mf=maybeFirstPush;let done=false;maybeFirstPush=function(){_mf();if(!done&&cloudUser&&!firstLoad){done=true;setTimeout(async()=>{const n=await cleanGapWishes();if(n){render();toast(`Removed ${n} wishlist item${n>1?"s":""} you already own`,5000)}},1500)}}}
 
 boot();
 </script>
