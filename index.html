@@ -332,6 +332,20 @@ body.sharing .fab,body.sharing .toast{display:none!important}
 .batt.over{border-left-color:var(--danger)}.batt.soon{border-left-color:#c8902e}.batt.ok{border-left-color:var(--accent)}
 .batt .bn{flex:1 1 220px;min-width:0}.batt .bn small{display:block;color:var(--muted)}
 .batt .bb{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.tmBig{display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;margin:10px 0;position:sticky;top:44px;z-index:3;background:var(--surface);padding:4px 0}
+.tmBig div{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px;text-align:center}
+.tmBig b{display:block;font-family:var(--mono);font-size:2rem;line-height:1.1}.tmBig div:first-child b{font-size:3rem}
+.tmBig span{font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.tmShots{display:flex;flex-direction:column;gap:4px;max-height:34vh;overflow:auto;margin-bottom:10px}
+.tmShot{display:grid;grid-template-columns:2.5em 1fr auto 36px;gap:8px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
+.tmShot b{font-family:var(--mono);font-size:1.15rem}.tmShot span{color:var(--muted);font-size:.85rem}
+.tmCtl{display:flex;gap:8px;flex-wrap:wrap}.tmGo{flex:1 1 140px;font-size:1.3rem;padding:16px}
+.tmSet{margin-top:12px;border-top:1px solid var(--line);padding-top:8px}.tmSet summary{cursor:pointer;font-weight:600;padding:6px 0}
+.meter2{position:relative;height:14px;border-radius:7px;background:var(--chip);overflow:hidden;margin:8px 0}
+.meter2 i{position:absolute;left:0;top:0;bottom:0;background:var(--accent);transition:width .05s}.meter2 i.hot{background:var(--danger)}
+.meter2 .thr{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--ink)}
+.row2t{display:grid;grid-template-columns:1fr 1fr;gap:8px}.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.drill.mine{border-color:var(--accent)}
 .qtyPick{display:flex;align-items:center;gap:14px;margin:14px 0}
 .qtyPick b{font-size:2rem;min-width:2ch;text-align:center}
 .qtyPick .btn{width:52px;height:52px;font-size:1.5rem;padding:0}
@@ -473,6 +487,8 @@ body.sharing .fab,body.sharing .toast{display:none!important}
   </form></div></div>
   <div class="view" id="armsView" hidden></div>
   <div class="sheetWrap" id="swapSheet" hidden><div class="sheetBg" data-swap="keep"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Swap gear"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-swap="keep" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
+  <div class="sheetWrap" id="timerSheet" hidden><div class="sheetBg" data-tm="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Shot timer"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-tm="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
+  <div class="sheetWrap" id="drillSheet" hidden><div class="sheetBg" data-de="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Drill"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-de="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
   <div class="sheetWrap" id="battSheet" hidden><div class="sheetBg" data-bs="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Battery"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-bs="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
   <div class="sheetWrap" id="buildSheet" hidden><div class="sheetBg"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Gun build"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-bclose="1" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
   <div class="sheetWrap" id="moveSheet" hidden><div class="sheetBg" data-mv="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Move some"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-mv="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
@@ -1372,7 +1388,7 @@ function startCloud(){
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
   $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{[LS,LSK,LSD,"gearLocker.uid"].forEach(k=>localStorage.removeItem(k))}catch{};render();await auth.signOut()};
 }
-const APP_VERSION="18";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+const APP_VERSION="19";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 if("serviceWorker" in navigator&&location.protocol==="https:"){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
@@ -1505,7 +1521,7 @@ if(window.LOOKUP_URL){
 
 /* ---------- sheets, scroll lock, add button ---------- */
 let lockY=0;
-function anySheetOpen(){return !$("battSheet").hidden||!$("buildSheet").hidden||!$("moveSheet").hidden||!$("form").hidden||!$("detail").hidden||!$("swapSheet").hidden||!$("shareSheet").hidden||!!document.querySelector(".view:not([hidden]) .edSheet")}
+function anySheetOpen(){return !$("timerSheet").hidden||!$("drillSheet").hidden||!$("battSheet").hidden||!$("buildSheet").hidden||!$("moveSheet").hidden||!$("form").hidden||!$("detail").hidden||!$("swapSheet").hidden||!$("shareSheet").hidden||!!document.querySelector(".view:not([hidden]) .edSheet")}
 function syncLock(){
   const want=anySheetOpen(),has=document.body.classList.contains("locked");
   if(want&&!has){lockY=window.scrollY;document.body.style.top=`-${lockY}px`;document.body.classList.add("locked")}
@@ -1519,6 +1535,8 @@ document.addEventListener("click",e=>{
 });
 document.addEventListener("keydown",e=>{
   if(e.key!=="Escape")return;
+  if(!$("drillSheet").hidden){drillEd=null;renderDrillEd();return}
+  if(!$("timerSheet").hidden){closeTimer();return}
   if(!$("battSheet").hidden){battEdit=null;renderBattSheet();return}
   if(!$("buildSheet").hidden){buildFor=null;renderBuild();return}
   if(!$("moveSheet").hidden){moveState=null;renderMove();return}
@@ -2614,6 +2632,157 @@ $("battSheet").addEventListener("click",async e=>{const b=e.target.closest("[dat
 // item screen: battery line
 {const _od=openDetail;openDetail=function(i,quiet){_od(i,quiet);const b=i&&battInfo(i);if(!b)return;const dl=$("detail").querySelector("dl");if(!dl)return;
   dl.insertAdjacentHTML("beforeend",`<div><dt>Battery</dt><dd>${esc(b.count>1?b.count+"× "+b.type:b.type||"—")}<small>${b.changed?`${b.charge?"charged":"changed"} ${esc(fmtDate(b.changed))} · next ${esc(fmtDate(b.next))}`:"change not logged"}</small></dd></div>`)}}
+
+/* ---------- v19: shot timer + your own drills ---------- */
+/* your drills live with your kits settings so they sync */
+const myDrills=()=>Array.isArray(kits._drills)?kits._drills:[];
+const allDrills=()=>[...DRILLS,...myDrills().map(d=>({...d,mine:true,metric:"total",tiers:(d.tiers||[]).filter(t=>t&&t[0]&&+t[1]>0).map(t=>[t[0],+t[1]]),src:"Your drill"}))];
+async function saveDrills(list){kits={...kits,_drills:list};await persist();renderExtra()}
+{const _dc=drillChart;drillChart=function(name){const lib=myDrills().find(d=>d.name.toLowerCase()===String(name).toLowerCase());if(!lib)return _dc(name);
+  // chart with your goal lines: borrow the library code by temporarily adding it
+  DRILLS.push({...lib,metric:"total",tiers:(lib.tiers||[]).filter(t=>t&&t[0]&&+t[1]>0).map(t=>[t[0],+t[1]])});try{return _dc(name)}finally{DRILLS.pop()}}}
+drillLibrary=function(ds){
+  const card=(d,key)=>{const me=ds.find(x=>x.name.toLowerCase()===d.name.toLowerCase());const best=me&&isFinite(me.best)?me.best:null;const lvl=tierFor(d,best);
+    return `<article class="drill${d.mine?" mine":""}"><h4>${esc(d.name)}${d.mine?` <span class="tag">yours</span>`:""}</h4><div class="setup">${esc(d.setup||[d.dist?d.dist+" yd":"",d.rounds?d.rounds+" rds":"",d.start||""].filter(Boolean).join(" · "))}</div>
+      ${d.tiers.length?`<div class="tiers">${d.tiers.map(t=>`<span class="${lvl===t[0]?"hit":""}">${esc(t[0])} ≤ ${(+t[1]).toFixed(2)}s</span>`).join("")}</div>`:""}
+      ${d.tip?`<div class="setup">${esc(d.tip)}</div>`:""}
+      <div class="you">${best!=null?`Your best: <b>${best.toFixed(2)}s</b>${lvl?` · <b>${esc(lvl)}</b>`:""}${me&&isFinite(me.bestFirst)?` · draw ${me.bestFirst.toFixed(2)}s`:""}${me&&isFinite(me.bestSplit)?` · split ${me.bestSplit.toFixed(2)}s`:""}`:"Not logged yet"}</div>
+      <div class="vbtns"><button class="btn" type="button" data-act="timerdrill" data-k="${esc(key)}">Run with timer</button><button class="btn ghost" type="button" data-act="logdrill2" data-k="${esc(key)}">Log by hand</button>${d.mine?`<button class="btn ghost" type="button" data-act="editdrill" data-k="${esc(key)}">Edit</button>`:""}</div>
+      <div class="src">${d.mine?"":"Source: "+esc(d.src)}</div></article>`};
+  return `<div class="slotsHead">Drills <span>${myDrills().length?`${myDrills().length} of yours + `:""}published standards</span></div>
+   <div class="vbtns" style="margin:8px 0"><button class="btn" type="button" data-act="timer">Shot timer</button><button class="btn ghost" type="button" data-act="newdrill">+ Add your own drill</button></div>
+   <div class="drills">${myDrills().map(d=>card(allDrills().find(x=>x.id===d.id),"m:"+d.id)).join("")}${DRILLS.map((d,k)=>card(d,"p:"+k)).join("")}</div>`;
+};
+const drillByKey=k=>{if(!k)return null;if(k.startsWith("m:"))return allDrills().find(d=>d.id===k.slice(2))||null;return DRILLS[+k.slice(2)]||null};
+// keep the drill name suggestions current
+{const _rr=RENDER.range;RENDER.range=()=>{_rr();const dl=$("drills");if(dl){const have=new Set([...dl.options].map(o=>o.value));myDrills().forEach(d=>{if(!have.has(d.name))dl.insertAdjacentHTML("beforeend",`<option>${esc(d.name)}</option>`)})}
+  const head=$("rangeView").querySelector(".vhead .btn[data-act='new']");if(head&&!$("rangeView").querySelector(".vhead [data-act='timer']"))head.insertAdjacentHTML("beforebegin",`<button class="btn ghost" type="button" data-act="timer">Shot timer</button>`)}}
+{const _ar=ACT.range;ACT.range=(act,t)=>{
+  if(act==="timer"){openTimer(null);return}
+  if(act==="timerdrill"){openTimer(t.dataset.k);return}
+  if(act==="newdrill"){drillEd={id:"",name:"",dist:"",rounds:"",start:"Holster",setup:"",tip:"",tiers:[["Goal",""],["",""],["",""]]};renderDrillEd();return}
+  if(act==="editdrill"){const d=myDrills().find(x=>"m:"+x.id===t.dataset.k);if(d){drillEd=JSON.parse(JSON.stringify(d));while((drillEd.tiers=drillEd.tiers||[]).length<3)drillEd.tiers.push(["",""]);renderDrillEd()}return}
+  if(act==="logdrill2"){const d=drillByKey(t.dataset.k);if(!d)return;const m=String(d.setup||"").match(/^(\d+) yd/);const row={name:d.name,dist:d.dist||(m?+m[1]:""),par:d.par||""};
+    if(ED.range){collect("range");const ds=ED.range.draft.drills=ED.range.draft.drills||[];const empty=ds.findIndex(x=>!x.name);if(empty>=0)ds[empty]=row;else ds.push(row);renderExtra()}else openEd("range",{date:today(),lines:[{}],drills:[row]});curDrill=d.name;return}
+  return _ar(act,t)}}
+
+/* drill editor */
+let drillEd=null;
+function renderDrillEd(){const el=$("drillSheet");const d=drillEd;if(!d){el.hidden=true;syncLock();return}
+  el.querySelector(".panel").innerHTML=`<h2>${d.id?"Edit drill":"Your own drill"}</h2>
+   <div class="f"><label for="dName">Name</label><input id="dName" value="${esc(d.name)}" placeholder="Blake's 3-target transition"></div>
+   <div class="row3"><div class="f"><label for="dDist">Yards</label><input id="dDist" type="number" min="0" value="${esc(d.dist)}"></div><div class="f"><label for="dRds">Rounds</label><input id="dRds" type="number" min="1" value="${esc(d.rounds)}"></div>
+   <div class="f"><label for="dStart">Start from</label><select id="dStart">${["Holster","Concealment","Low ready","High ready","Table / box","Sling","Other"].map(s=>`<option${d.start===s?" selected":""}>${s}</option>`).join("")}</select></div></div>
+   <div class="f"><label for="dSetup">Course of fire</label><input id="dSetup" value="${esc(d.setup)}" placeholder="2 body, reload, 2 body on 8&quot; plate"></div>
+   <div class="f"><label>Goal times (optional)</label>${d.tiers.map((t,k)=>`<div class="row2t"><input data-tn="${k}" value="${esc(t[0])}" placeholder="${["Goal","Good","Great"][k]}"><input data-tt="${k}" type="number" step="0.01" min="0" value="${esc(t[1])}" placeholder="seconds"></div>`).join("")}</div>
+   <div class="f"><label for="dTip">Notes</label><input id="dTip" value="${esc(d.tip)}" placeholder="Scoring, target, cues"></div>
+   <div class="actions">${d.id?`<button class="btn ghost" type="button" data-de="del">Delete</button>`:""}<span class="spacer"></span><button class="btn ghost" type="button" data-de="close">Cancel</button><button class="btn" type="button" data-de="save">Save drill</button></div>`;
+  el.hidden=false;syncLock()}
+$("drillSheet").addEventListener("click",async e=>{const b=e.target.closest("[data-de]");if(!b)return;const a=b.dataset.de;
+  if(a==="close"){drillEd=null;renderDrillEd();return}
+  if(a==="del"){if(!b.dataset.armed){b.dataset.armed=1;b.textContent="Tap again to delete";return}const id=drillEd.id;drillEd=null;renderDrillEd();await saveDrills(myDrills().filter(x=>x.id!==id));toast("Drill deleted");return}
+  if(a==="save"){const name=$("dName").value.trim();if(!name){$("dName").focus();return}
+    const tiers=[0,1,2].map(k=>[document.querySelector(`[data-tn="${k}"]`).value.trim()||(document.querySelector(`[data-tt="${k}"]`).value?["Goal","Good","Great"][k]:""),+document.querySelector(`[data-tt="${k}"]`).value||""]).filter(t=>t[0]&&t[1]).sort((x,y)=>y[1]-x[1]);
+    const rec={id:drillEd.id||uid(),name:name.slice(0,60),dist:+$("dDist").value||"",rounds:+$("dRds").value||"",start:$("dStart").value,setup:$("dSetup").value.trim().slice(0,160),tip:$("dTip").value.trim().slice(0,200),tiers};
+    rec.setup=rec.setup||[rec.dist?rec.dist+" yd":"",rec.rounds?rec.rounds+" rds":"",rec.start?"from "+rec.start.toLowerCase():""].filter(Boolean).join(" · ");
+    const list=myDrills().filter(x=>x.id!==rec.id);list.unshift(rec);drillEd=null;renderDrillEd();await saveDrills(list);toast(`Saved ${rec.name}`)}});
+
+/* ---------- shot timer ---------- */
+const TM={ctx:null,stream:null,node:null,src:null,useWorklet:false,running:false,beepAt:0,shots:[],peak:0,cal:false,calPeak:0,wake:null,autoStop:null,parT:0,
+  set:(()=>{try{return JSON.parse(localStorage.getItem("gearLocker.timer")||"{}")}catch{return {}}})()};
+TM.set={th:-12,hold:0.08,delay:"random",par:"",addRounds:true,...TM.set};
+const saveTmSet=()=>{try{localStorage.setItem("gearLocker.timer",JSON.stringify(TM.set))}catch{}};
+const dbToLin=db=>Math.pow(10,db/20),linToDb=v=>v>0?20*Math.log10(v):-90;
+let tmDrill=null;
+const WORKLET=`class D extends AudioWorkletProcessor{constructor(){super();this.th=0.25;this.hold=0.08*sampleRate;this.last=-1e12;this.arm=1e18;this.mf=-1;this.mt=-1;this.pk=0;this.n=0;this.port.onmessage=e=>{const m=e.data;if(m.th!=null)this.th=m.th;if(m.hold!=null)this.hold=m.hold*sampleRate;if(m.arm!=null)this.arm=m.arm*sampleRate;if(m.mf!=null){this.mf=m.mf*sampleRate;this.mt=m.mt*sampleRate}}}
+process(ins){const c=ins[0]&&ins[0][0];if(!c)return true;for(let i=0;i<c.length;i++){const v=c[i]<0?-c[i]:c[i];if(v>this.pk)this.pk=v;const f=currentFrame+i;if(v>=this.th&&f>=this.arm&&!(f>=this.mf&&f<=this.mt)&&f-this.last>this.hold){this.last=f;this.port.postMessage({shot:f/sampleRate,lvl:v})}}
+this.n+=c.length;if(this.n>=sampleRate*0.04){this.port.postMessage({peak:this.pk});this.pk=0;this.n=0}return true}}registerProcessor("shot-detector",D);`;
+async function micOn(){
+  if(TM.ctx&&TM.stream)return true;
+  if(!navigator.mediaDevices?.getUserMedia){toast("This browser can't use the microphone",5000);return false}
+  try{
+    TM.stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,channelCount:1}});
+    TM.ctx=new (window.AudioContext||window.webkitAudioContext)({latencyHint:"interactive"});if(TM.ctx.state==="suspended")await TM.ctx.resume();
+    TM.src=TM.ctx.createMediaStreamSource(TM.stream);
+    try{const url=URL.createObjectURL(new Blob([WORKLET],{type:"application/javascript"}));await TM.ctx.audioWorklet.addModule(url);TM.node=new AudioWorkletNode(TM.ctx,"shot-detector");TM.useWorklet=true;TM.node.port.onmessage=e=>onDet(e.data)}
+    catch{ // older Safari: script processor fallback
+      const sp=TM.ctx.createScriptProcessor(256,1,1);let last=-1e9,arm=1e9,pk=0,n=0;TM.useWorklet=false;
+      TM.fb={set:m=>{if(m.arm!=null)arm=m.arm;if(m.mf!=null){TM.fb.mf=m.mf;TM.fb.mt=m.mt}},mf:-1,mt:-1};
+      sp.onaudioprocess=ev=>{const c=ev.inputBuffer.getChannelData(0);const t0=TM.ctx.currentTime-c.length/TM.ctx.sampleRate;const th=dbToLin(TM.set.th);for(let i=0;i<c.length;i++){const v=Math.abs(c[i]);if(v>pk)pk=v;const t=t0+i/TM.ctx.sampleRate;if(v>=th&&t>=arm&&!(t>=TM.fb.mf&&t<=TM.fb.mt)&&t-last>TM.set.hold){last=t;onDet({shot:t,lvl:v})}}n+=c.length;if(n>=TM.ctx.sampleRate*0.04){onDet({peak:pk});pk=0;n=0}};
+      TM.node=sp;sp.connect(TM.ctx.destination)}
+    TM.src.connect(TM.node);pushTm();return true;
+  }catch(err){toast(err.name==="NotAllowedError"?"Allow microphone access for Gear Locker in Settings to use the timer":"Mic error: "+err.message,6000);return false}
+}
+function micOff(){try{TM.stream?.getTracks().forEach(t=>t.stop())}catch{}try{TM.ctx?.close()}catch{}TM.ctx=TM.stream=TM.node=TM.src=null;try{TM.wake?.release()}catch{}TM.wake=null}
+function pushTm(m){const msg={th:dbToLin(TM.set.th),hold:TM.set.hold,...(m||{})};if(TM.useWorklet)TM.node?.port.postMessage(msg);else TM.fb?.set(msg)}
+function beep(at,ms=220,hz=2600){const o=TM.ctx.createOscillator(),g=TM.ctx.createGain();o.type="square";o.frequency.value=hz;g.gain.setValueAtTime(0,at);g.gain.linearRampToValueAtTime(0.9,at+0.005);g.gain.setValueAtTime(0.9,at+ms/1000-0.01);g.gain.linearRampToValueAtTime(0,at+ms/1000);o.connect(g).connect(TM.ctx.destination);o.start(at);o.stop(at+ms/1000+0.02)}
+function onDet(m){
+  if(m.peak!=null){TM.peak=m.peak;if(TM.cal)TM.calPeak=Math.max(TM.calPeak,m.peak);drawMeter();return}
+  if(m.shot!=null&&TM.running){const t=m.shot-TM.beepAt;if(t<0)return;TM.shots.push({t,lvl:m.lvl});clearTimeout(TM.autoStop);
+    const need=+tmDrill?.rounds||0;if(need&&TM.shots.length>=need)TM.autoStop=setTimeout(()=>stopTimer(),1500);renderTimerShots();navigator.vibrate?.(15)}
+}
+function drawMeter(){const bar=$("tmLvl");if(!bar)return;const db=Math.max(-60,linToDb(TM.peak));bar.style.width=`${Math.max(0,(db+60)/60*100)}%`;bar.classList.toggle("hot",db>=TM.set.th)}
+function openTimer(key){tmDrill=key?drillByKey(key):null;TM.shots=[];TM.running=false;renderTimer()}
+function closeTimer(){if(TM.running)stopTimer(true);micOff();$("timerSheet").hidden=true;syncLock()}
+function renderTimer(){
+  const el=$("timerSheet");const guns=firearms();const s=TM.set;
+  el.querySelector(".panel").innerHTML=`<h2>Shot timer</h2>
+   <div class="row2t"><select id="tmDrill" aria-label="Drill"><option value="">Free run (no drill)</option>${myDrills().map(d=>`<option value="m:${esc(d.id)}"${tmDrill&&tmDrill.id===d.id?" selected":""}>${esc(d.name)} (yours)</option>`).join("")}${DRILLS.map((d,k)=>`<option value="p:${k}"${tmDrill&&!tmDrill.mine&&tmDrill.name===d.name?" selected":""}>${esc(d.name)}</option>`).join("")}</select>
+     <select id="tmGun" aria-label="Gun"><option value="">Gun (optional)</option>${guns.map(g=>`<option value="${esc(g.id)}"${s.gun===g.id?" selected":""}>${esc(g.name)}</option>`).join("")}</select></div>
+   ${tmDrill?`<p class="hint" style="margin:4px 0">${esc(tmDrill.setup||"")}${tmDrill.tiers?.length?` · goals: ${tmDrill.tiers.map(t=>`${esc(t[0])} ${(+t[1]).toFixed(2)}s`).join(", ")}`:""}</p>`:""}
+   <div class="tmBig"><div><b id="tmTotal">0.00</b><span>last shot</span></div><div><b id="tmCount">0</b><span>shots</span></div><div><b id="tmFirst">—</b><span>first shot</span></div></div>
+   <div id="tmShots" class="tmShots"></div>
+   <div class="tmCtl"><button class="btn tmGo" type="button" data-tm="go">${TM.running?"Stop":"Start"}</button><button class="btn ghost" type="button" data-tm="clear">Clear</button><button class="btn ghost" type="button" data-tm="save">Save to range log</button></div>
+   <details class="tmSet"${TM.set.seen?"":" open"}><summary>Mic sensitivity &amp; start beep</summary>
+     <div class="meter2"><i id="tmLvl"></i><span class="thr" style="left:${(s.th+60)/60*100}%"></span></div>
+     <div class="f"><label for="tmTh">Pick up shots louder than <b id="tmThV">${s.th} dB</b></label><input id="tmTh" type="range" min="-50" max="-1" step="1" value="${s.th}"></div>
+     <div class="vbtns"><button class="btn ghost" type="button" data-tm="pre" data-v="-6">Unsuppressed</button><button class="btn ghost" type="button" data-tm="pre" data-v="-16">Suppressed</button><button class="btn ghost" type="button" data-tm="pre" data-v="-30">Dry fire / .22</button><button class="btn ghost" type="button" data-tm="cal">${TM.cal?"Listening… fire one shot":"Calibrate"}</button></div>
+     <div class="f"><label for="tmHold">Ignore echoes closer than <b id="tmHoldV">${s.hold.toFixed(2)}s</b></label><input id="tmHold" type="range" min="0.04" max="0.30" step="0.01" value="${s.hold}"></div>
+     <div class="row2t"><div class="f"><label for="tmDelay">Start beep</label><select id="tmDelay"><option value="random"${s.delay==="random"?" selected":""}>Random 2–4 s</option><option value="3"${s.delay==="3"?" selected":""}>After 3 s</option><option value="0"${s.delay==="0"?" selected":""}>Instant</option></select></div>
+     <div class="f"><label for="tmPar">Par time (s)</label><input id="tmPar" type="number" step="0.1" min="0" value="${esc(s.par)}" placeholder="none"></div></div>
+     <label class="keep"><input type="checkbox" id="tmAdd"${s.addRounds?" checked":""}> Add shots to the gun's round count when saving</label>
+     <p class="hint">Calibrate: tap it, then fire one shot (or the loudest thing you want counted). It sets the level just under that. Other shooters on the line can trigger it, so a lane to yourself, or the Suppressed setting with your muzzle close to the phone, works best.</p>
+   </details>
+   <div class="actions"><span class="spacer"></span><button class="btn ghost" type="button" data-tm="close">Done</button></div>`;
+  el.hidden=false;syncLock();renderTimerShots();if(!TM.set.seen){TM.set.seen=1;saveTmSet()}
+}
+function renderTimerShots(){const box=$("tmShots");if(!box)return;const sh=TM.shots;
+  $("tmTotal").textContent=sh.length?sh[sh.length-1].t.toFixed(2):"0.00";$("tmCount").textContent=sh.length;$("tmFirst").textContent=sh.length?sh[0].t.toFixed(2):"—";
+  box.innerHTML=sh.length?sh.map((x,k)=>`<div class="tmShot"><span>#${k+1}</span><b>${x.t.toFixed(2)}</b><span>${k?`split ${(x.t-sh[k-1].t).toFixed(2)}`:"first"}</span><button type="button" class="qb x" data-tm="rm" data-i="${k}" aria-label="Not a shot">✕</button></div>`).join("")
+    :`<p class="hint">${TM.running?"Listening…":"Tap Start, hold steady for the beep."}</p>`;box.scrollTop=box.scrollHeight;
+  const tot=sh.length?sh[sh.length-1].t:0;const lvl=tmDrill&&tot?tierFor({metric:"total",tiers:tmDrill.tiers||[]},tot):null;
+  if(lvl&&!TM.running)box.insertAdjacentHTML("beforeend",`<p class="hint"><b>${esc(lvl)}</b> pace for ${esc(tmDrill.name)}</p>`);
+}
+async function startTimer(){
+  if(!(await micOn()))return;
+  try{TM.wake=await navigator.wakeLock?.request("screen")}catch{}
+  TM.shots=[];TM.running=true;renderTimerShots();
+  const d=TM.set.delay==="random"?2+Math.random()*2:+TM.set.delay;const at=TM.ctx.currentTime+Math.max(0.15,d);
+  TM.beepAt=at;beep(at);pushTm({arm:at+0.24});
+  const par=+TM.set.par;if(par>0){TM.parT=at+par;beep(at+par,180,1900);pushTm({mf:at+par-0.01,mt:at+par+0.22})}else pushTm({mf:-1,mt:-1});
+  const go=$("timerSheet").querySelector(".tmGo");if(go)go.textContent="Stop";
+}
+function stopTimer(silent){TM.running=false;clearTimeout(TM.autoStop);pushTm({arm:1e9});const go=$("timerSheet").querySelector(".tmGo");if(go)go.textContent="Start";renderTimerShots();try{TM.wake?.release()}catch{}TM.wake=null;if(!silent&&TM.shots.length)navigator.vibrate?.([30,60,30])}
+$("timerSheet").addEventListener("input",e=>{const t=e.target;if(t.id==="tmTh"){TM.set.th=+t.value;$("tmThV").textContent=t.value+" dB";$("timerSheet").querySelector(".thr").style.left=`${(TM.set.th+60)/60*100}%`;pushTm();saveTmSet()}
+  if(t.id==="tmHold"){TM.set.hold=+t.value;$("tmHoldV").textContent=(+t.value).toFixed(2)+"s";pushTm();saveTmSet()}});
+$("timerSheet").addEventListener("change",e=>{const t=e.target;if(t.id==="tmDelay"){TM.set.delay=t.value;saveTmSet()}if(t.id==="tmPar"){TM.set.par=t.value;saveTmSet()}if(t.id==="tmGun"){TM.set.gun=t.value;saveTmSet()}if(t.id==="tmAdd"){TM.set.addRounds=t.checked;saveTmSet()}if(t.id==="tmDrill"){tmDrill=drillByKey(t.value);renderTimer()}});
+$("timerSheet").addEventListener("click",async e=>{const b=e.target.closest("[data-tm]");if(!b)return;const a=b.dataset.tm;
+  if(a==="close"){closeTimer();return}
+  if(a==="go"){if(TM.running)stopTimer();else await startTimer();return}
+  if(a==="clear"){if(TM.running)stopTimer(true);TM.shots=[];renderTimerShots();return}
+  if(a==="rm"){TM.shots.splice(+b.dataset.i,1);renderTimerShots();return}
+  if(a==="pre"){TM.set.th=+b.dataset.v;saveTmSet();pushTm();renderTimer();if(!TM.ctx)await micOn();return}
+  if(a==="cal"){if(!(await micOn()))return;TM.cal=true;TM.calPeak=0;b.textContent="Listening… fire one shot";setTimeout(()=>{TM.cal=false;if(TM.calPeak>0.01){TM.set.th=Math.round(Math.max(-50,Math.min(-1,linToDb(TM.calPeak)-8)));saveTmSet();pushTm();toast(`Set to ${TM.set.th} dB (8 dB under that shot)`)}else toast("Didn't hear anything loud. Try again closer to the phone.");renderTimer()},5000);return}
+  if(a==="save"){if(!TM.shots.length){toast("No shots to save");return}if(TM.running)stopTimer(true);
+    const sh=TM.shots;const first=+sh[0].t.toFixed(2);const splits=sh.slice(1).map((x,k)=>(x.t-sh[k].t).toFixed(2)).join(", ");const total=+sh[sh.length-1].t.toFixed(2);
+    const name=tmDrill?.name||"Timer run";const row={name,dist:tmDrill?.dist||(String(tmDrill?.setup||"").match(/^(\d+) yd/)||[])[1]||"",par:+TM.set.par||"",first,splits,total,hits:"",shots:sh.length};
+    let s=L("sessions").find(x=>x.date===today());s=s?{...s,drills:[...(s.drills||[])],lines:[...(s.lines||[])]}:{date:today(),type:"",location:"",lines:[],drills:[]};
+    s.drills.push(row);
+    const gun=TM.set.gun&&itemById(TM.set.gun);if(gun&&TM.set.addRounds){const l=s.lines.find(x=>x.firearmId===gun.id&&!x.ammoId);if(l)l.rounds=(+l.rounds||0)+sh.length;else s.lines.push({firearmId:gun.id,rounds:sh.length})}
+    s.rounds=s.lines.reduce((a,l)=>a+(+l.rounds||0),0);
+    await upsertC("sessions",s);curDrill=name;TM.shots=[];renderTimerShots();render();toast(`Saved: ${name} ${total.toFixed(2)}s (first ${first.toFixed(2)})`,4000);return}
+});
+$("timerSheet").querySelector(".sheetBg").addEventListener("click",closeTimer);
 
 boot();
 </script>
