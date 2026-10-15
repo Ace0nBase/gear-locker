@@ -392,7 +392,7 @@ body.sharing .fab,body.sharing .toast{display:none!important}
 body.appLocked .wrap,body.appLocked .sheetWrap,body.appLocked .fab,body.appLocked .toast{visibility:hidden!important}
 body.appCover::after{content:"";position:fixed;inset:0;z-index:600;background:var(--bg)}
 .secBlock{border-top:1px solid var(--line);padding:12px 0;display:flex;flex-direction:column;gap:8px}.secBlock h3{margin:0}
-#secBtn{background:none;border:0;color:var(--accent);text-decoration:underline;padding:0;font-size:.78rem}
+#secBtn,#inviteBtn{background:none;border:0;color:var(--accent);text-decoration:underline;padding:0;font-size:.78rem}
 .qtyPick{display:flex;align-items:center;gap:14px;margin:14px 0}
 .qtyPick b{font-size:2rem;min-width:2ch;text-align:center}
 .qtyPick .btn{width:52px;height:52px;font-size:1.5rem;padding:0}
@@ -1437,7 +1437,7 @@ function startCloud(){
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
   $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{[LS,LSK,LSD,"gearLocker.uid"].forEach(k=>localStorage.removeItem(k))}catch{};render();await auth.signOut();try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch{}try{["gearLocker.curKit","gearLocker.tab"].forEach(k=>localStorage.removeItem(k))}catch{}location.reload()};
 }
-const APP_VERSION="23";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+const APP_VERSION="24";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 if("serviceWorker" in navigator&&location.protocol==="https:"){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
@@ -2976,6 +2976,16 @@ $("acct").insertAdjacentHTML("beforeend",`<button type="button" id="secBtn">Secu
   // tap the pattern tag to flip to the next one
   tag.addEventListener("click",()=>{tick();if(timer){clearInterval(timer);timer=setInterval(tick,9000)}});
 })();
+
+
+/* ---------- v24: invite a friend ---------- */
+$("acct").insertAdjacentHTML("beforeend",`<button type="button" id="inviteBtn">Invite a friend</button>`);
+$("inviteBtn").onclick=async()=>{
+  const url=location.origin+location.pathname.replace(/index\.html$/,"");
+  const text="I've been using Gear Locker to keep track of my gear, kits and range time. It's free. Make an account here, then in Safari tap Share → Add to Home Screen so it works like an app:";
+  try{if(navigator.share){await navigator.share({title:"Gear Locker",text,url});return}}catch(e){if(e.name==="AbortError")return}
+  try{await navigator.clipboard.writeText(text+" "+url);toast("Invite copied. Paste it in a text.")}catch{prompt("Copy this invite:",text+" "+url)}
+};
 
 boot();
 </script>
