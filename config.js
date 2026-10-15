@@ -10,4 +10,4 @@ window.FIREBASE_CONFIG = {
 };
 
 // Price + weight lookup service (Cloudflare Worker). Works for every signed-in user.
-window.LOOKUP_URL = "https://gear-locker-api.blakegolden1.workers.dev";
+window.LOOKUP_URL = "https://gear-locker-api.ace0nbase.workers.dev";

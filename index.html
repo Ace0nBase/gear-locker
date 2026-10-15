@@ -1401,7 +1401,7 @@ function startCloud(){
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
   $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{[LS,LSK,LSD,"gearLocker.uid"].forEach(k=>localStorage.removeItem(k))}catch{};render();await auth.signOut();try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch{}try{["gearLocker.curKit","gearLocker.tab"].forEach(k=>localStorage.removeItem(k))}catch{}location.reload()};
 }
-const APP_VERSION="21";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+const APP_VERSION="22";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 if("serviceWorker" in navigator&&location.protocol==="https:"){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
