@@ -417,6 +417,7 @@ body.appCover::after{content:"";position:fixed;inset:0;z-index:600;background:va
   #printSheet .dopecard td{font-size:13pt;text-align:center;font-family:Consolas,monospace}
   #printSheet .dopecard th{text-align:center}
 }
+.pvNote{display:block;font-size:.85em;padding:8px 10px;margin-bottom:8px;border-radius:8px;background:rgba(255,200,80,.18);border:1px solid rgba(255,200,80,.45)}
 </style>
 </head>
 <body>
@@ -1437,7 +1438,7 @@ function startCloud(){
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
   $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{[LS,LSK,LSD,"gearLocker.uid"].forEach(k=>localStorage.removeItem(k))}catch{};render();await auth.signOut();try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch{}try{["gearLocker.curKit","gearLocker.tab"].forEach(k=>localStorage.removeItem(k))}catch{}location.reload()};
 }
-const APP_VERSION="24";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+const APP_VERSION="25";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 if("serviceWorker" in navigator&&location.protocol==="https:"){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
@@ -2986,6 +2987,44 @@ $("inviteBtn").onclick=async()=>{
   try{if(navigator.share){await navigator.share({title:"Gear Locker",text,url});return}}catch(e){if(e.name==="AbortError")return}
   try{await navigator.clipboard.writeText(text+" "+url);toast("Invite copied. Paste it in a text.")}catch{prompt("Copy this invite:",text+" "+url)}
 };
+
+/* ---------- v25: invite links open the sign-up screen ---------- */
+(function(){
+  const qs=new URLSearchParams(location.search);const JOIN=qs.has("join");
+  const cleanUrl=()=>{try{qs.delete("join");const q=qs.toString();history.replaceState(null,"",location.pathname+(q?"?"+q:"")+location.hash)}catch{}};
+  // the invite button now sends the join link
+  const inv=$("inviteBtn");
+  if(inv)inv.onclick=async()=>{const url=location.origin+location.pathname.replace(/index\.html$/,"")+"?join=1";
+    const text="I've been using Gear Locker to keep track of my gear, kits and range time. It's free. Tap the link to make your account, then in Safari tap Share → Add to Home Screen so it works like an app:";
+    try{if(navigator.share){await navigator.share({title:"Gear Locker",text,url});return}}catch(e){if(e.name==="AbortError")return}
+    try{await navigator.clipboard.writeText(text+" "+url);toast("Invite copied. Paste it in a text.")}catch{prompt("Copy this invite:",text+" "+url)}};
+  if(!JOIN||SHARE_ID)return;
+  const form=$("gateForm");
+  // sign-up mode: "Create account" becomes the main button
+  function joinMode(preview){
+    form.classList.add("joinMode");
+    $("gateMsg").innerHTML=preview?"":"You've been invited. Make a free account to start your own locker.";
+    $("gNew").className="btn";$("gIn").className="btn ghost";
+    const row=$("gNew").parentElement;row.prepend($("gNew"));
+    $("gPass").setAttribute("autocomplete","new-password");$("gPass").placeholder="8+ characters";
+  }
+  // switch back to normal sign-in when they tap "Sign in" with an existing account
+  $("gIn").addEventListener("click",()=>{$("gPass").setAttribute("autocomplete","current-password")},{capture:true});
+  // signed out: show the sign-up screen
+  const iv=setInterval(()=>{
+    if(!$("gateFields").hidden&&!cloudUser){clearInterval(iv);joinMode(false);cleanUrl();return}
+    if(cloudUser){clearInterval(iv);cleanUrl();showPreview()}
+  },60);
+  setTimeout(()=>clearInterval(iv),15000);
+  // already signed in (e.g. you tapped your own invite): show what your friend will see
+  function showPreview(){
+    const gate=$("gate");gate.hidden=false;gate.classList.add("previewing");$("gateFields").hidden=false;joinMode(true);
+    form.querySelectorAll("input,button").forEach(x=>{if(x.id!=="gBack")x.disabled=true});
+    $("gateMsg").innerHTML=`<span class="pvNote">You're signed in as <b>${esc(cloudUser.email)}</b>, so this link normally opens your locker. This is what your friend sees:</span><br>You've been invited. Make a free account to start your own locker.`;
+    form.insertAdjacentHTML("beforeend",`<button class="btn" type="button" id="gBack" style="margin-top:12px;width:100%">Back to my locker</button>`);
+    $("gBack").onclick=()=>{gate.hidden=true;gate.classList.remove("previewing");$("gBack").remove();form.querySelectorAll("input,button").forEach(x=>x.disabled=false);$("gateMsg").textContent="Sign in to open your locker."};
+  }
+})();
 
 boot();
 </script>
