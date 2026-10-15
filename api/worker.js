@@ -75,6 +75,7 @@ Use web search (at most 4 searches). Good searches:
 - "<brand> <name> amazon" for the Amazon price
 - "<brand> <name> ebay sold" and "<brand> <name> tacswap" for USED prices${firearm ? "\nThis is a firearm: do NOT price it (set retailNew, usedLow, usedHigh, value to null). Only find the listed unloaded weight." : ""}${wish ? "\nThis is a wishlist item the user wants to buy. If the brand is blank the name may be a generic need (e.g. \"Eye protection\"): pick a well-regarded mid-range product, price it, and name it in priceNote." : ""}
 
+If the brand is blank or "unknown", the user doesn't know the maker: work out the most likely kind of item from the name, category, color and notes, and give typical prices and weight for a common mid-range version of it. Start priceNote with "Estimate:" and name what you based it on (e.g. "Estimate: typical MOLLE IFAK pouch, $25-45 new").
 Always give a price even if used comps are thin: if you only find new prices, set retailNew from them and estimate usedLow/usedHigh as about 50-75% of new.
 value = the per-unit value for THIS item's condition (${CONDITION[it.condition] || CONDITION.Good}).
 weightOz = the weight of ONE unit in ounces (1 lb = 16 oz, 1 g = 0.035274 oz), rounded to 0.1. If sizes differ and none is given, use size Medium and say so in weightNote.
@@ -154,6 +155,29 @@ function parseResult(data) {
     sources: sources.slice(0, 4).map(s => ({ label: String(s.label || "source").slice(0, 40), url: String(s.url) })),
   };
 }
+
+const CATS = ["Firearms","Suppressors","Armor & Carriers","Belts & Rigs","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Mags & Ammo Storage","Cleaning & Maintenance","Misc"];
+async function identify(env, img, hint) {
+  const ask = `This photo shows one piece of tactical, outdoor, shooting or medical gear that the owner wants to add to their inventory app.${hint ? ` They called it: "${hint}".` : ""}
+Identify it. Look for logos, labels, tags, stitching patterns and distinctive design to name the maker and model if you can; if you can't tell the maker, say what kind of item it is.
+Reply with ONLY this JSON object:
+{"name": "short item name, e.g. 'Double M4 mag pouch' or 'IFAK pouch'", "brand": "maker and model if identifiable with reasonable confidence, else empty string", "category": one of ${JSON.stringify(CATS)}, "color": "color or camo pattern", "confidence": "high|medium|low", "summary": "one short sentence on what it looks like and what gave it away"}`;
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 600, messages: [{ role: "user", content: [
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: img } },
+      { type: "text", text: ask } ] }] }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error?.message || ("Claude API error " + r.status));
+  const t = textOf(data.content);
+  const m = t.replace(/```(?:json)?/gi, "").match(/\{[\s\S]*\}/);
+  if (!m) throw new Error("Couldn't read the photo answer");
+  const j = JSON.parse(m[0]);
+  const s = (v, n) => String(v || "").slice(0, n);
+  return { name: s(j.name, 80), brand: s(j.brand, 80), category: CATS.includes(j.category) ? j.category : "", color: s(j.color, 40), confidence: ["high","medium","low"].includes(j.confidence) ? j.confidence : "low", summary: s(j.summary, 200) };
+}
 async function lookupOne(env, it) {
   const clean = {
     id: String(it.id || "").slice(0, 80), name: String(it.name || "").slice(0, 120), brand: String(it.brand || "").slice(0, 120),
@@ -180,7 +204,7 @@ export default {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: h });
     const url = new URL(req.url);
     if (url.pathname === "/" || url.pathname === "/health") return json({ ok: true, service: "gear-locker-api" }, 200, h);
-    if (url.pathname !== "/lookup" || req.method !== "POST") return json({ error: "Not found" }, 404, h);
+    if ((url.pathname !== "/lookup" && url.pathname !== "/identify") || req.method !== "POST") return json({ error: "Not found" }, 404, h);
     if (!env.ANTHROPIC_API_KEY) return json({ error: "Lookup service isn't set up yet (missing API key)." }, 503, h);
 
     let user;
@@ -191,6 +215,12 @@ export default {
 
     let body;
     try { body = await req.json(); } catch { return json({ error: "Bad request" }, 400, h); }
+    if (url.pathname === "/identify") {
+      const img = String(body.image || "");
+      if (!img || img.length > 2_800_000 || !/^[A-Za-z0-9+/=]+$/.test(img.slice(0, 200))) return json({ error: "Send a photo (JPEG, under 2 MB)" }, 400, h);
+      try { return json({ result: await identify(env, img, String(body.hint || "").slice(0, 80)) }, 200, h); }
+      catch (e) { return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+    }
     const max = +(env.MAX_ITEMS || 4);
     const items = Array.isArray(body.items) ? body.items.slice(0, max) : [];
     if (!items.length) return json({ error: "No items" }, 400, h);

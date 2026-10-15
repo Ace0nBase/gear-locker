@@ -285,6 +285,22 @@ body.locked{position:fixed;left:0;right:0;overflow:hidden}
 .mono{font-family:var(--mono);letter-spacing:.03em}
 .ser{font-size:.85rem;min-width:0;overflow:hidden;text-overflow:ellipsis}
 @media (max-width:700px){.armRow{grid-template-columns:3.7rem minmax(0,1fr) auto!important}.armRow .ser{grid-column:2;grid-row:2;font-size:.78rem;color:var(--muted)}.armRow .val{grid-row:1/span 2;grid-column:3}#armAdd{display:none}}
+.swapList{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+.swapItem{display:flex;gap:12px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
+.swapItem input{width:22px;height:22px;flex:none}
+.swapItem small{display:block;color:var(--muted)}
+.sheet .imp p{margin:6px 0}
+.idRow{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.idRow .priceOut{flex:1 1 220px;margin:0}
+body.nolookups #idBtn{display:none}
+.shared{max-width:760px}
+body.sharing .fab,body.sharing .toast{display:none!important}
+.shared a{color:var(--accent)}
+.shList{margin-top:18px;display:flex;flex-direction:column;gap:2px}
+.shItem{padding:10px 12px;border-left:3px solid var(--accent);background:var(--surface);border-radius:4px}
+.shItem small{display:block;color:var(--muted);margin-top:2px}
+.shOn{display:block;font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;color:var(--coyote)}
+.stat span small{text-transform:none;letter-spacing:0}
 #printSheet{display:none}
 @media print{
   @page{size:letter landscape;margin:.45in}
@@ -323,6 +339,7 @@ body.locked{position:fixed;left:0;right:0;overflow:hidden}
     </div>
   </form>
 </div>
+<div class="wrap shared" id="sharedPage" hidden></div>
 <div class="wrap">
   <header>
     <div>
@@ -349,7 +366,7 @@ body.locked{position:fixed;left:0;right:0;overflow:hidden}
     <div class="stat"><b id="sItems">0</b><span>Line items</span></div>
     <div class="stat"><b id="sQty">0</b><span>Total pieces</span></div>
     <div class="stat"><b id="sCats">0</b><span>Categories</span></div>
-    <div class="stat"><b id="sVal">$0</b><span>Current value</span></div>
+    <div class="stat"><b id="sVal">$0</b><span>Current value<small id="sPaid"></small></span></div>
   </section>
 
   <datalist id="colors"><option>Black</option><option>Coyote</option><option>Ranger Green</option><option>Multicam</option><option>Wolf Grey</option><option>FDE</option><option>Tan 499</option></datalist>
@@ -374,13 +391,15 @@ body.locked{position:fixed;left:0;right:0;overflow:hidden}
   <form class="panel" id="form" hidden>
     <h2 id="formTitle">Add item</h2>
     <div class="f span2"><label for="fName">Item</label><input id="fName" required placeholder="Double M4 mag pouch"></div>
-    <div class="f"><label for="fBrand">Brand / model</label><input id="fBrand" placeholder="Esstac KYWI"></div>
+    <div class="f span4 idRow"><button class="btn ghost" type="button" id="idBtn">Identify from a photo</button><input type="file" id="idFile" accept="image/*" hidden><div class="priceOut" id="idOut" hidden></div></div>
+    <div class="f"><label for="fBrand">Brand / model</label><input id="fBrand" placeholder="Blank if you don't know"></div>
     <div class="f"><label for="fCat">Category</label><select id="fCat"></select></div>
     <div class="f"><label for="fQty">Qty</label><input id="fQty" type="number" min="0" step="1" value="1"></div>
     <div class="f"><label for="fColor">Color</label><input id="fColor" list="colors" placeholder="Ranger Green"></div>
     <div class="f"><label for="fCond">Condition</label><select id="fCond"><option>New</option><option selected>Good</option><option>Used</option><option>Worn</option><option value="Needs-repair">Needs repair</option></select></div>
     <div class="f"><label for="fRetail">New retail price ($)</label><input id="fRetail" type="number" min="0" step="1" placeholder="What it costs new"></div>
     <div class="f"><label for="fVal">Value each ($)</label><input id="fVal" type="number" min="0" step="1" placeholder="Auto from retail"></div>
+    <div class="f"><label for="fPaid">What I paid each ($)</label><input id="fPaid" type="number" min="0" step="0.01" placeholder="If you remember"></div>
     <div class="f"><label for="fOn">Set up on / loadout</label><input id="fOn" list="loadouts" placeholder="Plate carrier"></div>
     <div class="f span2"><label for="fLoc">Stored at</label><input id="fLoc" list="locations" placeholder="Gear closet, bin 2"></div>
     <div class="f"><label for="fWt">Weight each (oz)</label><input id="fWt" type="number" min="0" step="0.1" placeholder="Blank = auto lookup"></div>
@@ -389,7 +408,7 @@ body.locked{position:fixed;left:0;right:0;overflow:hidden}
     <div class="f span2 nogun"><label for="fGun">Goes with firearm</label><select id="fGun"></select></div>
     <div class="f fire"><label for="fCal">Caliber</label><input id="fCal" list="calibers" placeholder="5.56 NATO"></div>
     <div class="f fire"><label for="fBase">Rounds fired before tracking</label><input id="fBase" type="number" min="0" step="1" placeholder="0"></div>
-    <div class="f span2"><label for="fArm">Serial record (Arms Room)</label><select id="fArm"><option value="">— not on the record —</option><option value="FA">Firearm</option><option value="SU">Suppressor</option><option value="OP">Optic / sight</option><option value="WL">Weapon light</option><option value="LA">Laser / NVG / thermal</option><option value="KN">Knife</option></select></div>
+    <div class="f span2"><label for="fArm">Serial record (Arms Room)</label><select id="fArm"><option value="">Auto (guns, suppressors, knives)</option><option value="no">Not on the record</option><option value="FA">Firearm</option><option value="SU">Suppressor</option><option value="OP">Optic / sight</option><option value="WL">Weapon light</option><option value="LA">Laser / NVG / thermal</option><option value="KN">Knife</option></select></div>
     <div class="f rec" data-recs="FA SU OP WL LA"><label for="fSerial">Serial number</label><input id="fSerial" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Exactly as stamped"></div>
     <div class="f rec"><label for="fArmId">Record ID</label><input id="fArmId" autocapitalize="characters" placeholder="Auto"></div>
     <div class="f rec"><label for="fArmType" id="fArmTypeL">Type</label><input id="fArmType" placeholder="Rifle, pistol, RD, 1-6x…"></div>
@@ -419,6 +438,8 @@ body.locked{position:fixed;left:0;right:0;overflow:hidden}
     </div>
   </form></div></div>
   <div class="view" id="armsView" hidden></div>
+  <div class="sheetWrap" id="swapSheet" hidden><div class="sheetBg" data-swap="keep"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Swap gear"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-swap="keep" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
+  <div class="sheetWrap" id="shareSheet" hidden><div class="sheetBg" data-sh="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Share"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-sh="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
   <input type="file" id="armFile" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
 
   <div class="view" id="kitView" hidden>
@@ -512,6 +533,7 @@ $("connectBtn").onclick=async()=>{
   }catch(e){if(e?.name!=="AbortError")toast("Couldn't open that folder. Try again.")}
 };
 async function boot(){
+  if(SHARE_ID&&window.FIREBASE_CONFIG){showSharedPage();return}
   if(window.FIREBASE_CONFIG&&!cloudUser){startCloud();return}
   try{all=JSON.parse(localStorage.getItem(LS)||"[]")}catch{all=[]}
   try{kits=JSON.parse(localStorage.getItem(LSK)||"{}")||{}}catch{kits={}}
@@ -536,7 +558,7 @@ function render(){
   const items=live();
   const q=$("q").value.trim().toLowerCase(), sort=$("sort").value;
   const totQty=items.reduce((a,i)=>a+(+i.qty||0),0), totVal=items.reduce((a,i)=>a+(+i.qty||0)*(+i.value||0),0);
-  $("sItems").textContent=items.length;$("sQty").textContent=totQty;$("sCats").textContent=new Set(items.map(i=>i.category)).size;$("sVal").textContent=money(totVal);
+  $("sItems").textContent=items.length;$("sQty").textContent=totQty;$("sCats").textContent=new Set(items.map(i=>i.category)).size;$("sVal").textContent=money(totVal);{const pd=items.reduce((a,i)=>a+(+i.qty||0)*(+i.paid||0),0);$("sPaid").textContent=pd?` · paid ${money(pd)}`:""}
   const queued=window.LOOKUP_URL?0:items.filter(i=>i.marketCheck==="requested").length;
   $("sub").textContent=`KIT INVENTORY · ${items.length} LINE ITEMS${queued?` · ${queued} QUEUED FOR MARKET CHECK`:""}`;
   const counts={};items.forEach(i=>counts[i.category]=(counts[i.category]||0)+1);
@@ -679,10 +701,10 @@ window.addEventListener("beforeprint",()=>{if(!printingKit)buildPrint()});
 window.addEventListener("afterprint",()=>{printingKit=false});
 $("csvBtn").onclick=()=>{
   const items=live();if(!items.length){toast("Add some gear first");return}
-  const cols=["category","qty","name","brand","color","condition","retailNew","value","weight","setupOn","location","notes","priceSource","priceDate"];
+  const cols=["category","qty","name","brand","color","condition","retailNew","value","paid","weight","setupOn","location","notes","priceSource","priceDate"];
   const q=v=>`"${String(v??"").replace(/"/g,'""')}"`;
   const sorted=CATS.flatMap(c=>items.filter(i=>i.category===c).sort((a,b)=>(a.name||"").localeCompare(b.name||"")));
-  const csv="﻿"+[["Category","Qty","Item","Brand/Model","Color","Condition","New retail","Value each","Weight (oz)","Set up on","Stored","Notes","Price source","Price date"].map(q).join(","),...sorted.map(i=>cols.map(k=>q(i[k])).join(","))].join("\r\n");
+  const csv="﻿"+[["Category","Qty","Item","Brand/Model","Color","Condition","New retail","Value each","Paid each","Weight (oz)","Set up on","Stored","Notes","Price source","Price date"].map(q).join(","),...sorted.map(i=>cols.map(k=>q(i[k])).join(","))].join("\r\n");
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`gear-inventory-${today()}.csv`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);
 };
 
@@ -781,7 +803,7 @@ function autoContainer(kit){
     const k=prefs.findIndex(p=>t.includes(p)); if(k<0)return; const sc=100-k*5+(i.condition==="Needs-repair"?-50:0); if(sc>bs){bs=sc;best=i}});
   return best;
 }
-function containerFor(kit){const st=kits[kit.id]||{};if(st.container==="none")return null;if(st.container){const c=live().find(i=>i.id===st.container);if(c)return c}return autoContainer(kit)}
+function containerFor(kit){const st=kits[kit.id]||{};if(!st.container||st.container==="none")return null;return live().find(i=>i.id===st.container)||null}
 const itemText=i=>` ${[i.name,i.brand,i.notes].join(" ")} `.toLowerCase();
 const VISIBLE=new Set(["carrier","riflemag","pistolmag","ifak","pack","helmet","camo","rain","insul","belt","sun","coldhead"]);
 function colorFit(kit,i,sid){ if(!kit.colors.length||!i.color||(sid&&!VISIBLE.has(sid)))return 0; const c=i.color.toLowerCase(); return kit.colors.some(k=>c.includes(k))?1:-1 }
@@ -795,36 +817,41 @@ function score(kit,slotId,i){
   if(i.condition==="New"||i.condition==="Good")sc+=1; if(i.condition==="Needs-repair")sc-=3;
   return Math.max(sc,0.5);
 }
+function suggest(kit,sid,used){return candidates(kit,sid).find(i=>!used.has(i.id))||null}
 function candidates(kit,slotId){return live().filter(i=>!onLoan(i.id)).map(i=>({i,s:score(kit,slotId,i)})).filter(x=>x.s>0).sort((a,b)=>b.s-a.s).map(x=>x.i)}
 function solve(kit){
   const st=kits[kit.id]||{}; const picks=st.picks||{}; const used=new Set(); const out={};
   const box=containerFor(kit); if(box)used.add(box.id);
   const order=[...kit.req,...kit.opt];
   if(box){const sid=order.find(x=>!(picks[x])&&score(kit,x,box)>0);if(sid)out[sid]=box}
-  order.forEach(sid=>{const p=picks[sid]; if(p==="none"){out[sid]=null;return} if(p){const it=live().find(i=>i.id===p); if(it){out[sid]=it;used.add(it.id)}}});
-  order.forEach(sid=>{ if(sid in out)return; const c=candidates(kit,sid).find(i=>!used.has(i.id)); out[sid]=c||null; if(c)used.add(c.id) });
+  order.forEach(sid=>{const p=picks[sid]; if(!p||p==="none"){if(!(sid in out))out[sid]=null;return} const it=live().find(i=>i.id===p); if(it){out[sid]=it;used.add(it.id)}});
+  // anything mounted on packed gear (pouches on a packed belt, etc.) covers its slot too
+  const riders=ridersOf(new Set([...used,...(box?[box.id]:[])]));
+  order.forEach(sid=>{if(out[sid])return;const r=riders.find(i=>!used.has(i.id)&&score(kit,sid,i)>0);if(r){out[sid]=r;used.add(r.id)}});
   return out;
 }
 function coverage(kit){const a=solve(kit);const have=kit.req.filter(s=>a[s]).length;return {a,have,need:kit.req.length,pct:Math.round(100*have/Math.max(1,kit.req.length))}}
 async function setKit(kitId,patch){kits={...kits,[kitId]:{...(kits[kitId]||{}),...patch,updatedAt:now()}};renderKits();await persist()}
 function renderKits(){
-  if(!live().length){$("kitChips").innerHTML="";$("kitDetail").innerHTML=`<div class="empty"><b>No gear yet</b>Add your gear on the Inventory tab. Kits build themselves from what you own, matched by item name, brand and color.</div>`;return}
+  if(!live().length){$("kitChips").innerHTML="";$("kitDetail").innerHTML=`<div class="empty"><b>No gear yet</b>Add your gear on the Inventory tab. Then pack each kit with the gear you want in it. The kit suggests matching items you own.</div>`;return}
   const chip=k=>{const c=coverage(k);return `<button type="button" class="chip kchip" aria-pressed="${k.id===curKit}" data-k="${k.id}">${esc(k.name)}<small>${c.pct}%</small></button>`};
   $("kitChips").innerHTML=`<div class="kgroup"><span class="klabel">Training</span>${KITS.filter(k=>k.type==="train").map(chip).join("")}</div><div class="kgroup"><span class="klabel">Environments</span>${KITS.filter(k=>k.type==="env").map(chip).join("")}</div>`;
   const kit=KITS.find(k=>k.id===curKit)||KITS[0]; const {a,have,need,pct}=coverage(kit); const st=kits[kit.id]||{};
   const extras=(st.extras||[]).map(id=>live().find(i=>i.id===id)).filter(Boolean);
   const box=containerFor(kit);
   const used=new Set([...Object.values(a).filter(Boolean).map(i=>i.id),...extras.map(i=>i.id),...(box?[box.id]:[])]);
-  const boxOpts=[`<option value="__auto">${box&&!st.container?`Auto: ${esc(box.name)}`:"Auto pick"}</option>`,...containers().map(i=>`<option value="${esc(i.id)}"${st.container===i.id?" selected":""}>${esc(i.name)}${i.color?` (${esc(i.color)})`:""}</option>`),`<option value="none"${st.container==="none"?" selected":""}>No bag / carry loose</option>`].join("");
+  const sugBox=!box?autoContainer(kit):null;
+  const boxOpts=[`<option value="__auto">${sugBox?`Choose a bag (suggest: ${esc(sugBox.name)})`:"No bag chosen"}</option>`,...containers().map(i=>`<option value="${esc(i.id)}"${st.container===i.id?" selected":""}>${esc(i.name)}${i.color?` (${esc(i.color)})`:""}</option>`),`<option value="none"${st.container==="none"?" selected":""}>No bag / carry loose</option>`].join("");
   const riders=ridersOf(used);
   const val=[...[...used].map(id=>live().find(i=>i.id===id)),...riders].reduce((s,i)=>s+(+i.value||0)*(+i.qty||1),0);
   const kw=kitWeight([...used,...riders.map(i=>i.id)]);
   const row=(sid,essential)=>{const [label,, ,tip]=S[sid]; const it=a[sid]; const cands=candidates(kit,sid); const picked=(st.picks||{})[sid];
-    const opts=[`<option value="__auto">Auto pick</option>`,...cands.map(i=>`<option value="${esc(i.id)}"${it&&it.id===i.id&&picked?" selected":""}>${esc(i.name)}${i.color?` (${esc(i.color)})`:""}</option>`),`<option value="none"${picked==="none"?" selected":""}>Leave empty</option>`];
-    if(it&&!picked)opts[0]=`<option value="__auto" selected>Auto: ${esc(it.name)}${it.color?` (${esc(it.color)})`:""}</option>`;
+    const viaMount=it&&!(picked&&picked===it.id)&&it.mountedOn&&it.id!==box?.id;
+    const opts=[`<option value="__auto"${!picked||picked==="none"?" selected":""}>${viaMount?`On ${esc(itemById(it.mountedOn)?.name||"packed gear")}: ${esc(it.name)}`:"Not packed"}</option>`,...cands.map(i=>`<option value="${esc(i.id)}"${picked===i.id?" selected":""}>${esc(i.name)}${i.color?` (${esc(i.color)})`:""}</option>`)];
     const fit=it?colorFit(kit,it,sid):0;
-    const pill=!it?`<span class="pill ${essential?"gap":""}">${essential?"Gap":"Optional"}</span>`:onLoan(it.id)?`<span class="pill warn">On loan</span>`:fit<0?`<span class="pill warn">Color off</span>`:`<span class="pill ok">Packed</span>`;
-    const meta=it?esc([it.brand,it.color,it.location?`stored: ${it.location}`:""].filter(Boolean).join(" · ")||"—"):`<span class="meta">${esc(tip)}</span>`;
+    const sg=!it?suggest(kit,sid,used):null;
+    const pill=!it?(sg?`<button class="btn ghost packBtn" type="button" data-pack="${sid}" data-id="${esc(sg.id)}">Pack it</button>`:`<span class="pill ${essential?"gap":""}">${essential?"Gap":"Optional"}</span>`):onLoan(it.id)?`<span class="pill warn">On loan</span>`:fit<0?`<span class="pill warn">Color off</span>`:`<span class="pill ok">Packed</span>`;
+    const meta=it?esc([viaMount?`mounted on ${itemById(it.mountedOn)?.name||""}`:"",it.brand,it.color,it.location?`stored: ${it.location}`:""].filter(Boolean).join(" · ")||"—"):sg?`<span class="meta">You have: <b>${esc(sg.name)}</b>${sg.color?` (${esc(sg.color)})`:""}</span>`:`<span class="meta">${esc(tip)}</span>`;
     return `<div class="slot"><div class="lbl">${esc(label)}${essential?"":"<small>optional</small>"}</div><select data-slot="${sid}" aria-label="${esc(label)}">${opts.join("")}</select><div class="meta">${meta}</div>${pill}</div>`};
   const gaps=kit.req.filter(s=>!a[s]);
   const off=Object.entries(a).filter(([sid,i])=>i&&colorFit(kit,i,sid)<0).map(([s,i])=>`${esc(i.name)} (${esc(i.color)})`);
@@ -832,7 +859,7 @@ function renderKits(){
   $("kitDetail").innerHTML=`
    <div class="kitHead"><div><h2>${esc(kit.name)}</h2><p>${esc(kit.blurb)}</p>${kit.colors.length?`<div class="palette">Best colors: ${esc(kit.colors.slice(0,6).join(", "))}</div>`:""}</div>
      <div class="meter"><b>${have}/${need}</b> <span>essentials covered</span><div class="bar"><i style="width:${pct}%"></i></div><span>${used.size+riders.length} items · ${money(val)}</span><br><span>${kw.oz?fmtWt(kw.oz):"weight —"} · ${kw.n}/${kw.total} weighed</span></div>
-     <div class="kitBtns"><label class="packin"><span>Pack it in</span><select id="kitBox">${boxOpts}</select>${!containers().length?`<small>Add a bag or case under Cases &amp; Bags</small>`:""}</label><button class="btn ghost" type="button" id="kitPrint">Print packing list</button><button class="btn ghost" type="button" id="kitReset">Reset to auto</button></div></div>
+     <div class="kitBtns"><label class="packin"><span>Pack it in</span><select id="kitBox">${boxOpts}</select>${!containers().length?`<small>Add a bag or case under Cases &amp; Bags</small>`:""}</label><button class="btn ghost" type="button" id="kitShare">Share</button><button class="btn ghost" type="button" id="kitPrint">Print packing list</button><button class="btn ghost" type="button" id="kitSuggest">Pack all suggestions</button><button class="btn ghost" type="button" id="kitReset">Clear kit</button></div></div>
    ${gaps.length||off.length?`<div class="gaps"><h3>${gaps.length?`${gaps.length} gap${gaps.length>1?"s":""} to fill`:"Check these"}</h3><ul>${gaps.map(s=>`<li><b>${esc(S[s][0])}</b>: ${esc(S[s][3])}</li>`).join("")}${off.length?`<li>Color doesn't suit ${esc(kit.name.toLowerCase())}: ${off.join(", ")}</li>`:""}</ul></div>`:""}
    <div class="slots"><div class="slotsHead">Essentials <span>${have} of ${need}</span></div>${kit.req.map(s=>row(s,true)).join("")}</div>
    <div class="slots"><div class="slotsHead">Optional <span>${kit.opt.filter(s=>a[s]).length} of ${kit.opt.length}</span></div>${kit.opt.map(s=>row(s,false)).join("")}</div>
@@ -850,7 +877,13 @@ $("kitDetail").addEventListener("change",e=>{
 });
 $("kitDetail").addEventListener("click",e=>{
   const rm=e.target.closest("[data-rmx]"); if(rm){const st=kits[curKit]||{};setKit(curKit,{extras:(st.extras||[]).filter(id=>id!==rm.dataset.rmx)});return}
-  if(e.target.id==="kitReset"){setKit(curKit,{picks:{},extras:[],container:undefined});toast("Kit reset to auto picks");return}
+  if(e.target.id==="kitShare"){openShare("kit",curKit);return}
+  const pk=e.target.closest("[data-pack]");if(pk){const st=kits[curKit]||{};setKit(curKit,{picks:{...(st.picks||{}),[pk.dataset.pack]:pk.dataset.id}});return}
+  if(e.target.id==="kitSuggest"){const kit=KITS.find(k=>k.id===curKit);const st=kits[kit.id]||{};const {a}=coverage(kit);const box=containerFor(kit);const used=new Set([...Object.values(a).filter(Boolean).map(i=>i.id),...(box?[box.id]:[]),...(st.extras||[])]);const picks={...(st.picks||{})};let n=0;
+    [...kit.req,...kit.opt].forEach(sid=>{if(a[sid])return;const sg=suggest(kit,sid,used);if(sg){picks[sid]=sg.id;used.add(sg.id);n++}});
+    const patch={picks};if(!box){const sb=autoContainer(kit);if(sb){patch.container=sb.id;n++}}
+    setKit(curKit,patch);toast(n?`Packed ${n} suggested item${n>1?"s":""}`:"No suggestions to pack");return}
+  if(e.target.id==="kitReset"){if(!e.target.dataset.armed){e.target.dataset.armed="1";e.target.textContent="Tap again to clear";return}setKit(curKit,{picks:{},extras:[],container:undefined});toast("Kit cleared");return}
   if(e.target.id==="kitPrint"){
     const kit=KITS.find(k=>k.id===curKit);const {a}=coverage(kit);const st=kits[kit.id]||{};const box=containerFor(kit);
     const extras=(st.extras||[]).map(id=>live().find(i=>i.id===id)).filter(Boolean);
@@ -1317,13 +1350,13 @@ function openDetail(i,quiet){
   const links=(Array.isArray(i.marketSources)?i.marketSources:[]).filter(s=>/^https:\/\//.test(s?.url||"")).slice(0,4);
   const f=(label,val,sub,opt)=>(!val&&opt)?"":`<div><dt>${esc(label)}</dt><dd>${val||"—"}${sub?`<small>${sub}</small>`:""}</dd></div>`;
   const wt=i.weight!=null&&i.weight!==""?esc(fmtWt(i.weight)):lookingUp.has(i.id)?"Looking up…":lookupsOn()?(i.weightStatus==="notfound"?"Not found":"Pending"):"—";
-  const priceState=lookingUp.has(i.id)?"Looking up…":(i.marketCheck==="requested"&&!window.LOOKUP_URL)?"Market check queued":i.priceSource==="market"?`Market check ${esc(i.priceDate||"")}`:i.priceSource==="manual"?"Entered by you":"";
+  const priceState=lookingUp.has(i.id)?"Looking up…":/^estimate/i.test(i.priceNote||"")&&i.priceSource==="market"?`Estimate ${esc(i.priceDate||"")}`:(i.marketCheck==="requested"&&!window.LOOKUP_URL)?"Market check queued":i.priceSource==="market"?`Market check ${esc(i.priceDate||"")}`:i.priceSource==="manual"?"Entered by you":"";
   $("detail").innerHTML=`
    <div class="dh"><div><h2>${esc(i.name)}${i.nick?` <span class="tag" style="font-size:.8rem">${esc(i.nick)}</span>`:""}</h2><div class="dsub">${esc([i.brand,i.color,i.category].filter(Boolean).join(" · "))}</div></div>
-     <div class="vbtns"><button class="btn" type="button" data-dact="edit">Edit</button>${lookupsOn()&&(window.LOOKUP_URL||(i.marketCheck!=="requested"&&!isGun))?(lookingUp.has(i.id)?`<button class="btn ghost" type="button" disabled>Looking up…</button>`:`<button class="btn ghost" type="button" data-dact="mkt">${isGun?"Look up weight":"Market check"}</button>`):""}</div></div>
+     <div class="vbtns"><button class="btn" type="button" data-dact="edit">Edit</button><button class="btn ghost" type="button" data-dact="share">Share</button>${lookupsOn()&&(window.LOOKUP_URL||(i.marketCheck!=="requested"&&!isGun))?(lookingUp.has(i.id)?`<button class="btn ghost" type="button" disabled>Looking up…</button>`:`<button class="btn ghost" type="button" data-dact="mkt">${isGun?"Look up weight":"Market check"}</button>`):""}</div></div>
    <dl>
      ${f("Quantity",esc(String(+i.qty||0)))}${f("Condition",esc((i.condition||"").replace("-"," ")))}
-     ${f("Value each",i.value?money(i.value):"",priceState)}${f("Total value",i.value?money((+i.value)*(+i.qty||1)):"")}
+     ${f("Value each",i.value?money(i.value):"",priceState)}${f("Total value",i.value?money((+i.value)*(+i.qty||1)):"")}${f("What I paid",i.paid?m2(i.paid):"",i.paid&&(+i.qty||1)>1?`${m2((+i.paid)*(+i.qty||1))} for all ${+i.qty}`:i.paid&&i.value?(+i.value>=+i.paid?`worth ${money(i.value-i.paid)} more now`:`worth ${money(i.paid-i.value)} less now`):"",1)}
      ${f("New retail",i.retailNew?money(i.retailNew):"","",1)}${f("Used range",(i.usedLow||i.usedHigh)?`${money(i.usedLow)}–${money(i.usedHigh)}`:"","",1)}
      ${f("Weight each",wt,i.weightNote?esc(i.weightNote):i.weightSource==="manual"?"Entered by you":"")}${f("Stored at",esc(i.location||""))}
      ${f("Goes with",gun?`<button class="lnk" type="button" data-dview="${esc(gun.id)}">${esc(gun.name)}</button>`:"","",1)}
@@ -1348,6 +1381,7 @@ $("detail").addEventListener("click",async e=>{
   const a=b.dataset.dact;
   if(a==="close"){closeDetail();return}
   if(a==="edit"){openForm(viewing);return}
+  if(a==="share"){openShare("item",viewing.id);return}
   if(a==="ser"){showSer=!showSer;openDetail(viewing,true);if(curTab==="arms")renderArms();return}
   if(a==="mkt"){const r=all.find(x=>x.id===viewing.id);if(!r)return;if(window.LOOKUP_URL){const p=runLookups([r.id]);openDetail(r,true);await p;return}Object.assign(r,{marketCheck:"requested",marketCheckAt:now(),updatedAt:now()});render();await persist();openDetail(r);toast("Market check queued")}
 });
@@ -1429,7 +1463,7 @@ if(window.LOOKUP_URL){
 
 /* ---------- sheets, scroll lock, add button ---------- */
 let lockY=0;
-function anySheetOpen(){return !$("form").hidden||!$("detail").hidden||!!document.querySelector(".view:not([hidden]) .edSheet")}
+function anySheetOpen(){return !$("form").hidden||!$("detail").hidden||!$("swapSheet").hidden||!$("shareSheet").hidden||!!document.querySelector(".view:not([hidden]) .edSheet")}
 function syncLock(){
   const want=anySheetOpen(),has=document.body.classList.contains("locked");
   if(want&&!has){lockY=window.scrollY;document.body.style.top=`-${lockY}px`;document.body.classList.add("locked")}
@@ -1443,6 +1477,8 @@ document.addEventListener("click",e=>{
 });
 document.addEventListener("keydown",e=>{
   if(e.key!=="Escape")return;
+  if(!$("shareSheet").hidden){shareState=null;renderShare();return}
+  if(!$("swapSheet").hidden){swap=null;renderSwap();return}
   if(!$("form").hidden){cancelForm();return}
   if(!$("detail").hidden){closeDetail();return}
   if(curTab==="arms"&&armImport){armImport=null;renderArms();return}
@@ -1467,7 +1503,9 @@ const ARM={
 };
 const ARM_KEYS=Object.keys(ARM);
 let showSer=false,armImport=null;
-const armOf=i=>i.arm&&ARM[i.arm]?i.arm:i.category==="Firearms"?"FA":i.category==="Suppressors"?"SU":"";
+const TOOLISH=/multi.?tool|leatherman|gerber|\bsaw\b|shovel|plier|wrench|screwdriver|sharpener|machete|e-?tool/i;
+const autoArm=i=>i.category==="Firearms"?"FA":i.category==="Suppressors"?"SU":(i.category==="Knives & Tools"&&!TOOLISH.test([i.name,i.brand].join(" ")))?"KN":"";
+const armOf=i=>i.arm==="no"?"":i.arm&&ARM[i.arm]?i.arm:autoArm(i);
 const maskSer=s=>!s?"":showSer?s:(s.length>4?"•••• "+s.slice(-4):"••••");
 const nrm=s=>String(s||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
 function nextArmId(sec,taken){
@@ -1485,7 +1523,7 @@ function renderArms(){
   const noSer=secs.reduce((a,s)=>a+s.rows.filter(i=>!i.serial&&s.k!=="KN").length,0);
   v.innerHTML=`<div class="vhead"><div><h2>Arms Room</h2><p>Serial numbers and records for your guns, suppressors, optics, lights, lasers and knives, for insurance and theft reports. Only you can see this when signed in.</p></div>
     <div class="vbtns"><button class="btn ghost" type="button" data-arm="ser">${showSer?"Hide serials":"Show serials"}</button><button class="btn ghost" type="button" data-arm="import">Import record</button><button class="btn ghost" type="button" data-arm="print">Print record</button><button class="btn" type="button" data-arm="new" id="armAdd">+ Add</button></div></div>
-  <section class="stats"><div class="stat"><b>${n}</b><span>On record</span></div><div class="stat"><b>${secs[0].rows.length}</b><span>Firearms</span></div><div class="stat"><b>${money(val)}</b><span>Record value</span></div><div class="stat"><b>${noSer}</b><span>Missing serial</span></div></section>
+  <section class="stats"><div class="stat"><b>${n}</b><span>On record</span></div><div class="stat"><b>${money(val)}</b><span>Value</span></div><div class="stat"><b>${(()=>{const pd=secs.reduce((a,s)=>a+s.rows.reduce((b,i)=>b+(+i.paid||0)*(+i.qty||1),0),0);return pd?money(pd):"—"})()}</b><span>What I paid</span></div><div class="stat"><b>${noSer}</b><span>Missing serial</span></div></section>
   ${n?secs.filter(s=>s.rows.length).map(s=>{const sv=s.rows.reduce((b,i)=>b+(+i.value||0)*(+i.qty||1),0);
     return `<section class="group"><div class="ghead"><h3>${esc(ARM[s.k].label)}</h3><span>${s.rows.length}${sv?` · ${money(sv)}`:""}</span></div>
     ${s.rows.map(i=>{const on=itemById(i.mountedOn);const sub=[i.brand,i.armType,i.caliber,on?"on "+on.name:i.setupOn].filter(Boolean).join(" · ");
@@ -1615,12 +1653,12 @@ async function doImport(){
       const it=all.find(i=>i.id===r.match.id);if(!it)return;
       const val=keep.value;delete keep.value;delete keep.name;delete keep.brand;delete keep.qty;delete keep.condition;delete keep.category;
       if(keep.notes&&it.notes&&!it.notes.includes(keep.notes))keep.notes=it.notes+" · "+keep.notes;
-      Object.assign(it,keep);if(val&&!+it.value){it.value=val;it.valueSource="manual";it.priceSource="manual"}
+      Object.assign(it,keep);if(val&&!+it.value){it.value=val;it.valueSource="manual";it.priceSource="manual"}if(val&&!+it.paid)it.paid=val;
       if(!it.caliber&&d.caliber)it.caliber=d.caliber;it.updatedAt=t;idMap["new:"+d.armId]=it.id;r.id=it.id;
     }else{
       const id=(crypto.randomUUID?crypto.randomUUID():"g"+Date.now()+Math.random().toString(36).slice(2));
       const rec={id,createdAt:t,updatedAt:t,...keep,weightStatus:"pending"};
-      if(keep.value){rec.valueSource="manual";rec.priceSource="manual"}
+      if(keep.value){rec.valueSource="manual";rec.priceSource="manual";rec.paid=keep.value}
       if(on&&!r.gun)rec.setupOn=on;
       all.push(rec);idMap["new:"+d.armId]=id;r.id=id;
     }
@@ -1646,27 +1684,28 @@ $("armFile").addEventListener("change",async e=>{
     armImport=planImport(rows.map(d=>({d})),f.name);renderArms();
   }catch(err){toast(err.message||"Couldn't read that file",4000)}
 });
-function openArmForm(sec){openForm();const s=sec||"FA";$("fCat").value=ARM[s].cat;fireFields();$("fArm").value=s;recFields()}
+function openArmForm(sec){openForm();const s=sec||"FA";$("fCat").value=ARM[s].cat;fireFields();$("fArm").value=s==="FA"?"":s;recFields()}
 
 /* form: record fields */
+const effArm=()=>{const v=$("fArm").value;return v==="no"?"":v||autoArm({category:$("fCat").value,name:$("fName").value,brand:$("fBrand").value})};
 function recFields(){
-  const s=$("fArm").value;document.querySelectorAll(".f.rec").forEach(e=>e.hidden=!s);
+  const s=effArm();document.querySelectorAll(".f.rec").forEach(e=>e.hidden=!s);
   document.querySelectorAll("[data-recs]").forEach(e=>{e.hidden=!s||!e.dataset.recs.split(" ").includes(s)});
   if(s){$("fArmTypeL").textContent=ARM[s].type;$("fArmId").placeholder=editing?.armId||"Auto ("+nextArmId(s)+")"}
 }
 $("fArm").addEventListener("change",recFields);
-$("fCat").addEventListener("change",()=>{if(!$("fArm").value&&!editing){const c=$("fCat").value;if(c==="Firearms")$("fArm").value="FA";else if(c==="Suppressors")$("fArm").value="SU";recFields()}});
+$("fCat").addEventListener("change",recFields);$("fName").addEventListener("change",recFields);
 const REC_IDS={fArmId:"armId",fSerial:"serial",fArmType:"armType",fAcq:"acquired",fFrom:"acquiredFrom",fBbl:"bbl",fForm:"nfaForm",fStamp:"stampDate",fAdapter:"adapter",fArmMount:"armMount",fBatt:"battery",fBlade:"bladeLen",fSteel:"steel",fHandle:"handle",fMarks:"markings"};
 const _openForm=openForm;
 openForm=function(item){
   _openForm(item);
-  $("fArm").value=item?(item.arm||armOf(item)):"";
+  $("fArm").value=item?(item.arm||""):"";
   Object.entries(REC_IDS).forEach(([el,k])=>$(el).value=item?.[k]||"");
   recFields();
 };
 const _readForm=readForm;
 readForm=function(){
-  const d=_readForm();const s=$("fArm").value;d.arm=s;
+  const d=_readForm();const s=effArm();d.arm=$("fArm").value;
   Object.entries(REC_IDS).forEach(([el,k])=>d[k]=s?$(el).value.trim():(editing?.[k]||""));
   if(s&&!d.armId)d.armId=(editing&&editing.arm===s&&editing.armId)||nextArmId(s);
   if(s==="KN")d.serial="";
@@ -1705,6 +1744,143 @@ function armDetail(i){
     ["Form",esc(i.nfaForm||"")],["Stamp / approval",esc(fmtD(i.stampDate))],["Mount / adapter",esc(i.adapter||i.armMount||"")],["Battery",esc(i.battery||"")],
     ["Blade length",esc(i.bladeLen||"")],["Steel",esc(i.steel||"")],["Handle",esc(i.handle||"")],["Markings",esc(i.markings||"")]].filter(r=>r[1]);
   return `<div class="sect"><h3>Serial record · ${esc(ARM[s].one)}</h3><dl>${L.map(r=>`<div><dt>${esc(r[0])}</dt><dd>${r[1]}</dd></div>`).join("")}</dl></div>`;
+}
+
+/* ---------- v10: paid, swap prompt, photo ID, sharing ---------- */
+const m2=n=>"$"+(+n||0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2});
+
+/* what I paid: form + detail + stats */
+const _openForm10=openForm;
+openForm=function(item){_openForm10(item);$("fPaid").value=item?.paid||"";$("idOut").hidden=true};
+const _readForm10=readForm;
+readForm=function(){const d=_readForm10();const v=parseFloat($("fPaid").value);d.paid=isFinite(v)&&v>0?Math.round(v*100)/100:"";return d};
+
+/* swap prompt: new gear mounted where similar gear already sits */
+const GENERIC=new Set(["pouch","pouches","double","single","triple","mag","mags","magazine","molle","small","medium","large","black","coyote","ranger","green","multicam","tan","grey","gray","the","and","with","for","gen","new","old","kit","holder","case","bag","rig"]);
+function slotsOf(i){const t=itemText(i);return Object.keys(S).filter(sid=>{const[,,kws,,ex]=S[sid];return kws.some(k=>t.includes(k))&&!ex.some(k=>t.includes(k))})}
+function wordsOf(i){const br=new Set(String(i.brand||"").toLowerCase().split(/\W+/));return new Set(String(i.name||"").toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=3&&!GENERIC.has(w)&&!br.has(w)))}
+function similarGear(a,b){
+  if(a.category!==b.category)return false;
+  const sa=slotsOf(a),sb=new Set(slotsOf(b));if(sa.some(s=>sb.has(s)))return true;
+  const wb=wordsOf(b);return [...wordsOf(a)].some(w=>wb.has(w));
+}
+let swap=null;
+function maybeSwap(rec,before){
+  if(!rec.mountedOn||(before&&before.mountedOn===rec.mountedOn))return;
+  const host=itemById(rec.mountedOn);if(!host)return;
+  const old=live().filter(i=>i.id!==rec.id&&i.mountedOn===rec.mountedOn&&similarGear(i,rec));
+  if(!old.length)return;
+  swap={rec:rec.id,host:host.id,old:old.map(i=>i.id),keep:new Set()};renderSwap();
+}
+function renderSwap(){
+  const el=$("swapSheet");if(!swap){el.hidden=true;syncLock();return}
+  const host=itemById(swap.host),rec=itemById(swap.rec);
+  el.querySelector(".panel").innerHTML=`<h2>Swap it out?</h2>
+   <p>You put <b>${esc(rec?.name||"")}</b> on <b>${esc(host?.name||"")}</b>. It already has:</p>
+   <div class="swapList">${swap.old.map(id=>{const i=itemById(id);return i?`<label class="swapItem"><input type="checkbox" data-sw="${esc(id)}" ${swap.keep.has(id)?"":"checked"}><span><b>${esc(i.name)}</b><small>${esc([i.brand,i.color,i.nick].filter(Boolean).join(" · "))}</small></span></label>`:""}).join("")}</div>
+   <p class="hint">Checked items come off ${esc(host?.name||"it")} and go back to spare gear in your inventory.</p>
+   <div class="actions"><span class="spacer"></span><button class="btn ghost" type="button" data-swap="keep">Keep both</button><button class="btn" type="button" data-swap="move">Move off</button></div>`;
+  el.hidden=false;syncLock();
+}
+$("swapSheet").addEventListener("change",e=>{const c=e.target.closest("[data-sw]");if(!c||!swap)return;if(c.checked)swap.keep.delete(c.dataset.sw);else swap.keep.add(c.dataset.sw)});
+$("swapSheet").addEventListener("click",async e=>{
+  const b=e.target.closest("[data-swap]");if(!b||!swap)return;
+  if(b.dataset.swap==="move"){const t=now();let n=0;swap.old.forEach(id=>{if(swap.keep.has(id))return;const i=all.find(x=>x.id===id);if(i){i.mountedOn="";i.setupOn="";i.updatedAt=t;n++}});
+    const host=itemById(swap.host);swap=null;renderSwap();render();await persist();if(viewing&&!$("detail").hidden)openDetail(itemById(viewing.id),true);toast(n?`Moved ${n} off ${host?.name||""} to spare gear`:"Kept both");return}
+  swap=null;renderSwap();
+});
+{const _sc=saveCurrent;saveCurrent=async function(extra){const before=editing?{...editing}:null;const rec=await _sc(extra);if(rec&&!extra)setTimeout(()=>maybeSwap(rec,before),350);return rec}}
+
+/* identify unknown gear from a photo */
+function shrinkImage(file,max=1024){return new Promise((res,rej)=>{const img=new Image();img.onload=()=>{const s=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement("canvas");c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);c.getContext("2d").drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(img.src);res(c.toDataURL("image/jpeg",0.82).split(",")[1])};img.onerror=()=>rej(new Error("Couldn't open that photo"));img.src=URL.createObjectURL(file)})}
+$("idBtn").onclick=()=>{if(!window.LOOKUP_URL||!cloudUser){toast("Sign in to use photo ID");return}$("idFile").click()};
+$("idFile").addEventListener("change",async e=>{
+  const f=e.target.files[0];e.target.value="";if(!f)return;
+  const out=$("idOut");out.hidden=false;out.innerHTML=`<span class="tag">Looking at your photo…</span>`;$("idBtn").disabled=true;
+  try{
+    const img=await shrinkImage(f);const tok=await firebase.auth().currentUser.getIdToken();
+    const r=await fetch(window.LOOKUP_URL.replace(/\/$/,"")+"/identify",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+tok},body:JSON.stringify({image:img,hint:$("fName").value.trim()})});
+    const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||"Photo ID failed");
+    const g=j.result||{};
+    if(g.name&&(!$("fName").value.trim()||$("fName").dataset.fromPhoto))$("fName").value=g.name,$("fName").dataset.fromPhoto="1";
+    if(g.brand&&!$("fBrand").value.trim())$("fBrand").value=g.brand;
+    if(g.category&&CATS.includes(g.category)&&!editing)$("fCat").value=g.category,fireFields(),$("fCat").dispatchEvent(new Event("change"));
+    if(g.color&&!$("fColor").value.trim())$("fColor").value=g.color;
+    out.innerHTML=`<span class="tag">Photo ID · ${esc(g.confidence||"low")} confidence</span><br>${esc(g.summary||"")}${g.brand?"":" Brand unknown, so prices and weight will be estimated for a typical one."}`;
+  }catch(err){out.innerHTML=`<span class="tag">Photo ID</span><br>${esc(err.message||"Didn't work")}`}
+  finally{$("idBtn").disabled=false}
+});
+
+/* share a piece of gear (and everything on it) or a kit */
+function treeOf(rootId){
+  const out=[rootId];let grow=true;const set=new Set(out);
+  const root=itemById(rootId);
+  while(grow){grow=false;live().forEach(i=>{if(!set.has(i.id)&&(set.has(i.mountedOn)||(root?.category==="Firearms"&&i.forGun===rootId&&!i.mountedOn))){set.add(i.id);out.push(i.id);grow=true}})}
+  return out.map(itemById).filter(Boolean);
+}
+const shareRow=(i,parent,prices)=>({id:i.id,name:i.name||"",brand:i.brand||"",color:i.color||"",category:i.category||"",nick:i.nick||"",qty:+i.qty||1,weight:i.weight!=null&&i.weight!==""?+i.weight:null,parent:parent||"",caliber:i.category==="Firearms"?(i.caliber||""):"",...(prices?{value:+i.value||0,paid:+i.paid||0}:{})});
+let shareState=null;
+function openShare(kind,id){
+  let title,rows;
+  if(kind==="item"){const it=itemById(id);if(!it)return;title=it.name;rows=treeOf(id)}
+  else{const kit=KITS.find(k=>k.id===id);const {a}=coverage(kit);const st=kits[kit.id]||{};const box=containerFor(kit);const ids=new Set([...(box?[box.id]:[]),...Object.values(a).filter(Boolean).map(i=>i.id),...(st.extras||[])]);rows=[...ids].map(itemById).filter(Boolean);ridersOf(ids).forEach(r=>rows.push(r));title=kit.name+" kit"}
+  let from="";try{from=localStorage.getItem("gearLocker.shareName")||""}catch{}
+  const existing=(kits._shares||{})[kind+":"+id];
+  shareState={kind,id,title,rows,from,prices:false,link:existing?shareUrl(existing):"",sid:existing||""};renderShare();
+}
+const shareUrl=sid=>location.origin+location.pathname.replace(/index\.html$/,"")+"?s="+sid;
+function renderShare(){
+  const el=$("shareSheet");const s=shareState;if(!s){el.hidden=true;syncLock();return}
+  const wt=s.rows.reduce((a,i)=>a+(i.weight!=null&&i.weight!==""?(+i.weight)*(+i.qty||1):0),0);
+  el.querySelector(".panel").innerHTML=`<h2>Share ${esc(s.title)}</h2>
+   <p>Sends a read-only page with <b>${s.rows.length} item${s.rows.length>1?"s":""}</b>: names, brands, colors${wt?`, weights (${fmtWt(wt)} total)`:""}. Your friend doesn't need an account. Serial numbers, notes and where you store things are never included.</p>
+   <div class="swapList">${s.rows.slice(0,12).map(i=>`<div class="swapItem"><span><b>${esc(i.name)}</b><small>${esc([i.brand,i.color].filter(Boolean).join(" · "))}</small></span></div>`).join("")}${s.rows.length>12?`<div class="hint">and ${s.rows.length-12} more</div>`:""}</div>
+   <div class="f"><label for="shFrom">Your name on the page (optional)</label><input id="shFrom" value="${esc(s.from)}" placeholder="Blake"></div>
+   <label class="keep"><input type="checkbox" id="shPrices" ${s.prices?"checked":""}> Include values and what I paid</label>
+   ${s.link?`<div class="f"><label for="shLink">Link</label><input id="shLink" readonly value="${esc(s.link)}"></div><p class="hint">Changes you make later don't show until you tap Update link.</p>`:""}
+   <div class="actions">${s.sid?`<button class="btn ghost" type="button" data-sh="stop">Stop sharing</button>`:""}<span class="spacer"></span><button class="btn ghost" type="button" data-sh="close">Close</button><button class="btn" type="button" data-sh="go">${s.sid?"Update &amp; send link":"Create &amp; send link"}</button></div>`;
+  el.hidden=false;syncLock();
+}
+async function publishShare(){
+  const s=shareState;if(!cloudUser||!fsdb){toast("Sign in to share");return}
+  s.from=$("shFrom").value.trim().slice(0,40);s.prices=$("shPrices").checked;try{localStorage.setItem("gearLocker.shareName",s.from)}catch{}
+  const ids=new Set(s.rows.map(i=>i.id));
+  const rows=s.rows.map((i,k)=>{let par=i.mountedOn&&ids.has(i.mountedOn)?i.mountedOn:"";if(!par&&k>0&&s.kind==="item"&&i.forGun&&ids.has(i.forGun))par=i.forGun;return shareRow(i,par,s.prices)});
+  const sid=s.sid||(Array.from(crypto.getRandomValues(new Uint8Array(15)),b=>"abcdefghijkmnpqrstuvwxyz23456789"[b%32]).join(""));
+  const doc={owner:cloudUser.uid,title:s.title,kind:s.kind,from:s.from,prices:s.prices,items:rows,updatedAt:now()};
+  try{await fsdb.collection("shares").doc(sid).set(doc)}catch(e){toast("Couldn't create the link: "+(e.code==="permission-denied"?"sharing isn't switched on yet":e.message),6000);return}
+  kits={...kits,_shares:{...(kits._shares||{}),[s.kind+":"+s.id]:sid}};await persist();
+  s.sid=sid;s.link=shareUrl(sid);renderShare();
+  try{if(navigator.share){await navigator.share({title:s.title+" · Gear Locker",text:`${s.from?s.from+"'s ":""}${s.title}`,url:s.link});return}}catch(e){if(e.name==="AbortError")return}
+  try{await navigator.clipboard.writeText(s.link);toast("Link copied. Paste it in a text.")}catch{$("shLink")?.select();toast("Copy the link and send it")}
+}
+$("shareSheet").addEventListener("click",async e=>{
+  const b=e.target.closest("[data-sh]");if(!b||!shareState)return;const a=b.dataset.sh;
+  if(a==="close"){shareState=null;renderShare();return}
+  if(a==="go"){b.disabled=true;await publishShare();b.disabled=false;return}
+  if(a==="stop"){const s=shareState;try{await fsdb.collection("shares").doc(s.sid).delete()}catch{}const m={...(kits._shares||{})};delete m[s.kind+":"+s.id];kits={...kits,_shares:m};await persist();shareState=null;renderShare();toast("Link turned off")}
+});
+
+/* shared page (no sign-in) */
+const SHARE_ID=new URLSearchParams(location.search).get("s");
+async function showSharedPage(){
+  document.body.classList.add("sharing");document.querySelector(".wrap:not(#sharedPage)").hidden=true;$("gate").hidden=true;const v=$("sharedPage");v.hidden=false;v.innerHTML=`<p class="hint">Loading…</p>`;
+  try{
+    if(!firebase.apps.length)firebase.initializeApp(window.FIREBASE_CONFIG);
+    const snap=await firebase.firestore().collection("shares").doc(SHARE_ID).get();
+    if(!snap.exists)throw new Error("This link was turned off or doesn't exist.");
+    const d=snap.data();const items=Array.isArray(d.items)?d.items:[];
+    const kids=p=>items.filter(i=>(i.parent||"")===p);
+    const wt=items.reduce((a,i)=>a+(i.weight!=null?(+i.weight)*(+i.qty||1):0),0),wn=items.filter(i=>i.weight!=null).length;
+    const val=items.reduce((a,i)=>a+(+i.value||0)*(+i.qty||1),0),paid=items.reduce((a,i)=>a+(+i.paid||0)*(+i.qty||1),0);
+    const line=(i,depth)=>`<div class="shItem" style="margin-left:${Math.min(depth,4)*18}px">${depth?`<span class="shOn">on ${esc(items.find(x=>x.id===i.parent)?.name||"")}</span>`:""}<b>${i.qty>1?i.qty+"× ":""}${esc(i.name)}${i.nick?` <span class="tag">${esc(i.nick)}</span>`:""}</b><small>${esc([i.brand,i.color,i.caliber,i.weight!=null?fmtWt(i.weight):"",d.prices&&i.value?"worth "+money(i.value):"",d.prices&&i.paid?"paid "+money(i.paid):""].filter(Boolean).join(" · "))}</small></div>`+kids(i.id).map(k=>line(k,depth+1)).join("");
+    const roots=items.filter(i=>!i.parent||!items.some(x=>x.id===i.parent));
+    v.innerHTML=`<header><div><div class="sub">GEAR LOCKER · SHARED${d.from?" BY "+esc(d.from.toUpperCase()):""}</div><h1>${esc(d.title||"Gear")}</h1></div></header>
+     <section class="stats"><div class="stat"><b>${items.length}</b><span>Items</span></div><div class="stat"><b>${wt?fmtWt(wt):"—"}</b><span>Weight${wn<items.length&&wt?` (${wn}/${items.length})`:""}</span></div>${d.prices?`<div class="stat"><b>${money(val)}</b><span>Value</span></div><div class="stat"><b>${paid?money(paid):"—"}</b><span>Paid</span></div>`:""}</section>
+     <div class="shList">${roots.map(r=>line(r,0)).join("")}</div>
+     <p class="hint" style="margin-top:28px">Updated ${esc(new Date(d.updatedAt||Date.now()).toLocaleDateString())}. <a href="${esc(location.pathname)}">Make your own Gear Locker</a></p>`;
+    document.title=(d.title||"Gear")+" · Gear Locker";
+  }catch(e){v.innerHTML=`<div class="empty"><b>Can't open this link</b>${esc(e.code==="permission-denied"?"This link was turned off or doesn't exist.":e.message||"")}</div>`}
 }
 
 boot();
