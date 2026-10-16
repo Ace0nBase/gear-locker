@@ -86,7 +86,8 @@ When done searching, your final message must be ONLY this JSON object, no other 
 }
 
 const textOf = blocks => (blocks || []).filter(b => b.type === "text").map(b => b.text).join("");
-function findJson(text) {
+function findJson(text, keys) {
+  keys = keys || ["value", "weightOz", "retailNew"];
   const t = String(text || "").replace(/```(?:json)?/gi, "");
   const starts = [];
   for (let i = 0; i < t.length; i++) if (t[i] === "{") starts.push(i);
@@ -100,7 +101,7 @@ function findJson(text) {
       else if (c === "}" && --depth === 0) {
         const raw = t.slice(starts[k], j + 1);
         for (const cand of [raw, raw.replace(/[\r\n]+/g, " ")]) {
-          try { const o = JSON.parse(cand); if (o && typeof o === "object" && ("value" in o || "weightOz" in o || "retailNew" in o)) return o; } catch {}
+          try { const o = JSON.parse(cand); if (o && typeof o === "object" && keys.some(k => k in o)) return o; } catch {}
         }
         break;
       }
@@ -263,6 +264,35 @@ Reply with ONLY this JSON:
   if (!j) throw new Error("couldn't read the battery answer");
   return { none: !!j.none, battery: String(j.battery || "").slice(0, 40), count: Math.max(0, Math.min(8, +j.count || 1)), life: String(j.life || "").slice(0, 80), swapMonths: Math.max(0.25, Math.min(60, +j.swapMonths || 6)) };
 }
+
+/* ---------- ammo price per round ---------- */
+async function ammoLookup(env, a) {
+  const ask = `Find what this ammo costs per round to buy online in the US RIGHT NOW (in stock).
+Ammo: ${a.caliber} ${a.brand} ${a.load}
+Use web search (at most 4 searches). AmmoSeek, Lucky Gunner, Target Sports USA, Palmetto State Armory, Brownells, MidwayUSA, Sportsman's Warehouse and Bass Pro are good sources. Price per round = box price ÷ rounds in the box (use the best in-stock price; ignore shipping unless it's included).
+1) cpr: the per-round price of THIS exact product (same brand and load). If the brand or load is blank, use a typical in-stock price for that caliber and load type.
+2) low: the cheapest in-stock ammo in the same caliber and the same kind (range/FMJ vs. defensive/JHP vs. match), any brand.
+Reply with ONLY this JSON:
+{"cpr": number|null, "where": "store name", "url": "https link to that product page", "low": {"cpr": number|null, "desc": "brand + load, e.g. 'Blazer Brass 115gr FMJ'", "where": "store name", "url": "https link"}, "note": "one short line, e.g. 'Sold in 50-rd boxes; case of 1,000 is cheaper'"}`;
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 4 }];
+  const messages = [{ role: "user", content: ask }];
+  let data;
+  for (let i = 0; i < 3; i++) {
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 3000, tools, messages }) });
+    data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data?.error?.message || ("Claude API error " + r.status));
+    if (data.stop_reason !== "pause_turn") break;
+    messages.push({ role: "assistant", content: data.content });
+  }
+  const j = findJson(textOf(data.content), ["low", "note"]);
+  if (!j) throw new Error("couldn't read the ammo price answer");
+  const num = v => { const n = +v; return isFinite(n) && n > 0 && n < 50 ? Math.round(n * 1000) / 1000 : null; };
+  const url = u => /^https:\/\//.test(u || "") ? String(u).slice(0, 400) : "";
+  const lo = j.low || {};
+  return { cpr: num(j.cpr), where: String(j.where || "").slice(0, 40), url: url(j.url),
+    low: num(lo.cpr) ? { cpr: num(lo.cpr), desc: String(lo.desc || "").slice(0, 80), where: String(lo.where || "").slice(0, 40), url: url(lo.url) } : null,
+    note: String(j.note || "").slice(0, 140) };
+}
 async function lookupOne(env, it) {
   const clean = {
     id: String(it.id || "").slice(0, 80), name: String(it.name || "").slice(0, 120), brand: String(it.brand || "").slice(0, 120),
@@ -289,7 +319,7 @@ export default {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: h });
     const url = new URL(req.url);
     if (url.pathname === "/" || url.pathname === "/health") return json({ ok: true, service: "gear-locker-api" }, 200, h);
-    if (!["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/battery"].includes(url.pathname) || req.method !== "POST") return json({ error: "Not found" }, 404, h);
+    if (!["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/battery", "/ammo"].includes(url.pathname) || req.method !== "POST") return json({ error: "Not found" }, 404, h);
     if (!env.ANTHROPIC_API_KEY) return json({ error: "Lookup service isn't set up yet (missing API key)." }, 503, h);
 
     let user;
@@ -330,6 +360,12 @@ export default {
         return json({ watches: pub() }, 200, h);
       }
       return json({ watches: pub() }, 200, h);
+    }
+    if (url.pathname === "/ammo") {
+      const a = { caliber: String(body.caliber || "").slice(0, 40), brand: String(body.brand || "").slice(0, 60), load: String(body.load || "").slice(0, 80) };
+      if (!a.caliber) return json({ error: "Add a caliber first" }, 400, h);
+      try { return json({ result: await ammoLookup(env, a) }, 200, h); }
+      catch (e) { return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/battery") {
       try { return json({ result: await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) }) }, 200, h); }

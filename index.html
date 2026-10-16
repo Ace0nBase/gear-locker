@@ -418,6 +418,18 @@ body.appCover::after{content:"";position:fixed;inset:0;z-index:600;background:va
   #printSheet .dopecard th{text-align:center}
 }
 .pvNote{display:block;font-size:.85em;padding:8px 10px;margin-bottom:8px;border-radius:8px;background:rgba(255,200,80,.18);border:1px solid rgba(255,200,80,.45)}
+.ammoPs{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+.ammoP{border:1px solid var(--line,#3a3a30);border-radius:12px;padding:12px;background:rgba(255,255,255,.03)}
+.ammoP.deal{border-color:#7fb069;box-shadow:0 0 0 1px #7fb069 inset}
+.apTop b{display:block}.apTop small,.apMeta{opacity:.7;font-size:.8em}
+.apGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0}
+.apGrid span{display:block;font-size:.72em;opacity:.7;text-transform:uppercase;letter-spacing:.04em}
+.apGrid b{font-size:1.15em}.apGrid i{font-style:normal;font-size:.7em;opacity:.7}.apGrid small{display:block;font-size:.72em;opacity:.8}
+.apGrid small.up{color:#d9a441}.apGrid small.dn{color:#7fb069}
+.apDeal{background:rgba(127,176,105,.18);border-radius:8px;padding:6px 8px;font-size:.85em;margin-bottom:8px}
+.apBtns{display:flex;flex-wrap:wrap;gap:6px}.apBtns .btn{padding:6px 10px;font-size:.85em;text-decoration:none}
+.apShot{display:flex;gap:6px;margin-top:8px}.apShot input{flex:1;min-width:0}
+.apMeta{display:block;margin-top:8px}
 </style>
 </head>
 <body>
@@ -914,7 +926,7 @@ function score(kit,slotId,i){
   const [, cats, kws, , ex]=S[slotId]; const t=itemText(i);
   if(i.category==="Firearms")return 0;
   if(ex.some(k=>t.includes(k)))return 0;
-  const kw=kws.some(k=>t.includes(k)), cat=cats.includes(i.category);
+  const kw=kws.some(k=>hasKw(t,k)), cat=cats.includes(i.category);
   if(!kw)return 0;
   let sc=5+(cat?2:0)+colorFit(kit,i,slotId)*2;
   if(i.condition==="New"||i.condition==="Good")sc+=1; if(i.condition==="Needs-repair")sc-=3;
@@ -1438,7 +1450,7 @@ function startCloud(){
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
   $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{[LS,LSK,LSD,"gearLocker.uid"].forEach(k=>localStorage.removeItem(k))}catch{};render();await auth.signOut();try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch{}try{["gearLocker.curKit","gearLocker.tab"].forEach(k=>localStorage.removeItem(k))}catch{}location.reload()};
 }
-const APP_VERSION="25";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+const APP_VERSION="26";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 if("serviceWorker" in navigator&&location.protocol==="https:"){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
@@ -1870,7 +1882,7 @@ readForm=function(){const d=_readForm10();const v=parseFloat($("fPaid").value);d
 
 /* swap prompt: new gear mounted where similar gear already sits */
 const GENERIC=new Set(["pouch","pouches","double","single","triple","mag","mags","magazine","molle","small","medium","large","black","coyote","ranger","green","multicam","tan","grey","gray","the","and","with","for","gen","new","old","kit","holder","case","bag","rig"]);
-function slotsOf(i){const t=itemText(i);return Object.keys(S).filter(sid=>{const[,,kws,,ex]=S[sid];return kws.some(k=>t.includes(k))&&!ex.some(k=>t.includes(k))})}
+function slotsOf(i){const t=itemText(i);return Object.keys(S).filter(sid=>{const[,,kws,,ex]=S[sid];return kws.some(k=>hasKw(t,k))&&!ex.some(k=>t.includes(k))})}
 function wordsOf(i){const br=new Set(String(i.brand||"").toLowerCase().split(/\W+/));return new Set(String(i.name||"").toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=3&&!GENERIC.has(w)&&!br.has(w)))}
 function similarGear(a,b){
   if(a.category!==b.category)return false;
@@ -2145,7 +2157,7 @@ score=function(kit,slotId,i){
   if(NEVER_SLOT.has(i.category))return 0;
   if(!cats.includes(i.category))return 0;
   if(ex.some(k=>t.includes(k)))return 0;
-  if(!kws.some(k=>t.includes(k)))return 0;
+  if(!kws.some(k=>hasKw(t,k)))return 0;
   let sc=7+colorFit(kit,i,slotId)*2;
   if(i.condition==="New"||i.condition==="Good")sc+=1;if(i.condition==="Needs-repair")sc-=3;
   return Math.max(sc,0.5);
@@ -2306,7 +2318,7 @@ function classify(i){
     out.add(RX.pistolword.test(nm)?"magpouch_pistol":"magpouch_rifle");
   else if(magCat&&RX.magword.test(nm)&&!/loader|coupler|holster|can\b|box\b/.test(nm))out.add(RX.pistolword.test(nm)?"mag_pistol":"mag_rifle");
   // everything else: the slot library, gated by category
-  GENERIC_KINDS.forEach(k=>{const d=S[k];if(!d)return;const [,cats,kws,,ex]=d;if(!cats.includes(c))return;const t=nm+" "+(k==="ifak"||k==="traumabag"?nt:"");if(ex.some(x=>t.includes(x)))return;if(kws.some(x=>t.includes(x)))out.add(k)});
+  GENERIC_KINDS.forEach(k=>{const d=S[k];if(!d)return;const [,cats,kws,,ex]=d;if(!cats.includes(c))return;const t=nm+" "+(k==="ifak"||k==="traumabag"?nt:"");if(ex.some(x=>t.includes(x)))return;if(kws.some(x=>hasKw(t,x)))out.add(k)});
   if(out.has("traumabag"))out.delete("ifak");
   if(out.has("magpouch_rifle")||out.has("magpouch_pistol")){out.delete("ifak")}
   return done();
@@ -3025,6 +3037,76 @@ $("inviteBtn").onclick=async()=>{
     $("gBack").onclick=()=>{gate.hidden=true;gate.classList.remove("previewing");$("gBack").remove();form.querySelectorAll("input,button").forEach(x=>x.disabled=false);$("gateMsg").textContent="Sign in to open your locker."};
   }
 })();
+
+/* ---------- v26: smarter kit matching + ammo market prices ---------- */
+/* 1) keywords must start a word ("tent" no longer matches "reTENTion", "amp" no longer matches "lAMP") */
+const _kwRe={};
+function hasKw(t,k){const r=_kwRe[k]||(_kwRe[k]=new RegExp("(^|[^a-z0-9])"+k.trim().replace(/[.*+?^${}()|[\]\\]/g,"\\$&")));return r.test(t)}
+all.forEach(i=>{try{delete i._kinds}catch{}});
+
+/* 2) ammo market prices (kept separate from the inventory total) */
+const AMMO_STALE=3*864e5;
+const ammoName=a=>[a.caliber,a.brand,a.load].filter(Boolean).join(" ");
+const buyUrl=a=>a.mkt?.url||"https://www.google.com/search?tbm=shop&q="+encodeURIComponent(ammoName(a)+" ammo");
+const lowUrl=a=>a.mkt?.low?.url||"https://www.google.com/search?tbm=shop&q="+encodeURIComponent((a.mkt?.low?.desc||a.caliber)+" ammo");
+const ammoDeal=a=>{const m=a.mkt;if(!m||!+a.alertCpr)return null;const best=[m.cpr,m.low?.cpr].filter(x=>+x>0);const b=best.length?Math.min(...best):0;return b&&b<=+a.alertCpr?b:null};
+let ammoBusy=new Set(),ammoAutoRan=false;
+async function checkAmmo(ids,quiet){
+  if(!window.LOOKUP_URL||!cloudUser){if(!quiet)toast("Sign in to check prices");return}
+  ids=ids.filter(id=>!ammoBusy.has(id));if(!ids.length)return;ids.forEach(id=>ammoBusy.add(id));renderExtra();
+  let ok=0,err="";
+  const one=async id=>{const a=db.ammo.find(x=>x.id===id&&!x.deleted);if(!a)return;
+    try{const j=await apiPost("/ammo",{caliber:a.caliber||"",brand:a.brand||"",load:a.load||""});const r=j.result||{};
+      const cur=db.ammo.find(x=>x.id===id&&!x.deleted);if(cur){const hist=(cur.mkt?.hist||[]).slice(-11);if(+r.cpr)hist.push([today(),+r.cpr]);
+        cur.mkt={cpr:+r.cpr||null,where:r.where||"",url:r.url||"",low:r.low&&+r.low.cpr?r.low:null,note:r.note||"",at:today(),hist};cur.updatedAt=now();ok++}}
+    catch(e){err=e.message}finally{ammoBusy.delete(id)}};
+  const q=[...ids];await Promise.all([0,1].map(async()=>{while(q.length)await one(q.shift())}));
+  await persist();renderExtra();updateBadges();
+  if(!quiet)toast(ok?`Prices updated for ${ok} ammo line${ok>1?"s":""}`:"Price check: "+(err||"no results"),4000);
+  const deals=L("ammo").filter(ammoDeal);if(deals.length&&quiet)toast(`Ammo deal: ${ammoName(deals[0])} at $${ammoDeal(deals[0]).toFixed(2)}/rd`,6000);
+}
+{const _r=RENDER.ammo;RENDER.ammo=()=>{_r();const v=$("ammoView");const recs=L("ammo");
+  // stats: what you paid vs. what it's worth today
+  const st=v.querySelector(".stats");if(st){const paidStat=[...st.querySelectorAll(".stat")].find(s=>/Ammo value/.test(s.textContent));if(paidStat)paidStat.querySelector("span").textContent="What I paid";
+    const priced=recs.filter(a=>+a.mkt?.cpr);const mv=priced.reduce((s,a)=>s+(+a.mkt.cpr)*(+a.rounds||0),0);
+    st.insertAdjacentHTML("beforeend",`<div class="stat"><b>${priced.length?money(mv):"—"}</b><span>Worth today</span></div>`)}
+  if(recs.length){
+    const head=v.querySelector(".vhead > div");head?.insertAdjacentHTML("beforeend",`<p class="hint" style="margin:4px 0 0">Ammo is kept out of your inventory total since you shoot it.</p>`);
+    const busyAll=recs.some(a=>ammoBusy.has(a.id));
+    const cards=recs.slice().sort((a,b)=>(a.caliber||"").localeCompare(b.caliber||"")).map(a=>{const m=a.mkt||{};const deal=ammoDeal(a);const busy=ammoBusy.has(a.id);
+      const diff=+m.cpr&&+a.cpr?(m.cpr-a.cpr)/a.cpr:null;
+      return `<div class="ammoP${deal?" deal":""}"><div class="apTop"><b>${esc(ammoName(a)||"Ammo")}</b><small>${(+a.rounds||0).toLocaleString()} rds${a.location?" · "+esc(a.location):""}</small></div>
+       <div class="apGrid">
+        <div><span>I paid</span><b>${+a.cpr?"$"+(+a.cpr).toFixed(2):"—"}<i>/rd</i></b></div>
+        <div><span>Today${m.where?" · "+esc(m.where):""}</span><b>${busy?"…":+m.cpr?"$"+(+m.cpr).toFixed(2):"—"}<i>/rd</i></b>${diff!=null?`<small class="${diff>0?"up":"dn"}">${diff>0?"▲":"▼"} ${Math.abs(diff*100).toFixed(0)}% vs. paid</small>`:""}</div>
+        <div><span>Cheapest similar</span><b>${busy?"…":m.low?"$"+(+m.low.cpr).toFixed(2):"—"}<i>/rd</i></b>${m.low?.desc?`<small>${esc(m.low.desc)}${m.low.where?" · "+esc(m.low.where):""}</small>`:""}</div>
+       </div>
+       ${deal?`<div class="apDeal">Under your $${(+a.alertCpr).toFixed(2)}/rd alert</div>`:""}
+       <div class="apBtns">
+        <a class="btn" href="${esc(buyUrl(a))}" target="_blank" rel="noopener noreferrer">Buy this</a>
+        ${m.low?`<a class="btn ghost" href="${esc(lowUrl(a))}" target="_blank" rel="noopener noreferrer">Buy cheapest</a>`:""}
+        <button class="btn ghost" type="button" data-act="ammoshot" data-id="${esc(a.id)}">I shot some</button>
+        <button class="btn ghost" type="button" data-act="ammocheck" data-id="${esc(a.id)}"${busy?" disabled":""}>${busy?"Checking…":"Check price"}</button>
+       </div>
+       <div class="apShot" id="shot_${esc(a.id)}" hidden><input type="number" min="1" step="1" inputmode="numeric" placeholder="Rounds" aria-label="Rounds shot"><button class="btn" type="button" data-act="ammotake" data-id="${esc(a.id)}">Take off</button></div>
+       <small class="apMeta">${m.at?`Checked ${esc(fmtDate(m.at))}`:"Not checked yet"}${+a.alertCpr?` · alert under $${(+a.alertCpr).toFixed(2)}/rd`:` · set a price alert in Edit`}${m.note?` · ${esc(m.note)}`:""}</small></div>`}).join("");
+    const html=`<div class="slotsHead">Prices <span>${window.LOOKUP_URL?`<button class="btn ghost" type="button" data-act="ammocheckall"${busyAll?" disabled":""}>${busyAll?"Checking…":"Check all prices"}</button>`:""}</span></div><p class="hint" style="margin:4px 0 8px">Prices refresh on their own every few days when you open Ammo. Set an alert price on a line and it's flagged when it drops below.</p><div class="ammoPs">${cards}</div>`;
+    const tables=v.querySelectorAll(".scroll");const anchor=tables[0]||st;anchor?.insertAdjacentHTML("afterend",html);
+  }
+  // edit form: price alert field
+  const f=v.querySelector('form[data-ed="ammo"]');if(f&&!f.querySelector('[name="alertCpr"]')){const d=ED.ammo?.draft||{};const acts=f.querySelector(".actions");acts?.insertAdjacentHTML("beforebegin",fld("alertCpr","Alert me when it's under ($/rd)",d.alertCpr,{type:"number",step:"0.01",ph:"0.25"}))}
+  // refresh stale prices in the background, once per app open
+  if(!ammoAutoRan&&window.LOOKUP_URL&&cloudUser){ammoAutoRan=true;const stale=recs.filter(a=>a.caliber&&(!a.mkt?.at||Date.now()-new Date(a.mkt.at+"T12:00:00")>AMMO_STALE)).slice(0,6).map(a=>a.id);if(stale.length)setTimeout(()=>checkAmmo(stale,true),800)}
+}}
+{const _a=ACT.ammo;ACT.ammo=async(act,b,e)=>{
+  const id=b?.dataset?.id;
+  if(act==="ammocheckall"){await checkAmmo(L("ammo").filter(a=>a.caliber).map(a=>a.id));return}
+  if(act==="ammocheck"&&id){await checkAmmo([id]);return}
+  if(act==="ammoshot"&&id){const box=$("shot_"+id);if(box){box.hidden=!box.hidden;if(!box.hidden)box.querySelector("input").focus()}return}
+  if(act==="ammotake"&&id){const box=$("shot_"+id);const n=Math.round(+box.querySelector("input").value||0);if(n<=0){toast("Type how many rounds");return}
+    const a=db.ammo.find(x=>x.id===id&&!x.deleted);if(!a)return;a.rounds=Math.max(0,(+a.rounds||0)-n);a.updatedAt=now();await persist();toast(`${n.toLocaleString()} rds off ${ammoName(a)} · ${a.rounds.toLocaleString()} left`);renderExtra();updateBadges();return}
+  return _a?_a(act,b,e):undefined}}
+{const _bf=badgeFor;badgeFor=function(k){const n=_bf(k);return k==="ammo"?n+L("ammo").filter(ammoDeal).length:n}}
 
 boot();
 </script>
