@@ -441,6 +441,9 @@ body.appCover::after{content:"";position:fixed;inset:0;z-index:600;background:va
 .pmeta{font-size:.88em;margin-top:6px}
 .pfs{border:1px solid rgba(128,128,128,.3);border-radius:10px;padding:8px 10px;margin:10px 0}.pfs legend{display:flex;gap:6px;align-items:center;font-weight:600;padding:0 4px}
 @media print{#printSheet .pace{border:1px solid #000;margin:8pt 0;page-break-inside:avoid}#printSheet .pl{-webkit-print-color-adjust:exact;print-color-adjust:exact}#printSheet h3{margin:8pt 0 4pt}}
+.pgF{margin:4px 0;padding:4px 8px;border-radius:8px;font-size:.9em}.pgF small{display:block;opacity:.85}.pgF.have{background:rgba(127,176,105,.15)}.pgF.new{background:rgba(217,164,65,.18)}
+#pgForm,#paceForm{display:block}#pgForm .pace,#pgForm .secBlock{margin:10px 0}
+.pgN{align-items:flex-start;margin:6px 0}.pgGaps{margin:4px 0 0 18px;padding:0}.warnTxt{color:#b0882a}
 </style>
 </head>
 <body>
@@ -1462,7 +1465,7 @@ function startCloud(){
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
   $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{[LS,LSK,LSD,"gearLocker.uid"].forEach(k=>localStorage.removeItem(k))}catch{};render();await auth.signOut();try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch{}try{["gearLocker.curKit","gearLocker.tab"].forEach(k=>localStorage.removeItem(k))}catch{}location.reload()};
 }
-const APP_VERSION="27";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+const APP_VERSION="28";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 if("serviceWorker" in navigator&&location.protocol==="https:"){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
@@ -3262,6 +3265,79 @@ function printPace(p){const ids=PSTEP.map(([k])=>p[k]?.freq).filter(Boolean);con
 {const _od=openDetail;openDetail=function(i,quiet){_od(i,quiet);if(!i||!radios().some(r=>r.id===i.id))return;const n=L("freqs").filter(f=>(f.radios||{})[i.id]).length;const dl=$("detail").querySelector("dl");dl?.insertAdjacentHTML("beforeend",`<div><dt>Channels</dt><dd>${n} saved in Comms</dd></div>`)}}
 
 {const _f=$("fab").onclick;$("fab").onclick=()=>{if(curTab==="comms"&&commsTab==="pace"){paceEd={};renderExtra();return}_f()}}
+
+/* ---------- v28: build a PACE plan from location + situation, using your frequencies ---------- */
+const PG_SCEN=["Family at home (storm / power out)","Around town / neighborhood","Road trip / convoy","Day hike / backcountry","Hunting / camping trip","On the water","Range day / training","Team field exercise","Big event / crowd"];
+const PG_DIST=["Within sight (under ½ mile)","Same area (up to 3 miles)","Across town (3–20 miles)","Far apart (20+ miles)"];
+const PG_TERR=["Flat / open","Suburban","Dense city","Woods","Hills / mountains","Water"];
+const PG_CELL=["Good","Spotty","None / expect it to go down"];
+const PG_GRID=["Normal","Power out"];
+const PG_LIC=["Only me (ham)","Everyone has a ham license","GMRS license","Nobody is licensed"];
+const PG_DEV=["Phones","Baofeng / ham handheld","Mobile ham radio","GMRS radios","FRS walkie-talkies","MURS radios","Satellite messenger (inReach / ZOLEO)","CB radio"];
+let paceGen=null;
+function pgDefaults(){const inv=live().map(i=>(i.name+" "+(i.brand||"")).toLowerCase()).join(" | ");const dev=["Phones"];
+  if(radios().length)dev.push("Baofeng / ham handheld");if(/inreach|zoleo|spot x|garmin messenger|bivy stick/.test(inv))dev.push("Satellite messenger (inReach / ZOLEO)");if(/gmrs|midland|rocky talkie/.test(inv))dev.push("GMRS radios");
+  const last=commsSet().paceGen||{};return {location:last.location||"",scenario:last.scenario||PG_SCEN[0],distance:last.distance||PG_DIST[1],terrain:last.terrain||PG_TERR[1],cell:last.cell||PG_CELL[1],grid:last.grid||PG_GRID[0],people:"",licensed:last.licensed||(commsSet().callsign?PG_LIC[0]:PG_LIC[3]),devices:last.devices||dev,duration:"",notes:""}}
+const onRadio=f=>Object.values(f.radios||{}).some(Boolean);
+function pgCollect(){const f=$("pgForm");if(!f||!paceGen)return;const v=paceGen.in;f.querySelectorAll("[name]").forEach(el=>{if(el.name==="dev")return;v[el.name]=el.value});v.devices=[...f.querySelectorAll('[name="dev"]:checked')].map(x=>x.value)}
+function pgSheet(){const g=paceGen,v=g.in;const sel=(n,arr)=>`<select name="${n}">${optList(arr.map(x=>[x,x]),v[n])}</select>`;
+  let body="";
+  if(g.stage==="form"||g.stage==="busy"){const busy=g.stage==="busy";
+    body=`<h2>Build a PACE plan</h2><p class="hint">Tell it where and what. It builds the plan around the ${L("freqs").length} frequencies you've saved${window.LOOKUP_URL?" and, if you give an area, looks up real repeaters and the NOAA station there":""}.</p>
+    <div class="f"><label>Area</label><div class="cBar" style="margin:0"><input name="location" value="${esc(v.location)}" placeholder="St. Augustine, FL or a ZIP" style="flex:1;min-width:0"><button class="btn ghost" type="button" data-act="pggeo">Use my location</button></div><small class="hint">Leave blank to skip the local lookup. Only the area you type is sent, never your gear.</small></div>
+    <div class="row2"><div class="f"><label>Scenario</label>${sel("scenario",PG_SCEN)}</div><div class="f"><label>How far apart</label>${sel("distance",PG_DIST)}</div></div>
+    <div class="row2"><div class="f"><label>Terrain</label>${sel("terrain",PG_TERR)}</div><div class="f"><label>Cell service</label>${sel("cell",PG_CELL)}</div></div>
+    <div class="row2"><div class="f"><label>Power</label>${sel("grid",PG_GRID)}</div><div class="f"><label>Licenses</label>${sel("licensed",PG_LIC)}</div></div>
+    <div class="f"><label>Radios &amp; devices the group has</label><div class="radioPick">${PG_DEV.map(d=>`<label class="keep"><input type="checkbox" name="dev" value="${esc(d)}"${v.devices.includes(d)?" checked":""}> ${esc(d)}</label>`).join("")}</div></div>
+    <div class="row2"><div class="f"><label>Who's on it</label><input name="people" value="${esc(v.people)}" placeholder="Me, wife, 2 kids"></div><div class="f"><label>How long</label><input name="duration" value="${esc(v.duration)}" placeholder="Weekend, 3 days"></div></div>
+    <div class="f"><label>Anything else</label><input name="notes" value="${esc(v.notes)}" placeholder="Kids carry FRS radios; we'll split into 2 vehicles"></div>
+    ${g.err?`<div class="err">${esc(g.err)}</div>`:""}
+    <div class="actions"><span class="spacer"></span><button class="btn ghost" type="button" data-act="pgclose">Cancel</button><button class="btn" type="button" data-act="pgrun"${busy?" disabled":""}>${busy?"Building… (up to a minute)":"Build plan"}</button></div>`;
+  }else{const r=g.res;const fs=g.sent;
+    const fref=s=>{if(s.f!=null){const f=fs[s.f]&&L("freqs").find(x=>x.id===fs[s.f].id);if(!f)return "";const rs=radios().filter(x=>(f.radios||{})[x.id]).map(x=>x.name);
+        return `<div class="pgF have"><span class="mono">${esc(f.name)} · ${esc(mhz(f.rx))}${toneTxt(f)?" "+esc(toneTxt(f)):""}</span><small>${rs.length?"✓ On "+esc(rs.join(", ")):"✓ In your list · <b>not programmed on a radio yet</b>"}</small></div>`}
+      if(s.n!=null){const n=r.newFreqs[s.n];return n?`<div class="pgF new"><span class="mono">${esc(n.name)} · ${esc(n.rx)}${n.duplex?" "+n.duplex+n.offset:""}${n.tone?" T "+esc(n.tone):""}</span><small>New · not in your list${n.source?" · from "+esc(n.source):""}</small></div>`:""}return ""};
+    body=`<h2>${esc(r.name||"PACE plan")}</h2>${r.summary?`<p class="hint">${esc(r.summary)}</p>`:""}
+     <div class="pace">${PSTEP.map(([k,l])=>{const s=r.steps[k]||{};return `<div class="pstep"><span class="pl ${k}">${l[0]}</span><div><b>${esc(l)}: ${esc(s.method)}</b>${fref(s)}${s.detail?`<div>${esc(s.detail)}</div>`:""}${s.when?`<small>${esc(s.when)}</small>`:""}</div></div>`}).join("")}
+      ${r.checkin?`<div class="pmeta"><b>Check-ins:</b> ${esc(r.checkin)}</div>`:""}${r.rally?`<div class="pmeta"><b>Rally point:</b> ${esc(r.rally)}</div>`:""}${r.codes?`<div class="pmeta"><b>Code words:</b> ${esc(r.codes)}</div>`:""}</div>
+     ${r.newFreqs.length?`<div class="secBlock"><h3>Local frequencies it found</h3><p class="hint">Tick the ones to add to your list (group "${esc(pgGroup())}"). Double-check them on RepeaterBook before you program them.</p>${r.newFreqs.map((n,k)=>`<label class="keep pgN"><input type="checkbox" data-nf="${k}" checked> <span><b>${esc(n.name)}</b> <span class="mono">${esc(n.rx)}${n.duplex?" "+n.duplex+n.offset:""}${n.tone?" T "+esc(n.tone):""}</span><br><small>${esc([n.service,n.notes,n.source&&"source: "+n.source].filter(Boolean).join(" · "))}</small></span></label>`).join("")}</div>`:""}
+     ${r.gaps.length?`<div class="secBlock"><h3>Gaps to fix</h3><ul class="pgGaps">${r.gaps.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""}
+     <div class="actions"><button class="btn ghost" type="button" data-act="pgback">Change inputs</button><span class="spacer"></span><button class="btn ghost" type="button" data-act="pgedit">Edit first</button><button class="btn" type="button" data-act="pgsave">Save plan</button></div>`;
+  }
+  return `<div class="sheetWrap"><div class="sheetBg" data-act="pgclose"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Build a PACE plan"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-act="pgclose" aria-label="Close">✕</button></div><form class="panel" id="pgForm" onsubmit="return false">${body}</form></div></div>`}
+const pgGroup=()=>paceGen?.in?.location?("Local — "+paceGen.in.location).slice(0,40):"Local";
+{const _r=RENDER.comms;RENDER.comms=()=>{_r();const v=$("commsView");
+  if(commsTab==="pace"){const h=v.querySelector(".vhead");h?.insertAdjacentHTML("afterend",`<div class="cBar"><button class="btn" type="button" data-act="pgopen">Build a plan for me</button><span class="hint">from your area, situation and saved frequencies</span></div>`)}
+  if(paceGen)v.insertAdjacentHTML("beforeend",pgSheet());
+}}
+{const _c=collect;collect=function(view){if(view==="comms"&&paceGen&&paceGen.stage!=="result")pgCollect();return _c(view)}}
+async function pgSaveNew(){const r=paceGen.res;const keep=new Set([...document.querySelectorAll("#pgForm [data-nf]:checked")].map(x=>+x.dataset.nf));const map={};
+  const have=L("freqs");for(const [k,n] of r.newFreqs.entries()){if(!keep.has(k))continue;const dup=have.find(f=>mhz(f.rx)===mhz(n.rx)&&(f.duplex||"")===(n.duplex||""));if(dup){map[k]=dup.id;continue}
+    const svc=SERVICES.includes(n.service)?n.service:guessService(fnum(n.rx));
+    const rec=await upsertC("freqs",{name:n.name,short:n.name.replace(/[^\w ]/g,"").slice(0,7).toUpperCase(),rx:mhz(n.rx),duplex:TX_OK(svc)?n.duplex:"off",offset:n.duplex?mhz(n.offset)||"0.600":"",toneMode:n.tone?"Tone":"",txTone:n.tone||"",mode:n.mode||"FM",power:"High",service:svc,group:pgGroup(),notes:[n.notes,n.source&&"src: "+n.source].filter(Boolean).join(" · ")});map[k]=rec.id}
+  return map}
+function pgPlanRec(map){const r=paceGen.res,fs=paceGen.sent;const rec={name:r.name||"PACE plan",who:paceGen.in.people||"",checkin:r.checkin,rally:r.rally,codes:r.codes,notes:[r.summary,paceGen.in.location&&"Area: "+paceGen.in.location].filter(Boolean).join(" · ")};
+  PSTEP.forEach(([k])=>{const s=r.steps[k]||{};rec[k]={method:METHODS.includes(s.method)?s.method:(s.method||""),detail:s.detail||"",when:s.when||"",freq:s.f!=null?fs[s.f]?.id||"":s.n!=null?map[s.n]||"":""}});return rec}
+{const _a=ACT.comms;ACT.comms=async(act,b,e)=>{
+  if(act==="pgopen"){paceGen={stage:"form",in:pgDefaults()};renderExtra();return}
+  if(act==="pgclose"){paceGen=null;renderExtra();return}
+  if(act==="pgback"){paceGen.stage="form";renderExtra();return}
+  if(act==="pggeo"){pgCollect();if(!navigator.geolocation){toast("Location isn't available here");return}b.disabled=true;b.textContent="Finding…";
+    navigator.geolocation.getCurrentPosition(p=>{paceGen.in.location=`${p.coords.latitude.toFixed(2)}, ${p.coords.longitude.toFixed(2)}`;renderExtra()},()=>{toast("Couldn't get your location");renderExtra()},{timeout:10000,maximumAge:6e5});return}
+  if(act==="pgrun"){pgCollect();if(!window.LOOKUP_URL||!cloudUser){paceGen.err="Sign in to build plans.";renderExtra();return}
+    paceGen.err="";paceGen.stage="busy";renderExtra();const v=paceGen.in;await setComms({paceGen:{location:v.location,scenario:v.scenario,distance:v.distance,terrain:v.terrain,cell:v.cell,grid:v.grid,licensed:v.licensed,devices:v.devices}});
+    const sent=freqsSorted().slice(0,150);
+    try{const j=await apiPost("/pace",{...v,freqs:sent.map(f=>({name:f.name,rx:mhz(f.rx),duplex:f.duplex||"",offset:f.offset||"",tx:f.tx||"",tone:toneTxt(f),mode:f.mode||"FM",service:f.service||"",group:f.group||"",notes:f.notes||"",onRadio:onRadio(f)}))});
+      if(!paceGen)return;paceGen.res=j.result;paceGen.sent=sent.map(f=>({id:f.id}));paceGen.stage="result"}
+    catch(err){if(!paceGen)return;paceGen.stage="form";paceGen.err="Couldn't build it: "+err.message}renderExtra();return}
+  if(act==="pgsave"){const map=await pgSaveNew();const rec=pgPlanRec(map);await upsertC("pace",rec);const n=Object.keys(map).length;paceGen=null;commsTab="pace";toast(`PACE plan saved${n?` · ${n} new frequenc${n>1?"ies":"y"} added`:""}`,4000);render();return}
+  if(act==="pgedit"){const map=await pgSaveNew();paceEd=pgPlanRec(map);paceGen=null;commsTab="pace";render();return}
+  return _a(act,b,e)}}
+// saved plans: warn when a linked frequency isn't programmed on any radio
+{const _pc=paceCard;paceCard=function(p,print){let h=_pc(p,print);if(print||!radios().length)return h;
+  const miss=PSTEP.map(([k])=>p[k]?.freq).filter(Boolean).map(id=>L("freqs").find(f=>f.id===id)).filter(f=>f&&!onRadio(f));
+  if(miss.length)h=h.replace(/<\/article>$/,`<div class="pmeta warnTxt">⚠ Not on any radio yet: ${miss.map(f=>esc(f.name)).join(", ")}. <button class="btn ghost" type="button" data-act="ponradio" data-ids="${miss.map(f=>f.id).join(",")}" style="margin-top:6px">Put on ${radios().length>1?"all my radios":esc(radios()[0].name)}</button></div></article>`);return h}}
+{const _a=ACT.comms;ACT.comms=async(act,b,e)=>{if(act==="ponradio"){const rs=radios();for(const id of b.dataset.ids.split(",")){const f=db.freqs.find(x=>x.id===id&&!x.deleted);if(!f)continue;const r={...(f.radios||{})};rs.forEach(x=>r[x.id]=true);f.radios=r;f.updatedAt=now()}await persist();toast("Added. Export for CHIRP on Radios & export.",4000);renderExtra();return}return _a(act,b,e)}}
 
 boot();
 </script>

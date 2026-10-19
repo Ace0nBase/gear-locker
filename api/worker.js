@@ -293,6 +293,65 @@ Reply with ONLY this JSON:
     low: num(lo.cpr) ? { cpr: num(lo.cpr), desc: String(lo.desc || "").slice(0, 80), where: String(lo.where || "").slice(0, 40), url: url(lo.url) } : null,
     note: String(j.note || "").slice(0, 140) };
 }
+
+/* ---------- PACE plan builder ---------- */
+async function paceBuild(env, b) {
+  const fl = b.freqs.map(f => `${f.i}: ${f.name} | ${f.rx} MHz${f.duplex === "+" || f.duplex === "-" ? ` ${f.duplex}${f.offset}` : f.duplex === "split" ? ` tx ${f.tx}` : f.duplex === "off" ? " rx-only" : " simplex"}${f.tone ? " " + f.tone : ""} | ${f.mode} | ${f.service}${f.group ? " | " + f.group : ""}${f.notes ? " | " + f.notes : ""}${f.onRadio ? " | programmed" : " | not on a radio"}`).join("\n");
+  const ask = `Build a practical communications PACE plan (Primary, Alternate, Contingency, Emergency).
+
+Situation
+- Area: ${b.location || "not given"}
+- Scenario: ${b.scenario}
+- How far apart people will be: ${b.distance}
+- Terrain: ${b.terrain}
+- Cell coverage expected: ${b.cell}
+- Power / grid: ${b.grid}
+- Who: ${b.people || "a small group"}
+- Licenses: ${b.licensed}
+- Devices they have: ${b.devices.join(", ") || "phones"}
+- How long: ${b.duration || "a day"}
+- Other notes: ${b.notes || "none"}
+
+Their saved frequencies (index: details). PREFER these; refer to them by index:
+${fl || "(none saved)"}
+
+Rules
+- Each step must be a different method or path, each more robust than the last (e.g. cell → text/app → radio simplex/repeater → satellite messenger or pre-agreed meet point).
+- Only use radio methods the group actually has devices for. A Baofeng may transmit ONLY on amateur (ham) frequencies and only by licensed operators. GMRS needs a GMRS license and a GMRS-certified radio; FRS and MURS are license-free but need certified FRS/MURS radios. If nobody is licensed, don't plan to transmit on ham.
+- Simplex handheld range is ~1–3 mi on flat ground, less in woods/urban; a repeater covers ~20–50 mi. Pick accordingly for the distance and terrain.
+${b.location ? `- Use web search (at most 4 searches, e.g. RepeaterBook, the local ARES/RACES group, NOAA Weather Radio station list) to find REAL open 2 m / 70 cm repeaters and the NOAA weather station that cover "${b.location}". If one of the saved frequencies already matches, use the saved one. Only suggest a new frequency if you found it in a source; include the source.` : "- No area given: don't look anything up; use saved frequencies and general simplex/calling channels."}
+- Keep text short and usable on a pocket card.
+
+Reply with ONLY this JSON:
+{"name":"short plan name","summary":"one sentence",
+ "steps":{"p":{"method":"Cell call|Text / Signal|Radio|Ham repeater|Satellite messenger|Meet in person|Visual / signal panel|Email|Other","f":index or null,"n":index into newFreqs or null,"detail":"what exactly to do","when":"when to move to the next step"},"a":{...},"c":{...},"e":{...}},
+ "checkin":"schedule, e.g. 'Top of each hour, 5-min listen window'","rally":"advice for picking a rally point (don't invent an address)","codes":"2-3 simple code words",
+ "newFreqs":[{"name":"short name","rx":"146.940","duplex":"+|-|","offset":"0.600","tone":"103.5 or empty","mode":"FM","service":"Ham|GMRS|NOAA weather|MURS|FRS","notes":"where/what, e.g. 'W4XX repeater, Jacksonville'","source":"site name"}],
+ "gaps":["short things they're missing, e.g. 'No one else is licensed: get them GMRS radios or ham licenses'"]}`;
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 4 }];
+  const messages = [{ role: "user", content: ask }];
+  let data;
+  for (let i = 0; i < 4; i++) {
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 4000, ...(b.location ? { tools } : {}), messages }) });
+    data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data?.error?.message || ("Claude API error " + r.status));
+    if (data.stop_reason !== "pause_turn") break;
+    messages.push({ role: "assistant", content: data.content });
+  }
+  let j = findJson(textOf(data.content), ["steps"]);
+  if (!j) {
+    messages.push({ role: "assistant", content: data.content.filter(x => x.type !== "text" || (x.text || "").trim()) });
+    messages.push({ role: "user", content: "Now reply with ONLY the JSON object described above. No other text." });
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 3000, messages }) });
+    data = await r.json().catch(() => ({})); j = findJson(textOf(data.content || []), ["steps"]);
+  }
+  if (!j || typeof j.steps !== "object") throw new Error("couldn't read the plan, try again");
+  const S = (v, n) => String(v ?? "").slice(0, n);
+  const nf = (Array.isArray(j.newFreqs) ? j.newFreqs : []).slice(0, 8).map(f => ({ name: S(f.name, 30), rx: S(f.rx, 12), duplex: ["+", "-"].includes(f.duplex) ? f.duplex : "", offset: S(f.offset, 8), tone: S(f.tone, 8), mode: ["FM", "NFM", "AM"].includes(f.mode) ? f.mode : "FM", service: S(f.service, 20), notes: S(f.notes, 120), source: S(f.source, 60) })).filter(f => +f.rx > 0);
+  const steps = {};
+  for (const k of ["p", "a", "c", "e"]) { const s = j.steps[k] || {}; steps[k] = { method: S(s.method, 30), f: Number.isInteger(s.f) && s.f >= 0 && s.f < b.freqs.length ? s.f : null, n: Number.isInteger(s.n) && s.n >= 0 && s.n < nf.length ? s.n : null, detail: S(s.detail, 200), when: S(s.when, 120) }; }
+  return { name: S(j.name, 40), summary: S(j.summary, 200), steps, checkin: S(j.checkin, 120), rally: S(j.rally, 160), codes: S(j.codes, 160), newFreqs: nf, gaps: (Array.isArray(j.gaps) ? j.gaps : []).slice(0, 6).map(g => S(g, 160)) };
+}
 async function lookupOne(env, it) {
   const clean = {
     id: String(it.id || "").slice(0, 80), name: String(it.name || "").slice(0, 120), brand: String(it.brand || "").slice(0, 120),
@@ -319,7 +378,7 @@ export default {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: h });
     const url = new URL(req.url);
     if (url.pathname === "/" || url.pathname === "/health") return json({ ok: true, service: "gear-locker-api" }, 200, h);
-    if (!["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/battery", "/ammo"].includes(url.pathname) || req.method !== "POST") return json({ error: "Not found" }, 404, h);
+    if (!["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/battery", "/ammo", "/pace"].includes(url.pathname) || req.method !== "POST") return json({ error: "Not found" }, 404, h);
     if (!env.ANTHROPIC_API_KEY) return json({ error: "Lookup service isn't set up yet (missing API key)." }, 503, h);
 
     let user;
@@ -360,6 +419,14 @@ export default {
         return json({ watches: pub() }, 200, h);
       }
       return json({ watches: pub() }, 200, h);
+    }
+    if (url.pathname === "/pace") {
+      const S = (v, n) => String(v ?? "").slice(0, n);
+      const b = { location: S(body.location, 80), scenario: S(body.scenario, 60), distance: S(body.distance, 60), terrain: S(body.terrain, 60), cell: S(body.cell, 40), grid: S(body.grid, 40), people: S(body.people, 80), licensed: S(body.licensed, 80), duration: S(body.duration, 40), notes: S(body.notes, 300),
+        devices: (Array.isArray(body.devices) ? body.devices : []).slice(0, 12).map(d => S(d, 40)),
+        freqs: (Array.isArray(body.freqs) ? body.freqs : []).slice(0, 150).map((f, i) => ({ i, name: S(f.name, 30), rx: S(f.rx, 12), duplex: S(f.duplex, 6), offset: S(f.offset, 8), tx: S(f.tx, 12), tone: S(f.tone, 16), mode: S(f.mode, 4), service: S(f.service, 24), group: S(f.group, 30), notes: S(f.notes, 80), onRadio: !!f.onRadio })) };
+      try { return json({ result: await paceBuild(env, b) }, 200, h); }
+      catch (e) { return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/ammo") {
       const a = { caliber: String(body.caliber || "").slice(0, 40), brand: String(body.brand || "").slice(0, 60), load: String(body.load || "").slice(0, 80) };
