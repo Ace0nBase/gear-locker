@@ -1,15 +1,19 @@
+# Deployed automatically by Cloudflare Workers Builds on every push to main.
 name = "gear-locker-api"
 main = "worker.js"
-compatibility_date = "2026-06-01"
+compatibility_date = "2026-10-15"
+workers_dev = true
+# Keep any variables set in the dashboard; settings live in DEFAULTS inside worker.js.
+keep_vars = true
 
-[vars]
-FIREBASE_PROJECT = "gear-locker-c248c"
-ALLOWED_ORIGINS = "https://ace0nbase.github.io"
-MODEL = "claude-haiku-5-5"
-FALLBACK_MODEL = "claude-sonnet-5-5"
-MAX_ITEMS = "4"
-# Optional: comma-separated emails allowed to run (paid) lookups. Leave empty to allow every signed-in user.
-ALLOWED_EMAILS = ""
+# Price-alert storage
+[[kv_namespaces]]
+binding = "WATCH"
+id = "3830bb679d28482db6ca2ec6e69b95f1"
 
-# The Claude API key is a secret: add it in the Cloudflare dashboard
-# (Worker -> Settings -> Variables and Secrets -> Add -> Secret named ANTHROPIC_API_KEY).
+# Hourly price-alert checks
+[triggers]
+crons = ["17 * * * *"]
+
+# The Claude API key is a secret set in the Cloudflare dashboard
+# (Worker -> Settings -> Variables and Secrets -> ANTHROPIC_API_KEY). Deploys keep it.
