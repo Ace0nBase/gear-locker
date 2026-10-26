@@ -37,16 +37,19 @@ async function readLocalOverride() {
 
 const flag = new URLSearchParams(location.search).get("env") === "emulator";
 const local = isLocalHost(location.hostname);
-const loaded = flag && local ? await readLocalOverride() : null;
-if (loaded && loaded.rejected) {
-  window.FIREBASE_CONFIG = null;
-  window.LOOKUP_URL = "";
-  window.GEAR_QA = false;
-  window.GEAR_QA_READY = false;
-  window.GEAR_QA_BLOCKED = true;
-  window.GEAR_QA_REASON = loaded.reason;
-} else {
-  applyQaMode(window, location, loaded && loaded.override);
+// js/qa-sync.js already decided, before Firebase can start. Do not change that decision here.
+if (!window.GEAR_QA_READY && !window.GEAR_QA_BLOCKED) {
+  const loaded = flag && local ? await readLocalOverride() : null;
+  if (loaded && loaded.rejected) {
+    window.FIREBASE_CONFIG = null;
+    window.LOOKUP_URL = "";
+    window.GEAR_QA = false;
+    window.GEAR_QA_READY = false;
+    window.GEAR_QA_BLOCKED = true;
+    window.GEAR_QA_REASON = loaded.reason;
+  } else {
+    applyQaMode(window, location, loaded && loaded.override);
+  }
 }
 
 if (window.GEAR_QA_BLOCKED) {

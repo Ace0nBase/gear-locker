@@ -334,7 +334,7 @@ function openShare(kind,id){
   const existing=(kits._shares||{})[kind+":"+id];
   shareState={kind,id,title,rows,from,prices:false,link:existing?shareUrl(existing):"",sid:existing||""};renderShare();
 }
-var shareUrl=sid=>publicAppUrl()+"?s="+sid;
+var shareUrl=sid=>withAppQuery({s:sid});
 function renderShare(){
   const el=$("shareSheet");const s=shareState;if(!s){el.hidden=true;syncLock();return}
   const wt=s.rows.reduce((a,i)=>a+(i.weight!=null&&i.weight!==""?(+i.weight)*(+i.qty||1):0),0);
@@ -374,7 +374,8 @@ async function showSharedPage(){
   document.body.classList.add("sharing");document.querySelector(".wrap:not(#sharedPage)").hidden=true;$("gate").hidden=true;const v=$("sharedPage");v.hidden=false;v.innerHTML=`<p class="hint">Loading…</p>`;
   try{
     if(!initFirebase())throw new Error("Can't open this link.");
-    var shareDb=firebase.firestore();if(window.GEAR_QA){try{shareDb.useEmulator("127.0.0.1",8080)}catch(e){}}
+    var shareDb=firebase.firestore();
+    if(window.GEAR_QA&&firebase.app().options.projectId!=="demo-gear-locker")throw new Error("Can't open this link.");
     const snap=await shareDb.collection("shares").doc(SHARE_ID).get();
     if(!snap.exists)throw new Error("This link was turned off or doesn't exist.");
     const d=snap.data();const items=Array.isArray(d.items)?d.items:[];

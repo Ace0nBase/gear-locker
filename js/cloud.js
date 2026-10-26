@@ -64,14 +64,21 @@ function startAppCheck(){
   try{firebase.appCheck().activate(new firebase.appCheck.ReCaptchaV3Provider(key),true)}catch(e){}
 }
 function initFirebase(){
+  var emulatorFlag=new URLSearchParams(location.search).get("env")==="emulator";
+  if(emulatorFlag&&(!window.GEAR_QA||!window.FIREBASE_CONFIG||window.FIREBASE_CONFIG.projectId!=="demo-gear-locker"||window.FIREBASE_CONFIG.apiKey==="AIzaSyBexXFiQtDEnmlL2z0x4FXD7YCbeAHTGC4")){
+    window.GEAR_QA_BLOCKED=true;window.FIREBASE_CONFIG=null;window.LOOKUP_URL="";return false}
   if(window.GEAR_QA_BLOCKED||!window.FIREBASE_CONFIG)return false;
+  if(firebase.apps.length){
+    if((emulatorFlag||window.GEAR_QA)&&firebase.app().options.projectId!=="demo-gear-locker"){window.GEAR_QA_BLOCKED=true;window.FIREBASE_CONFIG=null;window.LOOKUP_URL="";return false}
+  }else firebase.initializeApp(window.FIREBASE_CONFIG);
   if(window.GEAR_QA){
-    if(window.FIREBASE_CONFIG.projectId!=="demo-gear-locker"||!/^http:\/\/(127\.0\.0\.1|localhost):8787\/?$/.test(String(window.LOOKUP_URL||""))){
-      window.GEAR_QA_BLOCKED=true;window.FIREBASE_CONFIG=null;window.LOOKUP_URL="";return false}
-  }
-  if(!firebase.apps.length)firebase.initializeApp(window.FIREBASE_CONFIG);
-  if(window.GEAR_QA){try{firebase.auth().useEmulator("http://127.0.0.1:9099",{disableWarnings:true})}catch(e){}}
-  else startAppCheck();
+    if(firebase.app().options.projectId!=="demo-gear-locker"){window.GEAR_QA_BLOCKED=true;window.FIREBASE_CONFIG=null;window.LOOKUP_URL="";return false}
+    if(!window.GEAR_EMULATORS){
+      firebase.auth().useEmulator("http://127.0.0.1:9099",{disableWarnings:true});
+      firebase.firestore().useEmulator("127.0.0.1",8080);
+      window.GEAR_EMULATORS=true;
+    }
+  }else startAppCheck();
   return true;
 }
 function verifyContinueUrl(){return window.GEAR_QA?"http://127.0.0.1:5500/?env=emulator":"https://ace0nbase.github.io/gear-locker/"}
@@ -79,8 +86,7 @@ function refreshVerify(){var b=$("verifyBanner");if(!b)return;var u=firebase.aut
 function startCloud(){
   if(!initFirebase())return;
   fsdb=firebase.firestore();
-  if(window.GEAR_QA){try{fsdb.useEmulator("127.0.0.1",8080)}catch(e){}}
-  else {try{fsdb.enablePersistence({synchronizeTabs:true}).catch(()=>{})}catch{}}
+  if(!window.GEAR_QA){try{fsdb.enablePersistence({synchronizeTabs:true}).catch(()=>{})}catch{}}
   const auth=firebase.auth();
   const P=firebase.auth.Auth.Persistence;
   let keep=true;try{keep=localStorage.getItem("gearLocker.keep")!=="0"}catch{}

@@ -19,6 +19,10 @@ test("the page has a content security policy and no inline app script", () => {
   assert.doesNotMatch(html, /onsubmit=/);
   assert.doesNotMatch(html, /minlength="8"/);
   assert.match(html, /js\/logic\.js/);
+  assert.match(html, /<script src="config\.js"><\/script>\s*<script src="js\/qa-sync\.js"><\/script>/);
+  const syncAt = html.indexOf("js/qa-sync.js");
+  const coreAt = html.indexOf("js/core.js");
+  assert.ok(syncAt > 0 && syncAt < coreAt);
   assert.match(html, /css\/app\.css/);
 });
 

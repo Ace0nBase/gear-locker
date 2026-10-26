@@ -6,6 +6,7 @@ const SHELL = [
   "./config.js",
   "./manifest.webmanifest",
   "./css/app.css",
+  "./js/qa-sync.js",
   "./js/qa-boot.js",
   "./js/qa-guard.js",
   "./js/logic.js",

@@ -17,6 +17,13 @@ function publicAppUrl(){
   if((location.protocol==="http:"||location.protocol==="https:")&&(host==="localhost"||host==="127.0.0.1"))return location.origin+path;
   return "https://ace0nbase.github.io/gear-locker/";
 }
+function withAppQuery(pairs){
+  var q=new URLSearchParams();
+  if(window.GEAR_QA)q.set("env","emulator");
+  Object.keys(pairs||{}).forEach(function(k){q.set(k,pairs[k])});
+  var s=q.toString();
+  return publicAppUrl()+(s?"?"+s:"");
+}
 var all=[], filter="All", editing=null, delArmed=false, dir=null, valueTouched=false;
 var live=()=>all.filter(i=>!i.deleted);
 $("fCat").innerHTML=CATS.map(c=>`<option>${c}</option>`).join("");

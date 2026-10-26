@@ -153,7 +153,7 @@ $("acct").insertAdjacentHTML("beforeend",`<button type="button" id="inviteBtn">I
   const cleanUrl=()=>{try{qs.delete("join");const q=qs.toString();history.replaceState(null,"",location.pathname+(q?"?"+q:"")+location.hash)}catch{}};
   // the invite button now sends the join link
   const inv=$("inviteBtn");
-  if(inv)inv.onclick=async()=>{const url=publicAppUrl()+"?join=1";
+  if(inv)inv.onclick=async()=>{const url=withAppQuery({join:"1"});
     const text="I'm inviting you to Gear Locker so we can each keep a locker and track loans. Tap the link to make an account, then confirm your email or loans won't show up. Price lookups only work for emails the owner has added. Then in Safari tap Share, then Add to Home Screen:";
     try{if(navigator.share){await navigator.share({title:"Gear Locker",text,url});return}}catch(e){if(e.name==="AbortError")return}
     try{await navigator.clipboard.writeText(text+" "+url);toast("Invite copied. Paste it in a text.")}catch{prompt("Copy this invite:",text+" "+url)}};

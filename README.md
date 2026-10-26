@@ -35,7 +35,7 @@ Use made-up emails. Do not type a real account.
 1. Open http://127.0.0.1:5500/?env=emulator. Create account A with a password of at least 12 characters.
 2. Stay on this page. Do not follow a confirmation link out to the live site. Tap **Mark email confirmed**.
 3. Add a piece of gear and type a serial number on it.
-4. Open Share for that item and create a link. The link uses this same local address.
+4. Open Share for that item and create a link. The link stays on this computer and keeps `?env=emulator`, so it does not jump to the live locker.
 5. Copy the link, open a private window, and paste it. You should see the name, brand, color, and weight. You should not see the serial number or the notes.
 6. Back in account A, add a loan and type account B's sign-in email exactly.
 7. In a second browser profile, create account B on the same local address. Tap **Mark email confirmed**. Open the Loans tab. Account B should see the loaned item's name, not account A's inventory and not the serial number.
