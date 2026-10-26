@@ -10,7 +10,13 @@ var arrOf=c=>c==="items"?all:db[c];
 function setArr(c,a){if(c==="items")all=a;else db[c]=a}
 function userRef(){return fsdb.collection("users").doc(cloudUser.uid)}
 function setSync(state,txt){const d=$("syncDot");d.className="sync "+state;d.title=txt||"";}
-function pushCloudSoon(){if(!cloudUser||!fsdb)return Promise.resolve();clearTimeout(pushTimer);var delay=GearLogic.cloudWriteDelay(typeof navigator!=="undefined"?navigator.onLine:true);if(delay===0)return pushCloud();pushTimer=setTimeout(pushCloud,delay);return Promise.resolve()}
+function pushCloudSoon(){if(!cloudUser||!fsdb)return Promise.resolve();clearTimeout(pushTimer);var delay=GearLogic.cloudWriteDelay(typeof navigator!=="undefined"?navigator.onLine:true);if(delay===0){fsdb.disableNetwork().catch(()=>{});pushCloud();return Promise.resolve()}pushTimer=setTimeout(pushCloud,delay);return Promise.resolve()}
+function watchOffline(){
+  if(!fsdb||window.GEAR_OFFLINE_WATCH)return;
+  window.GEAR_OFFLINE_WATCH=true;
+  var apply=()=>{if(!fsdb)return;var p=(typeof navigator!=="undefined"&&navigator.onLine===false)?fsdb.disableNetwork():fsdb.enableNetwork();p.catch(()=>{})};
+  window.addEventListener("offline",apply);window.addEventListener("online",apply);
+}
 async function pushCloud(){
   if(!cloudUser||cloudReady.size<CLOUD_COLS.length+1)return;
   const ops=[];
@@ -21,6 +27,7 @@ async function pushCloud(){
     for(let i=0;i<ops.length;i+=400){const b=fsdb.batch();ops.slice(i,i+400).forEach(([c,r])=>b.set(userRef().collection(c).doc(r.id),stampRow(r)));await b.commit()}
     if(kitsChanged){var wid=GearLogic.newWriteId();inflightWrites.__kits={writeId:wid,snapshot:kj};kitsPushed=kj;await userRef().collection("meta").doc("kits").set({kits:clean(kits),updatedAt:now(),writeId:wid,serverUpdatedAt:firebase.firestore.FieldValue.serverTimestamp()})}
     setSync("on","Synced");
+    if(typeof navigator==="undefined"||navigator.onLine!==false)clearOfflineStash();
   }catch(e){ops.forEach(([c,r])=>delete pushed[c+"/"+r.id]);if(kitsChanged)kitsPushed="";setSync("off","Couldn't sync: "+(e.code||e.message));}
 }
 function onCloudChange(){
@@ -44,7 +51,7 @@ function subscribeCloud(){
     },e=>setSync("off","Sync error: "+(e.code||e.message))));
   });
   cloudUnsubs.push(userRef().collection("meta").doc("kits").onSnapshot(d=>{
-    const data=d.exists?d.data():{};const k=data.kits||{};const flight=inflightWrites.__kits||null;const localPending=!!(flight&&JSON.stringify(kits)!==flight.snapshot);
+    const data=d.exists?d.data():{};const k=data.kits||{};const flight=inflightWrites.__kits||null;var offlineHeld=false;try{offlineHeld=!!localStorage.getItem("gearLocker.offline")}catch{}const localPending=!!(flight&&JSON.stringify(kits)!==flight.snapshot)||offlineHeld;
     const merged=GearLogic.mergeKitsByServerTime(kits,k,{localStamp:kitsServerAt,remoteStamp:data.serverUpdatedAt,localPending:localPending,inflightWriteId:flight?flight.writeId:"",remoteWriteId:data.writeId||""});
     kitsPushed=JSON.stringify(k);if(merged.serverUpdatedAt)kitsServerAt=merged.serverUpdatedAt;if(flight&&data.writeId===flight.writeId&&!localPending)delete inflightWrites.__kits;
     const before=JSON.stringify(kits);kits=merged.kits||{};
@@ -87,6 +94,7 @@ function startCloud(){
   if(!initFirebase())return;
   fsdb=firebase.firestore();
   try{fsdb.enablePersistence({synchronizeTabs:true}).catch(()=>{})}catch{}
+  watchOffline();
   const auth=firebase.auth();
   const P=firebase.auth.Auth.Persistence;
   let keep=true;try{keep=localStorage.getItem("gearLocker.keep")!=="0"}catch{}

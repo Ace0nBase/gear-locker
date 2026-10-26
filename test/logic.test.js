@@ -126,6 +126,16 @@ test("cloud merge prefers the server stamp and keeps a newer local edit on echo"
   );
   assert.equal(same.name, "echo");
   assert.ok(serverStampIso({ toDate: () => new Date("2026-10-26T03:00:00.000Z") }));
+  const pending = mergeByServerTime(
+    { id: "1", name: "edited offline", updatedAt: "2026-10-26T05:00:00.000Z", offlinePending: true },
+    { id: "1", name: "server", updatedAt: "2026-10-26T04:00:00.000Z", serverUpdatedAt: "2026-10-26T04:00:00.000Z" }
+  );
+  assert.equal(pending.name, "edited offline");
+  const newerRemote = mergeByServerTime(
+    { id: "1", name: "edited offline", updatedAt: "2026-10-26T05:00:00.000Z", offlinePending: true },
+    { id: "1", name: "server", updatedAt: "2026-10-26T06:00:00.000Z", serverUpdatedAt: "2026-10-26T06:00:00.000Z" }
+  );
+  assert.equal(newerRemote.name, "server");
 });
 
 test("confirming an email refreshes the ID token before anything else reads it", async () => {

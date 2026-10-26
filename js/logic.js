@@ -14,6 +14,7 @@ export const USER_LOCAL_KEYS = [
   "gearLocker.curKit",
   "gearLocker.tab",
   "gearLocker.timer",
+  "gearLocker.offline",
 ];
 export const DEVICE_LOCAL_KEYS = ["gearLocker.keep", "gearLocker.noFolder"];
 
@@ -83,6 +84,9 @@ export function mergeByServerTime(local, remote, inflight) {
   if (!local) return remote;
   const lStamp = serverStampIso(local.serverUpdatedAt);
   const rStamp = serverStampIso(remote.serverUpdatedAt);
+  if (local.offlinePending && (local.updatedAt || "") > (remote.updatedAt || "")) {
+    return { ...local, serverUpdatedAt: rStamp || lStamp || local.serverUpdatedAt };
+  }
   const flight = inflight[local.id] || inflight[remote.id] || null;
   if (flight && flight.writeId && remote.writeId === flight.writeId) {
     if (local.updatedAt === flight.updatedAt) return { ...remote, serverUpdatedAt: rStamp || remote.serverUpdatedAt };
