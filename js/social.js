@@ -35,14 +35,39 @@ function tokenEmail(){return String(cloudUser&&cloudUser.email||"")}
 function lendDoc(x){const it=itemById(x.itemId)||{};let from="";try{from=localStorage.getItem("gearLocker.shareName")||""}catch{}
   var email=String(x.friendEmail||"").trim();
   return {lender:cloudUser.uid,lenderName:from||String(cloudUser.email||"").split("@")[0],lenderEmail:tokenEmail(),borrowerEmail:email,borrowerEmailLower:email.toLowerCase(),borrowerName:x.borrower||"",
-    item:{name:it.name||"",brand:it.brand||"",color:it.color||"",category:it.category||""},out:x.out||"",due:x.due||"",returned:x.returned||"",updatedAt:now()}}
+    item:{name:it.name||x.itemName||"",brand:it.brand||x.itemBrand||"",color:it.color||x.itemColor||"",category:it.category||x.itemCategory||""},out:x.out||"",due:x.due||"",returned:x.returned||"",updatedAt:now()}}
 async function mirrorLend(x,removed){
-  if(!fsdb||!cloudUser)return;
-  if(!cloudUser.emailVerified){if(!removed&&x.friendEmail)toast("Confirm your email first, then this loan can show up in your friend's locker.",5000);return}
+  if(!fsdb||!cloudUser||!x||!x.id)return;
+  const plan=GearLogic.loanSharePlan(x,{removed:!!removed,verified:!!cloudUser.emailVerified});
+  if(plan.needsVerify)toast("Confirm your email first, then this loan can show up in your friend's locker.",5000);
+  const local=(db.loans||[]).find(y=>y.id===x.id);
+  const row=local||x;
+  if(plan.writeLend)row.lendShared=true;
+  else if(plan.deleteLend&&!row.deleted)row.lendShared=false;
+  const batch=fsdb.batch();
+  batch.set(userRef().collection("loans").doc(x.id),stampRow(row));
   const ref=fsdb.collection("lends").doc(x.id);
-  try{if(removed||!x.friendEmail){if(x.lendShared){await ref.delete();x.lendShared=false}return}
-    await ref.set(lendDoc(x));if(!x.lendShared){x.lendShared=true;await upsertC("loans",x)}}
-  catch(e){toast("Couldn't send the loan to your friend's app: "+(e.code==="permission-denied"?"loan sharing isn't switched on yet":e.message),5000)}
+  if(plan.writeLend)batch.set(ref,lendDoc(row));
+  if(plan.deleteLend)batch.delete(ref);
+  pushed["loans/"+x.id]=row.updatedAt;
+  try{await batch.commit()}
+  catch(e){delete pushed["loans/"+x.id];toast("Couldn't send the loan to your friend's app: "+(e.code==="permission-denied"?"loan sharing isn't switched on yet":e.message),5000)}
+}
+async function recoverOrphanLends(){
+  if(!fsdb||!cloudUser||!cloudUser.emailVerified)return;
+  if(typeof cloudReady==="undefined"||!cloudReady.has("loans"))return;
+  const lends=Object.entries(lentRemote).map(([id,data])=>({id,...data}));
+  const missing=GearLogic.orphanLoansFromLends(db.loans||[],lends,now());
+  if(!missing.length)return;
+  const batch=fsdb.batch();
+  missing.forEach(rec=>{
+    const i=db.loans.findIndex(y=>y.id===rec.id);
+    if(i>=0)db.loans[i]=rec;else db.loans.push(rec);
+    batch.set(userRef().collection("loans").doc(rec.id),stampRow(rec));
+    pushed["loans/"+rec.id]=rec.updatedAt;
+  });
+  try{await batch.commit();if(curTab==="loans")renderExtra()}
+  catch(e){missing.forEach(rec=>delete pushed["loans/"+rec.id])}
 }
 var borrowedParts={};
 function noteBorrowed(which,docs){borrowedParts[which]=docs;var m=new Map();Object.values(borrowedParts).forEach(arr=>(arr||[]).forEach(b=>m.set(b.id,b)));var prev=new Set(borrowed.map(b=>b.id));borrowed=[...m.values()];var fresh=borrowed.filter(b=>!prev.has(b.id)&&!b.returned);if(prev.size||fresh.length===borrowed.length){fresh.slice(0,1).forEach(b=>toast((b.lenderName||"A friend")+" lent you: "+(b.item&&b.item.name||"gear"),4000))}afterRender();if(curTab==="loans")renderExtra()}
@@ -51,23 +76,23 @@ function watchLends(){
   var em=tokenEmail();
   lendUnsubs.push(fsdb.collection("lends").where("borrowerEmail","==",em).onSnapshot(s=>noteBorrowed("exact",s.docs.map(d=>({id:d.id,...d.data()}))),()=>{}));
   if(em===em.toLowerCase())lendUnsubs.push(fsdb.collection("lends").where("borrowerEmailLower","==",em).onSnapshot(s=>noteBorrowed("lower",s.docs.map(d=>({id:d.id,...d.data()}))),()=>{}));
-  lendUnsubs.push(fsdb.collection("lends").where("lender","==",cloudUser.uid).onSnapshot(s=>{lentRemote={};s.docs.forEach(d=>lentRemote[d.id]=d.data());if(curTab==="loans")renderExtra();updateBadges()},()=>{}));
+  lendUnsubs.push(fsdb.collection("lends").where("lender","==",cloudUser.uid).onSnapshot(s=>{lentRemote={};s.docs.forEach(d=>lentRemote[d.id]=d.data());recoverOrphanLends();if(curTab==="loans")renderExtra();updateBadges()},()=>{}));
 }
 {const _save=SAVE.loans;SAVE.loans=async d=>{
   if(d.friendEmail&&!/^\S+@\S+\.\S+$/.test(String(d.friendEmail).trim())){toast("That email doesn't look right");return}
   if(!d.remindAt&&d.due)d.remindAt=d.due+"T09:00";
-  const before=new Set(L("loans").map(y=>y.id));await _save(d);const x=d.id?L("loans").find(y=>y.id===d.id):L("loans").find(y=>!before.has(y.id));if(x)mirrorLend(x)}}
-{const _del=DEL.loans;DEL.loans=async d=>{const x=L("loans").find(y=>y.id===d.id);await _del(d);if(x)mirrorLend(x,true)}}
+  const before=new Set(L("loans").map(y=>y.id));await _save(d);const x=d.id?L("loans").find(y=>y.id===d.id):L("loans").find(y=>!before.has(y.id));if(x)await mirrorLend(x)}}
+{const _del=DEL.loans;DEL.loans=async d=>{const x=L("loans").find(y=>y.id===d.id);await _del(d);if(x)await mirrorLend(x,true)}}
 ACT.loans=async(act,b)=>{
   const x=L("loans").find(y=>y.id===b.dataset.id);
-  if(act==="returned"&&x){const r=await upsertC("loans",{...x,returned:today()});mirrorLend(r);toast("Marked returned");render();return}
+  if(act==="returned"&&x){const r=await upsertC("loans",{...x,returned:today()});await mirrorLend(r);toast("Marked returned");render();return}
   if(act==="ics"&&x){downloadIcs(x);return}
   if(act==="iback"){const bb=borrowed.find(y=>y.id===b.dataset.id);if(!bb)return;try{await fsdb.collection("lends").doc(bb.id).update({borrowerReturned:today(),updatedAt:now()});toast(`Let ${bb.lenderName||"them"} know you gave it back`)}catch(e){toast("Couldn't update: "+e.message)}return}
 };
 function downloadIcs(x){
   const it=itemById(x.itemId);const when=(x.remindAt||(x.due?x.due+"T09:00":""))||new Date(Date.now()+7*864e5).toISOString().slice(0,16);
   const d=new Date(when);const f=t=>t.toISOString().replace(/[-:]/g,"").replace(/\.\d+/,"");
-  const title=`${x.borrower} still has your ${it?.name||"gear"}`;
+  const title=`${x.borrower} still has your ${it?.name||x.itemName||"gear"}`;
   const ics=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Gear Locker//EN","BEGIN:VEVENT",`UID:${x.id}@gearlocker`,`DTSTAMP:${f(new Date())}`,`DTSTART:${f(d)}`,`DTEND:${f(new Date(+d+15*60e3))}`,
     `SUMMARY:${title.replace(/[,;]/g," ")}`,`DESCRIPTION:Lent ${fmtDate(x.out)}${x.due?" · due back "+fmtDate(x.due):""}. Mark it returned in Gear Locker when you get it back.`.replace(/[,;]/g," "),
     "BEGIN:VALARM","ACTION:DISPLAY","TRIGGER:PT0M",`DESCRIPTION:${title.replace(/[,;]/g," ")}`,"END:VALARM","END:VEVENT","END:VCALENDAR"].join("\r\n");
@@ -90,8 +115,8 @@ var loanDue=x=>!x.returned&&x.remindAt&&new Date(x.remindAt)<=new Date();
     anchor?anchor.before(extra):fe.querySelector(".actions").before(extra)}
   // reminder banner + per-row status + calendar button
   const due=L("loans").filter(loanDue);const said=L("loans").filter(x=>!x.returned&&lentRemote[x.id]?.borrowerReturned);
-  const ban=[...due.map(x=>`<li><b>${esc(x.borrower)}</b> still has your ${esc(itemById(x.itemId)?.name||"gear")}${x.due?` (due ${esc(fmtDate(x.due))})`:""}. <button class="lnk" type="button" data-act="returned" data-id="${esc(x.id)}">It's back</button></li>`),
-    ...said.map(x=>`<li><b>${esc(x.borrower)}</b> says they returned your ${esc(itemById(x.itemId)?.name||"gear")} on ${esc(fmtDate(lentRemote[x.id].borrowerReturned))}. <button class="lnk" type="button" data-act="returned" data-id="${esc(x.id)}">Confirm returned</button></li>`)];
+  const ban=[...due.map(x=>`<li><b>${esc(x.borrower)}</b> still has your ${esc(itemById(x.itemId)?.name||x.itemName||"gear")}${x.due?` (due ${esc(fmtDate(x.due))})`:""}. <button class="lnk" type="button" data-act="returned" data-id="${esc(x.id)}">It's back</button></li>`),
+    ...said.map(x=>`<li><b>${esc(x.borrower)}</b> says they returned your ${esc(itemById(x.itemId)?.name||x.itemName||"gear")} on ${esc(fmtDate(lentRemote[x.id].borrowerReturned))}. <button class="lnk" type="button" data-act="returned" data-id="${esc(x.id)}">Confirm returned</button></li>`)];
   const head=v.querySelector(".vhead");
   if(ban.length)head.insertAdjacentHTML("afterend",`<div class="gaps"><h3>Reminders</h3><ul>${ban.join("")}</ul></div>`);
   v.querySelectorAll('tr[data-act="edit"]').forEach(tr=>{const x=L("loans").find(y=>y.id===tr.dataset.id);if(!x||x.returned)return;const td=tr.lastElementChild;

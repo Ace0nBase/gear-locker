@@ -202,9 +202,89 @@ export function newPasswordOk(pw) {
   return String(pw || "").length >= 12;
 }
 
+// reload() updates the user object. Rules and lookups read the ID token, which stays stale until this.
+export async function refreshAuthClaims(user) {
+  if (!user || typeof user.reload !== "function" || typeof user.getIdToken !== "function") {
+    throw new Error("no user");
+  }
+  await user.reload();
+  await user.getIdToken(true);
+  return user;
+}
+
+// The private loan and the shared lend are one save. A later debounced sync must not be the only copy.
+export function loanSharePlan(loan, opts) {
+  const removed = !!(opts && opts.removed);
+  const verified = !!(opts && opts.verified);
+  const email = String((loan && loan.friendEmail) || "").trim();
+  const wasShared = !!(loan && loan.lendShared);
+  const share = verified && !removed && !!email && !(loan && loan.deleted);
+  return {
+    writePrivate: true,
+    writeLend: share,
+    deleteLend: verified && !share && wasShared,
+    needsVerify: !verified && !removed && !!email,
+  };
+}
+
+// A lend with no matching private loan is recovered so the lender can mark it returned.
+export function orphanLoansFromLends(privateLoans, lends, nowIso) {
+  const have = new Set((privateLoans || []).filter(row => row && row.id).map(row => row.id));
+  const stamp = nowIso || "";
+  const out = [];
+  for (const lend of lends || []) {
+    if (!lend || !lend.id || have.has(lend.id)) continue;
+    const item = lend.item || {};
+    out.push({
+      id: lend.id,
+      itemId: "",
+      itemName: String(item.name || ""),
+      itemBrand: String(item.brand || ""),
+      itemColor: String(item.color || ""),
+      itemCategory: String(item.category || ""),
+      borrower: String(lend.borrowerName || ""),
+      friendEmail: String(lend.borrowerEmail || ""),
+      out: lend.out || "",
+      due: lend.due || "",
+      returned: lend.returned || "",
+      lendShared: true,
+      notes: "",
+      updatedAt: stamp || String(lend.updatedAt || ""),
+      createdAt: stamp || String(lend.updatedAt || ""),
+    });
+  }
+  return out;
+}
+
+// A missing file is not a blocked file. Only an explicit denial counts.
+export function storagePrivacyVerdict(otherCode, signedOutCode) {
+  const code = v => String(v || "");
+  const denied = v => code(v) === "storage/unauthorized";
+  const missing = v => code(v) === "storage/object-not-found";
+  return {
+    pass: denied(otherCode) && denied(signedOutCode),
+    otherDenied: denied(otherCode),
+    signedOutDenied: denied(signedOutCode),
+    countedMissingAsBlocked: missing(otherCode) || missing(signedOutCode),
+  };
+}
+
+// Offline edits have to reach the local queue before a reload. Online edits can wait.
+export function cloudWriteDelay(onLine) {
+  return onLine === false ? 0 : 400;
+}
+
+export function serviceWorkerAllowed(loc, qa) {
+  if (!loc) return false;
+  if (loc.protocol === "https:") return true;
+  const host = loc.hostname === "127.0.0.1" || loc.hostname === "localhost";
+  return !!qa && loc.protocol === "http:" && host;
+}
+
 const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
+  refreshAuthClaims, loanSharePlan, orphanLoansFromLends, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
 };
 globalThis.GearLogic = GearLogic;

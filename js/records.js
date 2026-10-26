@@ -238,7 +238,7 @@ RENDER.loans=()=>{
   const form=ed?edForm("loans",ed.isNew?"Lend an item":"Edit loan",
     fld("itemId","Item",d.itemId,{type:"select",span:2,opts:[["","— pick an item —"],...avail.map(i=>[i.id,i.name])]})+fld("borrower","Borrowed by",d.borrower,{req:1,ph:"Name"})+fld("contact","Contact",d.contact,{ph:"Phone or email"})+
     fld("out","Lent on",d.out,{type:"date"})+fld("due","Due back",d.due,{type:"date"})+fld("returned","Returned on",d.returned,{type:"date"})+fld("cond","Condition when lent",d.cond,{ph:"Good, no marks"})+fld("notes","Notes",d.notes,{span:4})):"";
-  const nm=x=>esc(itemById(x.itemId)?.name||"(deleted item)");
+  const nm=x=>esc(itemById(x.itemId)?.name||x.itemName||"(deleted item)");
   $("loansView").innerHTML=`<div class="vhead"><div><h2>Loans</h2><p>Who has your gear and when it's due back. Add a friend's Gear Locker email and the loan shows up in their app too.</p></div><button class="btn" type="button" data-act="new">+ Lend item</button></div>
   ${form}
   ${out.length?`<div class="slotsHead">Out now <span>${out.length}</span></div><div class="scroll"><table class="tbl"><thead><tr><th>Item</th><th>Borrowed by</th><th>Lent</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>${out.map(x=>{const over=x.due&&x.due<today();return `<tr class="click" data-act="edit" data-id="${esc(x.id)}"><td><b>${nm(x)}</b></td><td>${esc(x.borrower)}${x.contact?`<small>${esc(x.contact)}</small>`:""}</td><td>${esc(fmtDate(x.out))}</td><td>${esc(fmtDate(x.due))}</td><td>${over?`<span class="pill gap">Overdue</span>`:`<span class="pill warn">Out</span>`}</td><td><button class="btn ghost" type="button" data-act="returned" data-id="${esc(x.id)}">Returned</button></td></tr>`}).join("")}</tbody></table></div>`

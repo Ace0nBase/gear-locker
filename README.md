@@ -6,6 +6,8 @@ Questions about this project go to the Gear Locker team. A public support addres
 
 ## Run the local privacy check
 
+You need Node.js 22 or newer and Java 21 or newer. The local lookup stub will not start on Node 20. The Firebase emulators need Java.
+
 From this folder, after `npm install`:
 
 ```
@@ -33,7 +35,7 @@ The published `config.js` is unchanged by this mode. A plain `firebase deploy` f
 Use made-up emails. Do not type a real account.
 
 1. Open http://127.0.0.1:5500/?env=emulator. Create account A with a password of at least 12 characters.
-2. Stay on this page. Do not follow a confirmation link out to the live site. Tap **Mark email confirmed**.
+2. Stay on this page. Do not follow a confirmation link out to the live site. Tap **Mark email confirmed**. Loans and lookups can use that address as soon as the button finishes. You do not need to sign out.
 3. Add a piece of gear and type a serial number on it.
 4. Open Share for that item and create a link. The link stays on this computer and keeps `?env=emulator`, so it does not jump to the live locker.
 5. Copy the link, open a private window, and paste it. You should see the name, brand, color, and weight. You should not see the serial number or the notes.

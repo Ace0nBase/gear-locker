@@ -56,7 +56,7 @@ async function syncFromDisk(){
 }
 async function persist(){
   mirror();
-  pushCloudSoon();
+  try{await pushCloudSoon()}catch{}
   if(!dir){$("status").textContent=cloudUser?"":"Saved on this device only.";return}
   try{await writeFile();mirror();$("status").textContent=`Saved to ${dir.name}\\${FILE} · ${new Date().toLocaleTimeString()}`}
   catch{$("status").textContent="Couldn't write to the Gear Locker folder. Click Choose folder to reconnect.";showConnect(true)}

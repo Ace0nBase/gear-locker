@@ -2,7 +2,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { assertFails, assertSucceeds, initializeTestEnvironment } from "@firebase/rules-unit-testing";
-import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, where } from "firebase/firestore";
+import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
 
 let env;
 
@@ -67,6 +67,31 @@ test("loans are readable only by the lender or a confirmed matching email", asyn
   await assertFails(updateDoc(doc(borrower, "lends/loan1"), { item: { name: "Changed" } }));
   await assertSucceeds(updateDoc(doc(borrower, "lends/loan1"), { borrowerReturned: "2026-10-26", updatedAt: "2026-10-26T01:00:00.000Z" }));
   await assertFails(deleteDoc(doc(borrower, "lends/loan1")));
+});
+
+test("a verified lender commits the private loan and the shared lend together", async () => {
+  await env.clearFirestore();
+  const owner = as("owner", "owner@example.com", true);
+  const batch = writeBatch(owner);
+  batch.set(doc(owner, "users/owner/loans/loan1"), {
+    id: "loan1", borrower: "Friend", friendEmail: "friend@example.com", itemId: "i1", updatedAt: "2026-10-26T00:00:00.000Z",
+  });
+  batch.set(doc(owner, "lends/loan1"), loan());
+  await assertSucceeds(batch.commit());
+  await assertSucceeds(getDoc(doc(owner, "users/owner/loans/loan1")));
+  const borrower = as("friend", "friend@example.com", true);
+  await assertSucceeds(getDoc(doc(borrower, "lends/loan1")));
+  await assertFails(getDoc(doc(borrower, "users/owner/loans/loan1")));
+  const unverified = as("owner", "owner@example.com", false);
+  const blocked = writeBatch(unverified);
+  blocked.set(doc(unverified, "users/owner/loans/loan2"), { id: "loan2", borrower: "Friend" });
+  blocked.set(doc(unverified, "lends/loan2"), { ...loan(), updatedAt: "2026-10-26T01:00:00.000Z" });
+  await assertFails(blocked.commit());
+  await env.withSecurityRulesDisabled(async context => {
+    const open = context.firestore();
+    assert.equal((await getDoc(doc(open, "users/owner/loans/loan2"))).exists(), false);
+    assert.equal((await getDoc(doc(open, "lends/loan2"))).exists(), false);
+  });
 });
 
 test("share links can be opened by id and cannot be listed or carry serials", async () => {

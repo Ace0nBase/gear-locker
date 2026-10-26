@@ -2,6 +2,9 @@
   "name": "gear-locker",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "test": "node --test test/logic.test.js test/webpush.test.js test/worker.test.js test/qa-guard.test.js test/static.test.js",
     "test:rules": "firebase emulators:exec --only firestore --project demo-gear-locker \"node --test test/rules.test.js\"",

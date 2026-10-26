@@ -47,6 +47,25 @@ test("sign-out clears this device and the service worker is version 29", () => {
   assert.doesNotMatch(manifest, /icon-512\.png".*"purpose": "maskable"/);
 });
 
+test("local test mode blocks the Google popup script and the page does not allow it", () => {
+  assert.doesNotMatch(html, /apis\.google\.com/);
+  assert.match(read("js/qa-sync.js"), /https:\/\/apis\.google\.com\/js\/api\.js/);
+  assert.match(read("js/qa-sync.js"), /appendChild/);
+  assert.match(read("js/cloud.js"), /getIdToken\(true\)|refreshAuthClaims/);
+  assert.match(read("js/cloud.js"), /enablePersistence\(\{synchronizeTabs:true\}\)/);
+  assert.doesNotMatch(read("js/cloud.js"), /if\(!window\.GEAR_QA\)\{try\{fsdb\.enablePersistence/);
+  assert.match(read("js/social.js"), /loanSharePlan/);
+  assert.match(read("js/social.js"), /batch\.set\(ref,lendDoc/);
+  assert.match(read("js/security.js"), /item name, brand and color, dates, and your email/);
+  assert.match(read("css/app.css"), /\.btn\{[^}]*min-height:44px/);
+  assert.match(read("css/app.css"), /\.acct button\{[^}]*min-height:44px/);
+  assert.match(read("css/app.css"), /\.detail \.lnk\{[^}]*min-height:44px/);
+  const pkg = JSON.parse(read("package.json"));
+  assert.equal(pkg.engines.node, ">=22");
+  assert.match(read("README.md"), /Node\.js 22 or newer/);
+  assert.match(read("README.md"), /Java 21 or newer/);
+});
+
 test("production config stays on the live project and the default alias does not", () => {
   assert.match(config, /projectId: "gear-locker-c248c"/);
   assert.match(config, /APP_CHECK_SITE_KEY = ""/);

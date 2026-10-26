@@ -66,7 +66,7 @@ async function openSecurity(){const c=lockCfg();const bio=await canBio();const s
     <p class="hint">The app also blanks itself in the app switcher while locked mode is on.</p></div>
    <div class="secBlock"><h3>What you've shared</h3>
     ${sh.length?sh.map(([k,sid])=>{const [kind,id]=k.split(":");const nm=kind==="kit"?(KITS.find(x=>x.id===id)?.name+" kit"):(itemById(id)?.name||"(deleted item)");return `<div class="pk"><span class="pkn"><b>${esc(nm)}</b><small>share link · anyone with the link can see it</small></span><button class="btn ghost" type="button" data-sec="unshare" data-k="${esc(k)}">Turn off</button></div>`}).join("")+`<button class="btn ghost" type="button" data-sec="unshareall">Turn off all links</button>`:`<p class="hint">No share links are on. Nothing of yours is viewable without signing in as you.</p>`}
-    ${lends.length?`<p class="hint">${lends.length} active loan${lends.length>1?"s are":" is"} visible to the borrower's Gear Locker account (item name and dates only).</p>`:""}</div>
+    ${lends.length?`<p class="hint">${lends.length} active loan${lends.length>1?"s are":" is"} visible to the borrower's Gear Locker account (item name, brand and color, dates, and your email).</p>`:""}</div>
    <div class="secBlock"><h3>Password</h3><p class="hint">Changing your password signs out every other device that's signed in as you.</p>
     <div class="f"><label for="sOld">Current password</label><input id="sOld" type="password" autocomplete="current-password"></div>
     <div class="f"><label for="sNew">New password (12+ characters)</label><input id="sNew" type="password" autocomplete="new-password" minlength="12"></div>

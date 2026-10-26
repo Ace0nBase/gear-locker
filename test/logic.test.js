@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   clearUserLocal, shareItemFields, decideAccess, chargeDecision, quotaKey, alertQuotaKey,
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
+  refreshAuthClaims, loanSharePlan, orphanLoansFromLends, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
 } from "../js/logic.js";
 
 function memStorage(seed) {
@@ -125,6 +126,73 @@ test("cloud merge prefers the server stamp and keeps a newer local edit on echo"
   );
   assert.equal(same.name, "echo");
   assert.ok(serverStampIso({ toDate: () => new Date("2026-10-26T03:00:00.000Z") }));
+});
+
+test("confirming an email refreshes the ID token before anything else reads it", async () => {
+  const calls = [];
+  const user = {
+    emailVerified: false,
+    async reload() { calls.push("reload"); this.emailVerified = true; },
+    async getIdToken(force) { calls.push("token:" + force); return "fresh"; },
+  };
+  const out = await refreshAuthClaims(user);
+  assert.equal(out, user);
+  assert.deepEqual(calls, ["reload", "token:true"]);
+  assert.equal(user.emailVerified, true);
+  await assert.rejects(() => refreshAuthClaims(null));
+});
+
+test("a shared loan writes the private record and the lend together", () => {
+  const share = loanSharePlan({ id: "l1", friendEmail: "friend@example.com", lendShared: false }, { verified: true });
+  assert.equal(share.writePrivate, true);
+  assert.equal(share.writeLend, true);
+  assert.equal(share.deleteLend, false);
+  const stop = loanSharePlan({ id: "l1", friendEmail: "friend@example.com", lendShared: true }, { verified: true, removed: true });
+  assert.equal(stop.writePrivate, true);
+  assert.equal(stop.writeLend, false);
+  assert.equal(stop.deleteLend, true);
+  const localOnly = loanSharePlan({ id: "l1", friendEmail: "", lendShared: false }, { verified: true });
+  assert.equal(localOnly.writeLend, false);
+  assert.equal(localOnly.deleteLend, false);
+  const unverified = loanSharePlan({ id: "l1", friendEmail: "friend@example.com" }, { verified: false });
+  assert.equal(unverified.writeLend, false);
+  assert.equal(unverified.needsVerify, true);
+});
+
+test("an orphan lend becomes a private loan the lender can close", () => {
+  const loans = [{ id: "kept", borrower: "Sam" }];
+  const lends = [
+    { id: "kept", borrowerName: "Sam", item: { name: "Already here" } },
+    { id: "orphan", borrowerName: "Riley", borrowerEmail: "riley@example.com", out: "2026-10-01", due: "2026-10-08", item: { name: "Test Light", brand: "Acme", color: "Black", category: "Lights" } },
+  ];
+  const recovered = orphanLoansFromLends(loans, lends, "2026-10-26T00:00:00.000Z");
+  assert.equal(recovered.length, 1);
+  assert.equal(recovered[0].id, "orphan");
+  assert.equal(recovered[0].itemName, "Test Light");
+  assert.equal(recovered[0].itemBrand, "Acme");
+  assert.equal(recovered[0].borrower, "Riley");
+  assert.equal(recovered[0].friendEmail, "riley@example.com");
+  assert.equal(recovered[0].lendShared, true);
+  assert.equal(recovered[0].notes, "");
+  assert.equal(orphanLoansFromLends([{ id: "kept" }, { id: "orphan", deleted: true }], lends).length, 0);
+});
+
+test("a missing storage file is not counted as blocked", () => {
+  assert.equal(storagePrivacyVerdict("storage/unauthorized", "storage/unauthorized").pass, true);
+  assert.equal(storagePrivacyVerdict("storage/object-not-found", "storage/unauthorized").pass, false);
+  assert.equal(storagePrivacyVerdict("storage/object-not-found", "storage/unauthorized").countedMissingAsBlocked, true);
+  assert.equal(storagePrivacyVerdict("ok", "storage/unauthorized").pass, false);
+  assert.equal(storagePrivacyVerdict("storage/unauthorized", "ok").pass, false);
+});
+
+test("offline edits flush immediately and the local test page can cache itself", () => {
+  assert.equal(cloudWriteDelay(false), 0);
+  assert.equal(cloudWriteDelay(true), 400);
+  assert.equal(serviceWorkerAllowed({ protocol: "https:", hostname: "ace0nbase.github.io" }, false), true);
+  assert.equal(serviceWorkerAllowed({ protocol: "http:", hostname: "127.0.0.1" }, true), true);
+  assert.equal(serviceWorkerAllowed({ protocol: "http:", hostname: "localhost" }, true), true);
+  assert.equal(serviceWorkerAllowed({ protocol: "http:", hostname: "127.0.0.1" }, false), false);
+  assert.equal(serviceWorkerAllowed({ protocol: "http:", hostname: "example.com" }, true), false);
 });
 
 test("kit merge uses the server stamp and keeps a pending local edit", () => {

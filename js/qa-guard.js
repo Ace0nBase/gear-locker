@@ -68,3 +68,7 @@ export function applyQaMode(win, loc, localOverride) {
 export function localFileLooksLive(text) {
   return /gear-locker-c248c|AIzaSyBexXFiQtDEnmlL2z0x4FXD7YCbeAHTGC4|workers\.dev|firebaseapp\.com/i.test(String(text || ""));
 }
+
+export function isGoogleApiScript(src) {
+  return String(src || "").indexOf("https://apis.google.com/js/api.js") === 0;
+}

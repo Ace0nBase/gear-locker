@@ -10,7 +10,7 @@ var arrOf=c=>c==="items"?all:db[c];
 function setArr(c,a){if(c==="items")all=a;else db[c]=a}
 function userRef(){return fsdb.collection("users").doc(cloudUser.uid)}
 function setSync(state,txt){const d=$("syncDot");d.className="sync "+state;d.title=txt||"";}
-function pushCloudSoon(){if(!cloudUser||!fsdb)return;clearTimeout(pushTimer);pushTimer=setTimeout(pushCloud,400)}
+function pushCloudSoon(){if(!cloudUser||!fsdb)return Promise.resolve();clearTimeout(pushTimer);var delay=GearLogic.cloudWriteDelay(typeof navigator!=="undefined"?navigator.onLine:true);if(delay===0)return pushCloud();pushTimer=setTimeout(pushCloud,delay);return Promise.resolve()}
 async function pushCloud(){
   if(!cloudUser||cloudReady.size<CLOUD_COLS.length+1)return;
   const ops=[];
@@ -86,7 +86,7 @@ function refreshVerify(){var b=$("verifyBanner");if(!b)return;var u=firebase.aut
 function startCloud(){
   if(!initFirebase())return;
   fsdb=firebase.firestore();
-  if(!window.GEAR_QA){try{fsdb.enablePersistence({synchronizeTabs:true}).catch(()=>{})}catch{}}
+  try{fsdb.enablePersistence({synchronizeTabs:true}).catch(()=>{})}catch{}
   const auth=firebase.auth();
   const P=firebase.auth.Auth.Persistence;
   let keep=true;try{keep=localStorage.getItem("gearLocker.keep")!=="0"}catch{}
@@ -113,13 +113,49 @@ function startCloud(){
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
   $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{GearLogic.clearUserLocal(localStorage)}catch{}render();await auth.signOut();try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch{}location.reload()};
   $("verifySend").onclick=async()=>{try{await firebase.auth().currentUser.sendEmailVerification({url:verifyContinueUrl(),handleCodeInApp:false});toast("Confirmation email sent. Check your inbox.")}catch(e){toast(e.message||"Couldn't send the email")}};
-  $("verifyDone").onclick=async()=>{try{await firebase.auth().currentUser.reload();cloudUser=firebase.auth().currentUser;refreshVerify();if(cloudUser.emailVerified){toast("Email confirmed.");watchLends()}else toast("Not confirmed yet. Open the link in the email, then tap this again.",5000)}catch(e){toast("Couldn't check. Try again.")}};
-  if($("qaVerify"))$("qaVerify").onclick=async()=>{if(!window.GEAR_QA)return;var u=firebase.auth().currentUser;if(!u){toast("Sign in on this test page first");return}try{var r=await fetch("http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:update",{method:"POST",headers:{Authorization:"Bearer owner","Content-Type":"application/json"},body:JSON.stringify({localId:u.uid,emailVerified:true})});if(!r.ok)throw new Error("emulator");await u.reload();cloudUser=firebase.auth().currentUser;refreshVerify();toast("Marked confirmed in the local emulator")}catch(e){toast("Couldn't mark it confirmed. Is npm run qa still running?")}};
+  $("verifyDone").onclick=async()=>{try{var u=await confirmEmailNow();if(u&&u.emailVerified)toast("Email confirmed.");else toast("Not confirmed yet. Open the link in the email, then tap this again.",5000)}catch(e){toast("Couldn't check. Try again.")}};
+  if($("qaVerify"))$("qaVerify").onclick=async()=>{if(!window.GEAR_QA)return;var u=firebase.auth().currentUser;if(!u){toast("Sign in on this test page first");return}try{var r=await fetch("http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:update",{method:"POST",headers:{Authorization:"Bearer owner","Content-Type":"application/json"},body:JSON.stringify({localId:u.uid,emailVerified:true})});if(!r.ok)throw new Error("emulator");u=await confirmEmailNow();toast(u&&u.emailVerified?"Marked confirmed in the local emulator":"Couldn't mark it confirmed. Is npm run qa still running?")}catch(e){toast("Couldn't mark it confirmed. Is npm run qa still running?")}};
   if($("qaStorage"))$("qaStorage").onclick=qaStorageCheck;
-async function qaStorageCheck(){if(!window.GEAR_QA||!firebase.auth().currentUser){toast("Sign in on this test page first");return}if(firebase.app().options.projectId!=="demo-gear-locker"){toast("Storage check refused: this is not the local emulator");return}await new Promise((res,rej)=>{if(firebase.storage)return res();var s=document.createElement("script");s.src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js";s.onload=res;s.onerror=rej;document.head.appendChild(s)});var uid=firebase.auth().currentUser.uid;var st=firebase.storage();try{st.useEmulator("127.0.0.1",9199)}catch(e){}var mine=st.ref("users/"+uid+"/qa-privacy.txt");await mine.putString("local qa");var blockedOther=false,blockedOut=false;try{await st.ref("users/not-this-user/qa-privacy.txt").getMetadata()}catch(e){blockedOther=true}var app2=firebase.apps.find(a=>a.name==="qa-anon")||firebase.initializeApp(firebase.app().options,"qa-anon");var st2=firebase.storage(app2);try{st2.useEmulator("127.0.0.1",9199)}catch(e){}try{await st2.ref("users/"+uid+"/qa-privacy.txt").getMetadata()}catch(e){blockedOut=true}toast(blockedOther&&blockedOut?"Storage check passed. Your file saved. Another account and a signed-out check were blocked.":"Storage check failed. Do not use this build until the rules are loaded.",6000)}
+async function confirmEmailNow(){var user=firebase.auth().currentUser;if(!user)return null;await GearLogic.refreshAuthClaims(user);cloudUser=firebase.auth().currentUser;refreshVerify();if(cloudUser&&cloudUser.emailVerified)watchLends();return cloudUser}
+async function storageCode(ref){try{await ref.getMetadata();return "ok"}catch(e){return e&&e.code||"error"}}
+async function qaStorageCheck(){
+  if(!window.GEAR_QA||!firebase.auth().currentUser){toast("Sign in on this test page first");return}
+  if(firebase.app().options.projectId!=="demo-gear-locker"){toast("Storage check refused: this is not the local emulator");return}
+  try{await qaStorageCheckRun()}
+  catch(e){toast("Storage check couldn't finish. Is npm run qa still running?",6000)}
+}
+async function qaStorageCheckRun(){
+  await new Promise((res,rej)=>{if(firebase.storage)return res();var s=document.createElement("script");s.src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js";s.onload=res;s.onerror=rej;document.head.appendChild(s)});
+  var uid=firebase.auth().currentUser.uid;
+  var st=firebase.storage();
+  try{st.useEmulator("127.0.0.1",9199)}catch(e){}
+  await st.ref("users/"+uid+"/qa-privacy.txt").putString("local qa");
+  var otherName="qa-other";
+  var otherApp=firebase.apps.find(a=>a.name===otherName)||firebase.initializeApp(firebase.app().options,otherName);
+  var otherAuth=firebase.auth(otherApp);
+  try{otherAuth.useEmulator("http://127.0.0.1:9099",{disableWarnings:true})}catch(e){}
+  var otherEmail="qa-storage-"+uid.slice(0,6)+"@"+"example.test";
+  try{await otherAuth.signInWithEmailAndPassword(otherEmail,"local-qa-check-1")}
+  catch(e){await otherAuth.createUserWithEmailAndPassword(otherEmail,"local-qa-check-1")}
+  var otherSt=firebase.storage(otherApp);
+  try{otherSt.useEmulator("127.0.0.1",9199)}catch(e){}
+  var otherCode=await storageCode(otherSt.ref("users/"+uid+"/qa-privacy.txt"));
+  var anonName="qa-anon";
+  var anonApp=firebase.apps.find(a=>a.name===anonName)||firebase.initializeApp(firebase.app().options,anonName);
+  var anonAuth=firebase.auth(anonApp);
+  try{anonAuth.useEmulator("http://127.0.0.1:9099",{disableWarnings:true})}catch(e){}
+  if(anonAuth.currentUser)await anonAuth.signOut();
+  var anonSt=firebase.storage(anonApp);
+  try{anonSt.useEmulator("127.0.0.1",9199)}catch(e){}
+  var signedOutCode=await storageCode(anonSt.ref("users/"+uid+"/qa-privacy.txt"));
+  var verdict=GearLogic.storagePrivacyVerdict(otherCode,signedOutCode);
+  if(verdict.pass)toast("Storage check passed. Your file saved. Another account and a signed-out check were blocked.");
+  else if(verdict.countedMissingAsBlocked)toast("Storage check failed. The file was missing, so this does not prove another account was blocked.",6000);
+  else toast("Storage check failed. Another account or a signed-out check was not blocked ("+otherCode+" / "+signedOutCode+").",6000);
+}
 }
 var APP_VERSION="29";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
-if("serviceWorker" in navigator&&location.protocol==="https:"){
+if("serviceWorker" in navigator&&GearLogic.serviceWorkerAllowed(location,window.GEAR_QA)){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
   navigator.serviceWorker.addEventListener("controllerchange",()=>{if(!hadSW||reloading)return;reloading=true;if(!anySheetOpen())location.reload();else toast("Gear Locker updated. Close and reopen to finish.",6000)});

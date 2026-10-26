@@ -52,4 +52,31 @@
   window.GEAR_QA_READY = true;
   window.GEAR_QA_BLOCKED = false;
   window.GEAR_QA_REASON = "";
+  // Email/password sign-in does not need the Google popup helper. Block it before Auth starts.
+  if (typeof Element !== "undefined" && !window.GEAR_GAPI_BLOCKED) {
+    window.GEAR_GAPI_BLOCKED = true;
+    var gapiPrefix = "https://apis.google.com/js/api.js";
+    function gapiScript(node) {
+      if (!node || String(node.tagName || "").toUpperCase() !== "SCRIPT") return false;
+      var src = "";
+      try { src = String(node.src || (node.getAttribute && node.getAttribute("src")) || ""); } catch (e) { src = ""; }
+      return src.indexOf(gapiPrefix) === 0;
+    }
+    function refuseScript(node) {
+      setTimeout(function () {
+        try { if (typeof node.onerror === "function") node.onerror(new Error("blocked")); } catch (e) {}
+      }, 0);
+      return node;
+    }
+    var appendChild = Element.prototype.appendChild;
+    Element.prototype.appendChild = function (node) {
+      if (gapiScript(node)) return refuseScript(node);
+      return appendChild.call(this, node);
+    };
+    var insertBefore = Element.prototype.insertBefore;
+    Element.prototype.insertBefore = function (node, ref) {
+      if (gapiScript(node)) return refuseScript(node);
+      return insertBefore.call(this, node, ref);
+    };
+  }
 })();
