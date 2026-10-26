@@ -3,7 +3,11 @@
 // Header: Authorization: Bearer <Firebase ID token from the signed-in app user>
 // Returns { results: [{ id, ok, retailNew, usedLow, usedHigh, value, weightOz, priceNote, weightNote, sources }] }
 // Secrets (set in the Cloudflare dashboard, never in code): ANTHROPIC_API_KEY
-// Vars (wrangler.toml): FIREBASE_PROJECT, ALLOWED_ORIGINS, MODEL, FALLBACK_MODEL, ALLOWED_EMAILS (optional), MAX_ITEMS
+// Vars (dashboard, kept across deploys): FIREBASE_PROJECT, ALLOWED_ORIGINS, MODEL, FALLBACK_MODEL, ALLOWED_EMAILS (required), DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS
+// An empty ALLOWED_EMAILS list turns lookups off for everyone, including the owner.
+
+import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, parseAllowlist } from "../js/logic.js";
+import { sendWebPush, pushEndpointOk } from "./webpush.js";
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 let jwksCache = null, jwksAt = 0;
@@ -68,14 +72,13 @@ Brand / model: ${it.brand || "unknown"}
 Category: ${it.category || "unknown"}
 Color: ${it.color || "n/a"}
 Condition: ${it.condition || "Good"}
-Notes: ${it.notes || "none"}
 
-Use web search (at most 4 searches). Good searches:
+Use web search (at most 3 searches). Good searches:
 - "<brand> <name> price" for the manufacturer, Amazon or a major retailer: the current NEW price and the published WEIGHT
 - "<brand> <name> amazon" for the Amazon price
 - "<brand> <name> ebay sold" and "<brand> <name> tacswap" for USED prices${firearm ? "\nThis is a firearm: do NOT price it (set retailNew, usedLow, usedHigh, value to null). Only find the listed unloaded weight." : ""}${wish ? "\nThis is a wishlist item the user wants to buy. If the brand is blank the name may be a generic need (e.g. \"Eye protection\"): pick a well-regarded mid-range product, price it, and name it in priceNote." : ""}
 
-If the brand is blank or "unknown", the user doesn't know the maker: work out the most likely kind of item from the name, category, color and notes, and give typical prices and weight for a common mid-range version of it. Start priceNote with "Estimate:" and name what you based it on (e.g. "Estimate: typical MOLLE IFAK pouch, $25-45 new").
+If the brand is blank or "unknown", the user doesn't know the maker: work out the most likely kind of item from the name, category and color, and give typical prices and weight for a common mid-range version of it. Start priceNote with "Estimate:" and name what you based it on (e.g. "Estimate: typical MOLLE IFAK pouch, $25-45 new").
 Always give a price even if used comps are thin: if you only find new prices, set retailNew from them and estimate usedLow/usedHigh as about 50-75% of new.
 value = the per-unit value for THIS item's condition (${CONDITION[it.condition] || CONDITION.Good}).
 weightOz = the weight of ONE unit in ounces (1 lb = 16 oz, 1 g = 0.035274 oz), rounded to 0.1. If sizes differ and none is given, use size Medium and say so in weightNote.
@@ -111,7 +114,7 @@ function findJson(text, keys) {
 }
 
 async function callClaude(env, model, it) {
-  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 4 }];
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }];
   const messages = [{ role: "user", content: prompt(it) }];
   const send = async () => {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -187,16 +190,15 @@ function dealPrompt(w) {
 Item: ${w.name}
 Brand / model: ${w.brand || "any well-regarded brand"}
 Category: ${w.category || "unknown"}
-Notes: ${w.notes || "none"}
 The buyer's target price is $${w.target}.
 
-Use web search (at most 4 searches). Check TacSwap listings, eBay Buy It Now listings, Amazon, the maker's site and big retailers or sales. New or used in good condition both count; skip parts-only, wrong item or out-of-stock listings. Include shipping if it's clearly listed.
+Use web search (at most 2 searches). Check TacSwap listings, eBay Buy It Now listings, Amazon, the maker's site and big retailers or sales. New or used in good condition both count; skip parts-only, wrong item or out-of-stock listings. Include shipping if it's clearly listed.
 
 When done, reply with ONLY this JSON object:
 {"price": number|null, "where": "site or seller, e.g. 'TacSwap' or 'Amazon'", "url": "https link to the listing", "condition": "new|used|like new", "note": "one short sentence, e.g. 'Used, good condition, ships free'"}`;
 }
 async function dealCheck(env, w) {
-  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 4 }];
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
   const messages = [{ role: "user", content: dealPrompt(w) }];
   let data, all = [];
   for (let i = 0; i < 3; i++) {
@@ -218,26 +220,82 @@ async function dealCheck(env, w) {
     hit: price != null && price <= +w.target };
 }
 const WKEY = uid => "w:" + uid;
-async function runDueWatches(env, budget) {
-  if (!env.WATCH) return 0;
-  let done = 0, cursor;
-  const dayMs = 20 * 3600e3;
+async function readCount(env, key) { return +(await env.WATCH.get(key)) || 0; }
+async function chargeAi(env, uid, add) {
+  if (!env.WATCH) return { ok: false, status: 503, error: "Lookups are paused until price-alert storage is connected." };
+  const limit = +(env.DAILY_AI_LIMIT || 40);
+  const key = quotaKey(uid, new Date());
+  const used = await readCount(env, key);
+  const d = chargeDecision(used, add, limit);
+  if (!d.ok) return { ok: false, status: 429, error: `Daily lookup limit reached (${d.limit} per day). Try again tomorrow.`, remaining: d.remaining, limit: d.limit };
+  await env.WATCH.put(key, String(d.next), { expirationTtl: 48 * 3600 });
+  return { ok: true, remaining: d.remaining, limit: d.limit };
+}
+async function chargeScheduledAlert(env, uid) {
+  if (!env.WATCH) return { ok: false };
+  const aiLimit = +(env.DAILY_AI_LIMIT || 40);
+  const alertLimit = +(env.ALERT_DAILY_CAP || 6);
+  const day = new Date();
+  const qk = quotaKey(uid, day);
+  const ak = alertQuotaKey(uid, day);
+  const ai = chargeDecision(await readCount(env, qk), 1, aiLimit);
+  const al = chargeDecision(await readCount(env, ak), 1, alertLimit);
+  if (!ai.ok || !al.ok) return { ok: false };
+  await env.WATCH.put(qk, String(ai.next), { expirationTtl: 48 * 3600 });
+  await env.WATCH.put(ak, String(al.next), { expirationTtl: 48 * 3600 });
+  return { ok: true };
+}
+async function listWatchUsers(env) {
+  const users = [];
+  let cursor;
   do {
     const page = await env.WATCH.list({ prefix: "w:", cursor });
     cursor = page.list_complete ? null : page.cursor;
     for (const k of page.keys) {
-      if (done >= budget) return done;
-      const rec = await env.WATCH.get(k.name, "json"); if (!rec || !Array.isArray(rec.list)) continue;
-      let changed = false;
-      for (const w of rec.list) {
-        if (done >= budget) break;
-        if (w.lastCheck && Date.now() - Date.parse(w.lastCheck) < dayMs) continue;
-        try { const b = await dealCheck(env, w); w.best = b; w.lastErr = ""; } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); }
-        w.lastCheck = new Date().toISOString(); changed = true; done++;
-      }
-      if (changed) await env.WATCH.put(k.name, JSON.stringify(rec));
+      const rec = await env.WATCH.get(k.name, "json");
+      if (!rec || !Array.isArray(rec.list)) continue;
+      users.push({ uid: k.name.slice(2), key: k.name, rec, list: rec.list });
     }
   } while (cursor);
+  return users;
+}
+async function runDueWatches(env, budget) {
+  if (!env.WATCH) return 0;
+  const allow = parseAllowlist(env.ALLOWED_EMAILS);
+  const gapMs = Math.max(1, +(env.MIN_ALERT_GAP_HOURS || 20)) * 3600e3;
+  const aiLimit = +(env.DAILY_AI_LIMIT || 40);
+  const alertLimit = +(env.ALERT_DAILY_CAP || 6);
+  const now = new Date();
+  const eligible = [];
+  for (const u of await listWatchUsers(env)) {
+    const email = String(u.rec.email || "").toLowerCase();
+    if (!allow.includes(email) || u.rec.emailVerified === false) continue;
+    if (await readCount(env, quotaKey(u.uid, now)) >= aiLimit) continue;
+    if (await readCount(env, alertQuotaKey(u.uid, now)) >= alertLimit) continue;
+    eligible.push(u);
+  }
+  const picked = selectDueWatches(eligible, { now, budget, minGapMs: gapMs });
+  const dirty = new Map();
+  let done = 0;
+  for (const p of picked) {
+    const u = eligible.find(x => x.uid === p.uid);
+    const w = u && u.rec.list.find(x => x.id === p.watch.id);
+    if (!w) continue;
+    if (!(await chargeScheduledAlert(env, u.uid)).ok) continue;
+    const wasHit = !!(w.best && w.best.hit);
+    try {
+      const b = await dealCheck(env, w);
+      w.best = b; w.lastErr = "";
+      if (!wasHit && b.hit && u.rec.push) {
+        const sent = await sendWebPush(u.rec.push, JSON.stringify({ title: "Price alert", body: `${w.name} is at or under your target`, url: "./?tab=wish" }), env);
+        if (sent && sent.gone) delete u.rec.push;
+      }
+    } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); }
+    w.lastCheck = new Date().toISOString();
+    dirty.set(u.key, u.rec);
+    done++;
+  }
+  for (const [key, rec] of dirty) await env.WATCH.put(key, JSON.stringify(rec));
   return done;
 }
 
@@ -245,11 +303,11 @@ async function runDueWatches(env, budget) {
 async function batteryLookup(env, d) {
   const ask = `What battery does this device use, and how long does it normally last?
 Device: ${d.brand} ${d.name} (${d.category}${d.type ? ", " + d.type : ""})
-Use web search (at most 3 searches) on the maker's spec page or manual. If it uses no battery at all (iron sights, tritium/fiber optic, non-illuminated magnifier), say so.
+Use web search (at most 2 searches) on the maker's spec page or manual. If it uses no battery at all (iron sights, tritium/fiber optic, non-illuminated magnifier), say so.
 swapMonths = a sensible replacement interval for someone who relies on it (e.g. EOTech CR123 ~3 months, Aimpoint T2 CR2032 ~12 months, weapon-light CR123s ~6 months, rechargeables = how often to top up, in months, can be 0.5).
 Reply with ONLY this JSON:
 {"none": false, "battery": "e.g. CR123A, CR2032, AA, built-in rechargeable", "count": number, "life": "short note, e.g. '50,000 hrs at setting 8' or '1.5 hrs on high'", "swapMonths": number}`;
-  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }];
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
   const messages = [{ role: "user", content: ask }];
   let data;
   for (let i = 0; i < 3; i++) {
@@ -269,12 +327,12 @@ Reply with ONLY this JSON:
 async function ammoLookup(env, a) {
   const ask = `Find what this ammo costs per round to buy online in the US RIGHT NOW (in stock).
 Ammo: ${a.caliber} ${a.brand} ${a.load}
-Use web search (at most 4 searches). AmmoSeek, Lucky Gunner, Target Sports USA, Palmetto State Armory, Brownells, MidwayUSA, Sportsman's Warehouse and Bass Pro are good sources. Price per round = box price ÷ rounds in the box (use the best in-stock price; ignore shipping unless it's included).
+Use web search (at most 2 searches). AmmoSeek, Lucky Gunner, Target Sports USA, Palmetto State Armory, Brownells, MidwayUSA, Sportsman's Warehouse and Bass Pro are good sources. Price per round = box price ÷ rounds in the box (use the best in-stock price; ignore shipping unless it's included).
 1) cpr: the per-round price of THIS exact product (same brand and load). If the brand or load is blank, use a typical in-stock price for that caliber and load type.
 2) low: the cheapest in-stock ammo in the same caliber and the same kind (range/FMJ vs. defensive/JHP vs. match), any brand.
 Reply with ONLY this JSON:
 {"cpr": number|null, "where": "store name", "url": "https link to that product page", "low": {"cpr": number|null, "desc": "brand + load, e.g. 'Blazer Brass 115gr FMJ'", "where": "store name", "url": "https link"}, "note": "one short line, e.g. 'Sold in 50-rd boxes; case of 1,000 is cheaper'"}`;
-  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 4 }];
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
   const messages = [{ role: "user", content: ask }];
   let data;
   for (let i = 0; i < 3; i++) {
@@ -319,7 +377,7 @@ Rules
 - Each step must be a different method or path, each more robust than the last (e.g. cell → text/app → radio simplex/repeater → satellite messenger or pre-agreed meet point).
 - Only use radio methods the group actually has devices for. A Baofeng may transmit ONLY on amateur (ham) frequencies and only by licensed operators. GMRS needs a GMRS license and a GMRS-certified radio; FRS and MURS are license-free but need certified FRS/MURS radios. If nobody is licensed, don't plan to transmit on ham.
 - Simplex handheld range is ~1–3 mi on flat ground, less in woods/urban; a repeater covers ~20–50 mi. Pick accordingly for the distance and terrain.
-${b.location ? `- Use web search (at most 4 searches, e.g. RepeaterBook, the local ARES/RACES group, NOAA Weather Radio station list) to find REAL open 2 m / 70 cm repeaters and the NOAA weather station that cover "${b.location}". If one of the saved frequencies already matches, use the saved one. Only suggest a new frequency if you found it in a source; include the source.` : "- No area given: don't look anything up; use saved frequencies and general simplex/calling channels."}
+${b.location ? `- Use web search (at most 2 searches, e.g. RepeaterBook, the local ARES/RACES group, NOAA Weather Radio station list) to find REAL open 2 m / 70 cm repeaters and the NOAA weather station that cover "${b.location}". If one of the saved frequencies already matches, use the saved one. Only suggest a new frequency if you found it in a source; include the source.` : "- No area given: don't look anything up; use saved frequencies and general simplex/calling channels."}
 - Keep text short and usable on a pocket card.
 
 Reply with ONLY this JSON:
@@ -328,7 +386,7 @@ Reply with ONLY this JSON:
  "checkin":"schedule, e.g. 'Top of each hour, 5-min listen window'","rally":"advice for picking a rally point (don't invent an address)","codes":"2-3 simple code words",
  "newFreqs":[{"name":"short name","rx":"146.940","duplex":"+|-|","offset":"0.600","tone":"103.5 or empty","mode":"FM","service":"Ham|GMRS|NOAA weather|MURS|FRS","notes":"where/what, e.g. 'W4XX repeater, Jacksonville'","source":"site name"}],
  "gaps":["short things they're missing, e.g. 'No one else is licensed: get them GMRS radios or ham licenses'"]}`;
-  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 4 }];
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
   const messages = [{ role: "user", content: ask }];
   let data;
   for (let i = 0; i < 4; i++) {
@@ -356,7 +414,7 @@ async function lookupOne(env, it) {
   const clean = {
     id: String(it.id || "").slice(0, 80), name: String(it.name || "").slice(0, 120), brand: String(it.brand || "").slice(0, 120),
     category: String(it.category || "").slice(0, 60), condition: String(it.condition || "Good").slice(0, 20), color: String(it.color || "").slice(0, 40),
-    notes: String(it.notes || "").slice(0, 200), kind: it.kind === "wish" ? "wish" : "item",
+    notes: "", kind: it.kind === "wish" ? "wish" : "item",
   };
   if (!clean.name) return { id: clean.id, ok: false, error: "missing name" };
   let data;
@@ -368,7 +426,8 @@ async function lookupOne(env, it) {
   return { id: clean.id, ok: true, ...parseResult(data) };
 }
 
-const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", MAX_WATCHES: "10", WATCH_BATCH: "6" };
+const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
+const ROUTES = ["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/watch/push", "/battery", "/ammo", "/pace"];
 
 export default {
   async fetch(req, rawEnv) {
@@ -377,15 +436,15 @@ export default {
     const h = cors(env, req);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: h });
     const url = new URL(req.url);
-    if (url.pathname === "/" || url.pathname === "/health") return json({ ok: true, service: "gear-locker-api" }, 200, h);
-    if (!["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/battery", "/ammo", "/pace"].includes(url.pathname) || req.method !== "POST") return json({ error: "Not found" }, 404, h);
+    if (url.pathname === "/" || url.pathname === "/health") return json({ ok: true, service: "gear-locker-api", access: "allowlist" }, 200, h);
+    if (!ROUTES.includes(url.pathname) || req.method !== "POST") return json({ error: "Not found" }, 404, h);
     if (!env.ANTHROPIC_API_KEY) return json({ error: "Lookup service isn't set up yet (missing API key)." }, 503, h);
 
     let user;
     try { user = await verifyFirebaseToken((req.headers.get("authorization") || "").replace(/^Bearer\s+/i, ""), env.FIREBASE_PROJECT); }
     catch { return json({ error: "Please sign in again." }, 401, h); }
-    const allow = (env.ALLOWED_EMAILS || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
-    if (allow.length && !allow.includes(String(user.email || "").toLowerCase())) return json({ error: "Lookups are turned off for this account." }, 403, h);
+    const access = decideAccess(user, env);
+    if (!access.ok) return json({ error: access.error }, access.status, h);
 
     let body;
     try { body = await req.json(); } catch { return json({ error: "Bad request" }, 400, h); }
@@ -393,7 +452,22 @@ export default {
       if (!env.WATCH) return json({ error: "Price alerts aren't switched on yet" }, 503, h);
       const key = WKEY(user.sub);
       const rec = (await env.WATCH.get(key, "json")) || { list: [] };
-      const pub = () => rec.list.map(w => ({ id: w.id, target: w.target, best: w.best || null, lastCheck: w.lastCheck || "", lastErr: w.lastErr || "" }));
+      const pub = () => ({ watches: rec.list.map(w => ({ id: w.id, target: w.target, best: w.best || null, lastCheck: w.lastCheck || "", lastErr: w.lastErr || "" })), vapidPublicKey: env.VAPID_PUBLIC_KEY || "", push: !!rec.push });
+      const saveRec = async () => {
+        rec.email = String(user.email || "");
+        rec.emailVerified = !!user.email_verified;
+        rec.updatedAt = new Date().toISOString();
+        if ((rec.list && rec.list.length) || rec.push) await env.WATCH.put(key, JSON.stringify(rec));
+        else await env.WATCH.delete(key);
+      };
+      if (url.pathname === "/watch/push") {
+        const sub = body.subscription;
+        if (!sub) { delete rec.push; await saveRec(); return json({ ok: true, push: false }, 200, h); }
+        if (!sub.endpoint || !pushEndpointOk(sub.endpoint) || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) return json({ error: "That notification setup isn't valid." }, 400, h);
+        rec.push = { endpoint: String(sub.endpoint).slice(0, 500), keys: { p256dh: String(sub.keys.p256dh).slice(0, 200), auth: String(sub.keys.auth).slice(0, 100) } };
+        await saveRec();
+        return json({ ok: true, push: true }, 200, h);
+      }
       if (url.pathname === "/watch/sync") {
         const max = +(env.MAX_WATCHES || 10);
         const inList = Array.isArray(body.watches) ? body.watches : [];
@@ -402,51 +476,63 @@ export default {
           const o = old.get(String(w.id)) || {};
           const same = o.name === String(w.name) && o.brand === String(w.brand || "");
           return { id: String(w.id).slice(0, 80), name: String(w.name).slice(0, 120), brand: String(w.brand || "").slice(0, 120), category: String(w.category || "").slice(0, 60),
-            notes: String(w.notes || "").slice(0, 160), target: Math.round(+w.target), best: same ? (o.best ? { ...o.best, hit: o.best.price != null && o.best.price <= Math.round(+w.target) } : null) : null,
+            target: Math.round(+w.target), best: same ? (o.best ? { ...o.best, hit: o.best.price != null && o.best.price <= Math.round(+w.target) } : null) : null,
             lastCheck: same ? (o.lastCheck || "") : "", lastErr: "" };
         });
-        rec.list = next; rec.email = String(user.email || ""); rec.updatedAt = new Date().toISOString();
-        if (next.length) await env.WATCH.put(key, JSON.stringify(rec)); else await env.WATCH.delete(key);
-        return json({ ok: true, watches: pub(), max, dropped: Math.max(0, inList.length - max) }, 200, h);
+        rec.list = next;
+        await saveRec();
+        return json({ ok: true, ...pub(), max, dropped: Math.max(0, inList.length - max) }, 200, h);
       }
       if (url.pathname === "/watch/check") {
         const w = rec.list.find(x => x.id === String(body.id || ""));
         if (!w) return json({ error: "Set an alert price on this item first" }, 400, h);
-        if (w.lastCheck && Date.now() - Date.parse(w.lastCheck) < 10 * 60e3) return json({ watches: pub() }, 200, h);
+        if (w.lastCheck && Date.now() - Date.parse(w.lastCheck) < 10 * 60e3) return json(pub(), 200, h);
+        const bill = await chargeScheduledAlert(env, user.sub);
+        if (!bill.ok) return json({ error: `Daily lookup limit reached (${+(env.DAILY_AI_LIMIT || 40)} per day). Try again tomorrow.` }, 429, h);
         try { w.best = await dealCheck(env, w); w.lastErr = ""; } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); }
         w.lastCheck = new Date().toISOString();
-        await env.WATCH.put(key, JSON.stringify(rec));
-        return json({ watches: pub() }, 200, h);
+        await saveRec();
+        return json(pub(), 200, h);
       }
-      return json({ watches: pub() }, 200, h);
+      return json(pub(), 200, h);
     }
     if (url.pathname === "/pace") {
       const S = (v, n) => String(v ?? "").slice(0, n);
       const b = { location: S(body.location, 80), scenario: S(body.scenario, 60), distance: S(body.distance, 60), terrain: S(body.terrain, 60), cell: S(body.cell, 40), grid: S(body.grid, 40), people: S(body.people, 80), licensed: S(body.licensed, 80), duration: S(body.duration, 40), notes: S(body.notes, 300),
         devices: (Array.isArray(body.devices) ? body.devices : []).slice(0, 12).map(d => S(d, 40)),
         freqs: (Array.isArray(body.freqs) ? body.freqs : []).slice(0, 150).map((f, i) => ({ i, name: S(f.name, 30), rx: S(f.rx, 12), duplex: S(f.duplex, 6), offset: S(f.offset, 8), tx: S(f.tx, 12), tone: S(f.tone, 16), mode: S(f.mode, 4), service: S(f.service, 24), group: S(f.group, 30), notes: S(f.notes, 80), onRadio: !!f.onRadio })) };
+      const paceBill = await chargeAi(env, user.sub, 1);
+      if (!paceBill.ok) return json({ error: paceBill.error }, paceBill.status, h);
       try { return json({ result: await paceBuild(env, b) }, 200, h); }
       catch (e) { return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/ammo") {
       const a = { caliber: String(body.caliber || "").slice(0, 40), brand: String(body.brand || "").slice(0, 60), load: String(body.load || "").slice(0, 80) };
       if (!a.caliber) return json({ error: "Add a caliber first" }, 400, h);
+      const ammoBill = await chargeAi(env, user.sub, 1);
+      if (!ammoBill.ok) return json({ error: ammoBill.error }, ammoBill.status, h);
       try { return json({ result: await ammoLookup(env, a) }, 200, h); }
       catch (e) { return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/battery") {
+      const battBill = await chargeAi(env, user.sub, 1);
+      if (!battBill.ok) return json({ error: battBill.error }, battBill.status, h);
       try { return json({ result: await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) }) }, 200, h); }
       catch (e) { return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/identify") {
       const img = String(body.image || "");
       if (!img || img.length > 2_800_000 || !/^[A-Za-z0-9+/=]+$/.test(img.slice(0, 200))) return json({ error: "Send a photo (JPEG, under 2 MB)" }, 400, h);
+      const idBill = await chargeAi(env, user.sub, 1);
+      if (!idBill.ok) return json({ error: idBill.error }, idBill.status, h);
       try { return json({ result: await identify(env, img, String(body.hint || "").slice(0, 80)) }, 200, h); }
       catch (e) { return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     const max = +(env.MAX_ITEMS || 4);
     const items = Array.isArray(body.items) ? body.items.slice(0, max) : [];
     if (!items.length) return json({ error: "No items" }, 400, h);
+    const lookBill = await chargeAi(env, user.sub, items.length);
+    if (!lookBill.ok) return json({ error: lookBill.error }, lookBill.status, h);
 
     const results = await Promise.all(items.map(it => lookupOne(env, it).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160) }))));
     const firstErr = results.find(r => !r.ok)?.error;

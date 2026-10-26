@@ -1,0 +1,16 @@
+{
+  "name": "gear-locker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/logic.test.js test/webpush.test.js test/worker.test.js test/qa-guard.test.js test/static.test.js",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-gear-locker \"node --test test/rules.test.js\"",
+    "qa": "node scripts/qa.mjs"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.9.1",
+    "firebase-tools": "^14.15.1",
+    "wrangler": "^4.28.0"
+  }
+}

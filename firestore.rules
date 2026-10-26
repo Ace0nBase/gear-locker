@@ -1,0 +1,158 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+    function emailOk() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email is string
+        && request.auth.token.email.size() > 3;
+    }
+    function borrowerMatch() {
+      return emailOk() && (
+        resource.data.borrowerEmail == request.auth.token.email
+        || resource.data.borrowerEmailLower == request.auth.token.email
+      );
+    }
+    function isLender() {
+      return signedIn() && resource.data.lender == request.auth.uid;
+    }
+    function itemOk(m) {
+      return m is map
+        && m.keys().hasOnly(['id','name','brand','color','category','nick','qty','weight','parent','caliber','value','paid']);
+    }
+    function itemsOk(xs) {
+      return xs is list && xs.size() <= 80
+    && (xs.size() < 1 || itemOk(xs[0]))
+    && (xs.size() < 2 || itemOk(xs[1]))
+    && (xs.size() < 3 || itemOk(xs[2]))
+    && (xs.size() < 4 || itemOk(xs[3]))
+    && (xs.size() < 5 || itemOk(xs[4]))
+    && (xs.size() < 6 || itemOk(xs[5]))
+    && (xs.size() < 7 || itemOk(xs[6]))
+    && (xs.size() < 8 || itemOk(xs[7]))
+    && (xs.size() < 9 || itemOk(xs[8]))
+    && (xs.size() < 10 || itemOk(xs[9]))
+    && (xs.size() < 11 || itemOk(xs[10]))
+    && (xs.size() < 12 || itemOk(xs[11]))
+    && (xs.size() < 13 || itemOk(xs[12]))
+    && (xs.size() < 14 || itemOk(xs[13]))
+    && (xs.size() < 15 || itemOk(xs[14]))
+    && (xs.size() < 16 || itemOk(xs[15]))
+    && (xs.size() < 17 || itemOk(xs[16]))
+    && (xs.size() < 18 || itemOk(xs[17]))
+    && (xs.size() < 19 || itemOk(xs[18]))
+    && (xs.size() < 20 || itemOk(xs[19]))
+    && (xs.size() < 21 || itemOk(xs[20]))
+    && (xs.size() < 22 || itemOk(xs[21]))
+    && (xs.size() < 23 || itemOk(xs[22]))
+    && (xs.size() < 24 || itemOk(xs[23]))
+    && (xs.size() < 25 || itemOk(xs[24]))
+    && (xs.size() < 26 || itemOk(xs[25]))
+    && (xs.size() < 27 || itemOk(xs[26]))
+    && (xs.size() < 28 || itemOk(xs[27]))
+    && (xs.size() < 29 || itemOk(xs[28]))
+    && (xs.size() < 30 || itemOk(xs[29]))
+    && (xs.size() < 31 || itemOk(xs[30]))
+    && (xs.size() < 32 || itemOk(xs[31]))
+    && (xs.size() < 33 || itemOk(xs[32]))
+    && (xs.size() < 34 || itemOk(xs[33]))
+    && (xs.size() < 35 || itemOk(xs[34]))
+    && (xs.size() < 36 || itemOk(xs[35]))
+    && (xs.size() < 37 || itemOk(xs[36]))
+    && (xs.size() < 38 || itemOk(xs[37]))
+    && (xs.size() < 39 || itemOk(xs[38]))
+    && (xs.size() < 40 || itemOk(xs[39]))
+    && (xs.size() < 41 || itemOk(xs[40]))
+    && (xs.size() < 42 || itemOk(xs[41]))
+    && (xs.size() < 43 || itemOk(xs[42]))
+    && (xs.size() < 44 || itemOk(xs[43]))
+    && (xs.size() < 45 || itemOk(xs[44]))
+    && (xs.size() < 46 || itemOk(xs[45]))
+    && (xs.size() < 47 || itemOk(xs[46]))
+    && (xs.size() < 48 || itemOk(xs[47]))
+    && (xs.size() < 49 || itemOk(xs[48]))
+    && (xs.size() < 50 || itemOk(xs[49]))
+    && (xs.size() < 51 || itemOk(xs[50]))
+    && (xs.size() < 52 || itemOk(xs[51]))
+    && (xs.size() < 53 || itemOk(xs[52]))
+    && (xs.size() < 54 || itemOk(xs[53]))
+    && (xs.size() < 55 || itemOk(xs[54]))
+    && (xs.size() < 56 || itemOk(xs[55]))
+    && (xs.size() < 57 || itemOk(xs[56]))
+    && (xs.size() < 58 || itemOk(xs[57]))
+    && (xs.size() < 59 || itemOk(xs[58]))
+    && (xs.size() < 60 || itemOk(xs[59]))
+    && (xs.size() < 61 || itemOk(xs[60]))
+    && (xs.size() < 62 || itemOk(xs[61]))
+    && (xs.size() < 63 || itemOk(xs[62]))
+    && (xs.size() < 64 || itemOk(xs[63]))
+    && (xs.size() < 65 || itemOk(xs[64]))
+    && (xs.size() < 66 || itemOk(xs[65]))
+    && (xs.size() < 67 || itemOk(xs[66]))
+    && (xs.size() < 68 || itemOk(xs[67]))
+    && (xs.size() < 69 || itemOk(xs[68]))
+    && (xs.size() < 70 || itemOk(xs[69]))
+    && (xs.size() < 71 || itemOk(xs[70]))
+    && (xs.size() < 72 || itemOk(xs[71]))
+    && (xs.size() < 73 || itemOk(xs[72]))
+    && (xs.size() < 74 || itemOk(xs[73]))
+    && (xs.size() < 75 || itemOk(xs[74]))
+    && (xs.size() < 76 || itemOk(xs[75]))
+    && (xs.size() < 77 || itemOk(xs[76]))
+    && (xs.size() < 78 || itemOk(xs[77]))
+    && (xs.size() < 79 || itemOk(xs[78]))
+    && (xs.size() < 80 || itemOk(xs[79]));
+    }
+
+    function shareShape(data) {
+      return data.keys().hasOnly(['owner','title','kind','from','prices','items','updatedAt','serverUpdatedAt','writeId'])
+        && !data.keys().hasAny(['serial','notes','serialNumber','location'])
+        && itemsOk(data.items);
+    }
+
+    match /users/{uid}/{col}/{docId} {
+      allow read, write: if signedIn()
+        && request.auth.uid == uid
+        && col in ['items','ammo','sessions','dope','maint','wish','loans','freqs','pace','meta'];
+    }
+
+    match /shares/{sid} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.owner == request.auth.uid
+        && shareShape(request.resource.data);
+      allow update: if signedIn()
+        && resource.data.owner == request.auth.uid
+        && request.resource.data.owner == resource.data.owner
+        && shareShape(request.resource.data);
+      allow delete: if signedIn() && resource.data.owner == request.auth.uid;
+    }
+
+    match /lends/{id} {
+      allow get: if isLender() || borrowerMatch();
+      allow list: if isLender();
+      allow list: if emailOk() && resource.data.borrowerEmail == request.auth.token.email;
+      allow list: if emailOk() && resource.data.borrowerEmailLower == request.auth.token.email;
+      allow create: if emailOk()
+        && request.auth.uid == request.resource.data.lender
+        && request.resource.data.lenderEmail == request.auth.token.email
+        && request.resource.data.borrowerEmail is string
+        && request.resource.data.borrowerEmailLower is string
+        && request.resource.data.borrowerEmail.size() > 3
+        && request.resource.data.borrowerEmailLower.size() > 3;
+      allow update: if (isLender()
+          && request.resource.data.lender == resource.data.lender)
+        || (borrowerMatch()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['borrowerReturned','updatedAt','serverUpdatedAt']));
+      allow delete: if isLender();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,11 @@
+node_modules/
+.firebase/
+firebase-debug.log
+firestore-debug.log
+storage-debug.log
+ui-debug.log
+pubsub-debug.log
+database-debug.log
+*.log
+config.local.js
+.wrangler/

@@ -9,5 +9,10 @@ window.FIREBASE_CONFIG = {
   appId: "1:631959211168:web:7ae416380bb1a91fa3cdc5"
 };
 
-// Price + weight lookup service (Cloudflare Worker). Works for every signed-in user.
+// Leave this blank until a reCAPTCHA v3 site key is pasted in.
+// App Check stays off while this is empty, so the site keeps working.
+window.APP_CHECK_SITE_KEY = "";
+
+// Price + weight lookup service (Cloudflare Worker).
+// Lookups only run for emails the owner has approved, after that address is confirmed.
 window.LOOKUP_URL = "https://gear-locker-api.ace0nbase.workers.dev";

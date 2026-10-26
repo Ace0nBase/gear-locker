@@ -1,4 +1,6 @@
-# Deployed automatically by Cloudflare Workers Builds on every push to main (connected 2026-10-20).
+# Production deploys: Cloudflare Workers Builds on the main branch only (connected 2026-10-20).
+# Do not add a GitHub Action that runs wrangler deploy. Do not point a branch build at this worker name.
+# Dashboard variables override the defaults in worker.js (keep_vars). Set ALLOWED_EMAILS before merging.
 name = "gear-locker-api"
 main = "worker.js"
 compatibility_date = "2026-10-15"

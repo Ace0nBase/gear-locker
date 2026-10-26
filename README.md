@@ -1,0 +1,46 @@
+# Gear Locker
+
+Gear Locker is a private inventory for the gear you already own. This copy of the site is the one that gets published. The checks below use a separate practice locker on your computer. They cannot open the live locker or spend the live lookup key.
+
+Questions about this project go to the Gear Locker team. A public support address is not chosen yet: support@&lt;brand-domain&gt; (TODO).
+
+## Run the local privacy check
+
+From this folder, after `npm install`:
+
+```
+npm run qa
+```
+
+Then open:
+
+http://127.0.0.1:5500/?env=emulator
+
+The emulator screen is at http://127.0.0.1:4000. Stop everything with Ctrl+C.
+
+`npm run qa` starts three things, all on this computer:
+
+1. The Firebase emulators for sign-in, the locker database, and file storage, using the rules in this folder. The project name is `demo-gear-locker`.
+2. A pretend lookup service on port 8787. It returns sample prices. It does not call Claude and it refuses the live project.
+3. The app itself on port 5500.
+
+The address must include `?env=emulator`, and it only works on this computer. Opening that flag on the published site turns the app off instead of showing the live locker. A file named `config.local.js` can change the local ports, but if it contains the live project it is refused. Copy `config.local.example.js` only if you need that. Do not put the live project id or the live lookup address in it.
+
+The published `config.js` is unchanged by this mode. A plain `firebase deploy` from this folder also stays on `demo-gear-locker`. Updating the live locker is a separate command and is listed in the pull request checklist. Do not run it as part of this check.
+
+## Two throwaway accounts
+
+Use made-up emails. Do not type a real account.
+
+1. Open http://127.0.0.1:5500/?env=emulator. Create account A with a password of at least 12 characters.
+2. Stay on this page. Do not follow a confirmation link out to the live site. Tap **Mark email confirmed**.
+3. Add a piece of gear and type a serial number on it.
+4. Open Share for that item and create a link. The link uses this same local address.
+5. Copy the link, open a private window, and paste it. You should see the name, brand, color, and weight. You should not see the serial number or the notes.
+6. Back in account A, add a loan and type account B's sign-in email exactly.
+7. In a second browser profile, create account B on the same local address. Tap **Mark email confirmed**. Open the Loans tab. Account B should see the loaned item's name, not account A's inventory and not the serial number.
+8. Before account B is marked confirmed, the loan should not appear.
+9. In either account, tap **Check storage privacy**. It should say your own test file saved, and that another account and a signed-out check were blocked.
+10. Sign out. The sign-in screen should be back, and the inventory should not stay on screen.
+
+If the page says emulator mode will not open the live locker, you are not on localhost or the local file pointed at the live project. Fix that before continuing. Do not remove the block.
