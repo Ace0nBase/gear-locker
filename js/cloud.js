@@ -224,7 +224,7 @@ function openDetail(i,quiet){
    </dl>
    ${!restricted&&(i.priceNote||links)?`<div class="sect"><h3>Market data</h3>${i.priceNote?`<div class="note">${esc(i.priceNote)}</div>`:""}${links?`<div class="links" style="margin-top:6px">${links}</div>`:""}</div>`:""}
    ${armDetail(i)}
-   ${i.lookupError&&!lookingUp.has(i.id)?`<div class="sect"><h3>Market check</h3><div class="note">Last lookup didn't work: ${esc(i.lookupError)}</div></div>`:""}
+   ${i.lookupError&&!lookingUp.has(i.id)?`<div class="sect"><h3>${restricted?"Weight lookup":"Market check"}</h3><div class="note">Last lookup didn't work: ${esc(i.lookupError)}</div></div>`:""}
    ${kids.length?`<div class="sect"><h3>Mounted on this (${kids.length})</h3><div class="links">${kids.map(k=>`<button class="lnk" type="button" data-dview="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
    ${gunGear.length?`<div class="sect"><h3>Gear for this gun (${gunGear.length})</h3><div class="links">${gunGear.map(k=>`<button class="lnk" type="button" data-dview="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
    ${ks.length?`<div class="sect"><h3>Packed in kits (${ks.length})</h3><div class="links">${ks.map(k=>`<button class="lnk" type="button" data-dkit="${k.id}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
@@ -258,7 +258,7 @@ function applyLookup(id,res){
   const it=all.find(x=>x.id===id);if(!it||it.deleted||!res||!res.ok)return false;
   const n=v=>v==null||v===""||!isFinite(+v)?null:Math.round(+v);
   const restricted=GearLogic.saleRestricted(it);
-  if(restricted){it.marketSources=[];if(it.priceSource==="market"){it.priceSource="manual";delete it.priceNote}}
+  if(restricted){it.retailNew=0;delete it.usedLow;delete it.usedHigh;delete it.priceNote;it.marketSources=[];if(it.priceSource==="market")it.priceSource="manual"}
   else{
     if(n(res.retailNew)!=null)it.retailNew=n(res.retailNew);
     if(n(res.usedLow)!=null)it.usedLow=n(res.usedLow);
@@ -298,6 +298,16 @@ saveCurrent=async function(extra){
   else if(!manualVal&&rec.valueSource==="manual"&&!$("fVal").value)delete rec.valueSource;
   if(rec.valueSource!==before?.valueSource)await persist();
   const restricted=GearLogic.saleRestricted(rec);
+  if(restricted){
+    let scrub=false;
+    if(rec.retailNew){rec.retailNew=0;scrub=true}
+    if(rec.usedLow!=null){delete rec.usedLow;scrub=true}
+    if(rec.usedHigh!=null){delete rec.usedHigh;scrub=true}
+    if(Array.isArray(rec.marketSources)&&rec.marketSources.length){rec.marketSources=[];scrub=true}
+    if(rec.priceNote){delete rec.priceNote;scrub=true}
+    if(rec.priceSource==="market"){rec.priceSource="manual";scrub=true}
+    if(scrub)await persist();
+  }
   const changed=!before||before.name!==rec.name||before.brand!==rec.brand||before.category!==rec.category||before.arm!==rec.arm||(!restricted&&before.condition!==rec.condition);
   const needs=restricted?(rec.weight==null||rec.weight===""):(rec.priceSource!=="market"||rec.weight==null||rec.weight==="");
   if(window.LOOKUP_URL&&cloudUser&&!extra&&(changed||needs))runLookups([rec.id],true);

@@ -243,13 +243,14 @@ $("delBtn").onclick=async()=>{
   closeForm();formFrom=null;viewing=null;$("detail").hidden=true;syncLock();render();await persist();toast("Deleted");
 };
 if(!window.LOOKUP_URL){$("mktBtn").onclick=async()=>{
+  if(GearLogic.saleRestricted(saleDraft())){toast("Weight lookup needs a connection");return}
   const rec=await saveCurrent({marketCheck:"requested",marketCheckAt:now()});if(!rec)return;
   editing=rec;$("mktBtn").disabled=true;$("mktBtn").textContent="Check queued";showPrice(rec);
   toast(dir?"Market check queued":"Queued. Choose your folder so the check can find it.");
 };
 $("bulkMktBtn").onclick=async()=>{
   const t=now();let n=0;
-  all=all.map(i=>{if(i.deleted||i.marketCheck==="requested"||i.priceSource==="market")return i;n++;return{...i,marketCheck:"requested",marketCheckAt:t,updatedAt:t}});
+  all=all.map(i=>{if(i.deleted||GearLogic.saleRestricted(i)||i.marketCheck==="requested"||i.priceSource==="market")return i;n++;return{...i,marketCheck:"requested",marketCheckAt:t,updatedAt:t}});
   if(!n){toast("Everything is already market-checked or queued");return}
   render();await persist();toast(`Queued ${n} item${n===1?"":"s"} for a market check`);
 };}

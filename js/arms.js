@@ -312,7 +312,9 @@ $("idFile").addEventListener("change",async e=>{
     if(g.brand&&!$("fBrand").value.trim())$("fBrand").value=g.brand;
     if(g.category&&CATS.includes(g.category)&&!editing)$("fCat").value=g.category,fireFields(),$("fCat").dispatchEvent(new Event("change"));
     if(g.color&&!$("fColor").value.trim())setColor(g.color);
-    out.innerHTML=`<span class="tag">Photo ID · ${esc(g.confidence||"low")} confidence</span><br>${esc(g.summary||"")}${g.brand?"":" Brand unknown, so prices and weight will be estimated for a typical one."}`;
+    $("fName").dispatchEvent(new Event("input"));
+    const photoRestricted=GearLogic.saleRestricted(saleDraft());
+    out.innerHTML=`<span class="tag">Photo ID · ${esc(g.confidence||"low")} confidence</span><br>${esc(g.summary||"")}${g.brand?"":photoRestricted?" Look up weight does not search stores.":" Brand unknown, so prices and weight will be estimated for a typical one."}`;
   }catch(err){out.innerHTML=`<span class="tag">Photo ID</span><br>${esc(err.message||"Didn't work")}`}
   finally{$("idBtn").disabled=false}
 });
