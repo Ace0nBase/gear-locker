@@ -54,27 +54,8 @@ async function syncFromDisk(){
   try{const disk=await readFile();if(disk){const before=JSON.stringify([all,kits,db]);all=merge(all,disk.items);kits=mergeKits(kits,disk.kits);COLS.forEach(c=>db[c]=merge(db[c],disk.db[c]));if(JSON.stringify([all,kits,db])!==before){mirror();render();pushCloudSoon();if(editing){const fresh=all.find(i=>i.id===editing.id);if(fresh){editing=fresh;showPrice(fresh)}}}}}
   catch{}
 }
-function stashOffline(){
-  if(typeof navigator!=="undefined"&&navigator.onLine!==false)return;
-  var mark=r=>{if(r&&r.id)r.offlinePending=true};
-  all.forEach(mark);COLS.forEach(c=>(db[c]||[]).forEach(mark));
-  try{localStorage.setItem("gearLocker.offline",JSON.stringify({items:all,kits,db,savedAt:now()}))}catch{}
-}
-function applyOfflineStash(){
-  var raw=null;try{raw=JSON.parse(localStorage.getItem("gearLocker.offline")||"null")}catch{raw=null}
-  if(!raw||typeof raw!=="object")return;
-  if(Array.isArray(raw.items))all=merge(all,raw.items);
-  if(raw.kits&&typeof raw.kits==="object")kits=mergeKits(kits,raw.kits);
-  if(raw.db&&typeof raw.db==="object")COLS.forEach(c=>{db[c]=merge(db[c]||[],Array.isArray(raw.db[c])?raw.db[c]:[])});
-}
-function clearOfflineStash(){
-  try{localStorage.removeItem("gearLocker.offline")}catch{}
-  var strip=r=>{if(r&&r.offlinePending)delete r.offlinePending};
-  all.forEach(strip);COLS.forEach(c=>(db[c]||[]).forEach(strip));
-}
 async function persist(){
   mirror();
-  if(typeof navigator!=="undefined"&&navigator.onLine===false)stashOffline();
   try{await pushCloudSoon()}catch{}
   if(!dir){$("status").textContent=cloudUser?"":"Saved on this device only.";return}
   try{await writeFile();mirror();$("status").textContent=`Saved to ${dir.name}\\${FILE} · ${new Date().toLocaleTimeString()}`}
@@ -107,7 +88,6 @@ async function boot(){
   try{all=JSON.parse(localStorage.getItem(LS)||"[]")}catch{all=[]}
   try{kits=JSON.parse(localStorage.getItem(LSK)||"{}")||{}}catch{kits={}}
   try{const d=JSON.parse(localStorage.getItem(LSD)||"{}")||{};COLS.forEach(c=>db[c]=Array.isArray(d[c])?d[c]:[])}catch{db=emptyDb()}
-  applyOfflineStash();
   render();
   if(!window.showDirectoryPicker)return;
   try{
@@ -118,7 +98,6 @@ async function boot(){
     else showConnect(true);
   }catch{showConnect(false)}
 }
-window.addEventListener("pagehide",()=>{if(typeof navigator!=="undefined"&&navigator.onLine===false)stashOffline()});
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)syncFromDisk()});
 window.addEventListener("focus",syncFromDisk);
 setInterval(()=>{if(!document.hidden)syncFromDisk()},60000);

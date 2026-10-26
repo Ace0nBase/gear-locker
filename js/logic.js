@@ -84,9 +84,6 @@ export function mergeByServerTime(local, remote, inflight) {
   if (!local) return remote;
   const lStamp = serverStampIso(local.serverUpdatedAt);
   const rStamp = serverStampIso(remote.serverUpdatedAt);
-  if (local.offlinePending && (local.updatedAt || "") > (remote.updatedAt || "")) {
-    return { ...local, serverUpdatedAt: rStamp || lStamp || local.serverUpdatedAt };
-  }
   const flight = inflight[local.id] || inflight[remote.id] || null;
   if (flight && flight.writeId && remote.writeId === flight.writeId) {
     if (local.updatedAt === flight.updatedAt) return { ...remote, serverUpdatedAt: rStamp || remote.serverUpdatedAt };
@@ -231,6 +228,20 @@ export function loanSharePlan(loan, opts) {
   };
 }
 
+// Drop client-only flags before a row is written to the server.
+export function serverRow(row) {
+  const copy = { ...(row || {}) };
+  delete copy.offlinePending;
+  return copy;
+}
+
+// A recovered loan keeps the item name when the inventory link is gone.
+export function loanNeedsItem(loan) {
+  const id = String((loan && loan.itemId) || "").trim();
+  const name = String((loan && loan.itemName) || "").trim();
+  return !id && !name;
+}
+
 // A lend with no matching private loan is recovered so the lender can mark it returned.
 export function orphanLoansFromLends(privateLoans, lends, nowIso) {
   const have = new Set((privateLoans || []).filter(row => row && row.id).map(row => row.id));
@@ -289,6 +300,6 @@ const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
-  refreshAuthClaims, loanSharePlan, orphanLoansFromLends, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
+  refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
 };
 globalThis.GearLogic = GearLogic;

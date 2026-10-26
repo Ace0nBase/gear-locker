@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   clearUserLocal, shareItemFields, decideAccess, chargeDecision, quotaKey, alertQuotaKey,
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
-  refreshAuthClaims, loanSharePlan, orphanLoansFromLends, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
+  refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
 } from "../js/logic.js";
 
 function memStorage(seed) {
@@ -25,6 +25,7 @@ test("clearUserLocal removes per-user keys and keeps device keys", () => {
     "gearLocker.shareName": "Alex",
     "gearLocker.keep": "1",
     "gearLocker.noFolder": "1",
+    "gearLocker.offline": "{\"items\":[{\"serial\":\"SN\"}]}",
     "gearLocker.extra": "x",
     "other": "stay",
   });
@@ -33,6 +34,7 @@ test("clearUserLocal removes per-user keys and keeps device keys", () => {
   assert.equal(left["gearLocker.items"], undefined);
   assert.equal(left["gearLocker.lock"], undefined);
   assert.equal(left["gearLocker.shareName"], undefined);
+  assert.equal(left["gearLocker.offline"], undefined);
   assert.equal(left["gearLocker.extra"], undefined);
   assert.equal(left["gearLocker.keep"], "1");
   assert.equal(left["gearLocker.noFolder"], "1");
@@ -130,7 +132,7 @@ test("cloud merge prefers the server stamp and keeps a newer local edit on echo"
     { id: "1", name: "edited offline", updatedAt: "2026-10-26T05:00:00.000Z", offlinePending: true },
     { id: "1", name: "server", updatedAt: "2026-10-26T04:00:00.000Z", serverUpdatedAt: "2026-10-26T04:00:00.000Z" }
   );
-  assert.equal(pending.name, "edited offline");
+  assert.equal(pending.name, "server");
   const newerRemote = mergeByServerTime(
     { id: "1", name: "edited offline", updatedAt: "2026-10-26T05:00:00.000Z", offlinePending: true },
     { id: "1", name: "server", updatedAt: "2026-10-26T06:00:00.000Z", serverUpdatedAt: "2026-10-26T06:00:00.000Z" }
@@ -184,7 +186,23 @@ test("an orphan lend becomes a private loan the lender can close", () => {
   assert.equal(recovered[0].friendEmail, "riley@example.com");
   assert.equal(recovered[0].lendShared, true);
   assert.equal(recovered[0].notes, "");
+  assert.equal(recovered[0].itemId, "");
+  assert.equal(loanNeedsItem(recovered[0]), false);
+  assert.equal(loanNeedsItem({ itemId: "i1" }), false);
+  assert.equal(loanNeedsItem({ itemId: "", itemName: "  " }), true);
+  assert.equal(loanNeedsItem({}), true);
   assert.equal(orphanLoansFromLends([{ id: "kept" }, { id: "orphan", deleted: true }], lends).length, 0);
+});
+
+test("server rows drop the offline flag and keep the rest of the item", () => {
+  const src = { id: "1", name: "Rifle", serial: "ABC", notes: "closet", location: "safe", offlinePending: true };
+  const row = serverRow(src);
+  assert.equal(row.offlinePending, undefined);
+  assert.equal("offlinePending" in row, false);
+  assert.equal(row.serial, "ABC");
+  assert.equal(row.notes, "closet");
+  assert.equal(row.location, "safe");
+  assert.equal(src.offlinePending, true);
 });
 
 test("a missing storage file is not counted as blocked", () => {

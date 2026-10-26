@@ -3,32 +3,56 @@ var cloudUser=null,fsdb=null,cloudUnsubs=[],pushed={},pushTimer=null,kitsPushed=
 var CLOUD_COLS=["items",...COLS];
 var clean=o=>JSON.parse(JSON.stringify(o));
 var inflightWrites={}, kitsServerAt="";
-function stampRow(r){var copy=clean(r);var wid=GearLogic.newWriteId();copy.writeId=wid;copy.serverUpdatedAt=firebase.firestore.FieldValue.serverTimestamp();inflightWrites[r.id]={writeId:wid,updatedAt:r.updatedAt};return copy}
+function stampRow(r){var copy=clean(GearLogic.serverRow(r));var wid=GearLogic.newWriteId();copy.writeId=wid;copy.serverUpdatedAt=firebase.firestore.FieldValue.serverTimestamp();inflightWrites[r.id]={writeId:wid,updatedAt:r.updatedAt};return copy}
 function adoptServerStamp(row){if(!row)return row;var iso=GearLogic.serverStampIso(row.serverUpdatedAt);if(iso)row.serverUpdatedAt=iso;return row}
 function mergeCloudRows(local,remote){var m=new Map();(local||[]).forEach(i=>{if(i&&i.id)m.set(i.id,i)});(remote||[]).forEach(r=>{if(!r||!r.id)return;var p=m.get(r.id);m.set(r.id,p?GearLogic.mergeByServerTime(p,r,inflightWrites):r)});return [...m.values()]}
 var arrOf=c=>c==="items"?all:db[c];
 function setArr(c,a){if(c==="items")all=a;else db[c]=a}
 function userRef(){return fsdb.collection("users").doc(cloudUser.uid)}
 function setSync(state,txt){const d=$("syncDot");d.className="sync "+state;d.title=txt||"";}
-function pushCloudSoon(){if(!cloudUser||!fsdb)return Promise.resolve();clearTimeout(pushTimer);var delay=GearLogic.cloudWriteDelay(typeof navigator!=="undefined"?navigator.onLine:true);if(delay===0){fsdb.disableNetwork().catch(()=>{});pushCloud();return Promise.resolve()}pushTimer=setTimeout(pushCloud,delay);return Promise.resolve()}
-function watchOffline(){
-  if(!fsdb||window.GEAR_OFFLINE_WATCH)return;
-  window.GEAR_OFFLINE_WATCH=true;
-  var apply=()=>{if(!fsdb)return;var p=(typeof navigator!=="undefined"&&navigator.onLine===false)?fsdb.disableNetwork():fsdb.enableNetwork();p.catch(()=>{})};
-  window.addEventListener("offline",apply);window.addEventListener("online",apply);
+function pushCloudSoon(){if(!cloudUser||!fsdb)return Promise.resolve();clearTimeout(pushTimer);var delay=GearLogic.cloudWriteDelay(typeof navigator!=="undefined"?navigator.onLine:true);if(delay===0)return pushCloud();pushTimer=setTimeout(pushCloud,delay);return Promise.resolve()}
+function offlineNow(){return typeof navigator!=="undefined"&&navigator.onLine===false}
+function seenLocal(pairs){
+  var unsubs=[];
+  var promise=new Promise(resolve=>{
+    if(!pairs.length){resolve();return}
+    var left=new Set(pairs.map(p=>p[0]+"/"+p[1]));
+    var done=false;
+    var finish=()=>{if(done)return;done=true;unsubs.splice(0).forEach(u=>{try{u()}catch(e){}});resolve()};
+    pairs.forEach(function(p){
+      var c=p[0],id=p[1],wid=p[2];
+      unsubs.push(userRef().collection(c).doc(id).onSnapshot({includeMetadataChanges:true},function(snap){
+        var data=snap.exists?snap.data():null;
+        if(data&&data.writeId===wid&&(snap.metadata.hasPendingWrites||!snap.metadata.fromCache)){left.delete(c+"/"+id);if(!left.size)finish()}
+      },finish));
+    });
+  });
+  return {promise:promise,cancel:()=>unsubs.splice(0).forEach(u=>{try{u()}catch(e){}})};
 }
+function commitDurable(commit,pairs){if(!offlineNow())return commit;var watch=seenLocal(pairs);return Promise.race([commit,watch.promise]).finally(()=>watch.cancel())}
 async function pushCloud(){
   if(!cloudUser||cloudReady.size<CLOUD_COLS.length+1)return;
   const ops=[];
   CLOUD_COLS.forEach(c=>arrOf(c).forEach(r=>{const k=c+"/"+r.id;if(r.id&&pushed[k]!==r.updatedAt){ops.push([c,r]);pushed[k]=r.updatedAt}}));
   const kj=JSON.stringify(kits);const kitsChanged=kj!==kitsPushed;
   if(!ops.length&&!kitsChanged)return;
+  var reported=false;
+  var reportFail=e=>{if(reported)return;reported=true;ops.forEach(([c,r])=>delete pushed[c+"/"+r.id]);if(kitsChanged)kitsPushed="";setSync("off","Couldn't sync: "+(e.code||e.message))};
   try{
-    for(let i=0;i<ops.length;i+=400){const b=fsdb.batch();ops.slice(i,i+400).forEach(([c,r])=>b.set(userRef().collection(c).doc(r.id),stampRow(r)));await b.commit()}
-    if(kitsChanged){var wid=GearLogic.newWriteId();inflightWrites.__kits={writeId:wid,snapshot:kj};kitsPushed=kj;await userRef().collection("meta").doc("kits").set({kits:clean(kits),updatedAt:now(),writeId:wid,serverUpdatedAt:firebase.firestore.FieldValue.serverTimestamp()})}
-    setSync("on","Synced");
-    if(typeof navigator==="undefined"||navigator.onLine!==false)clearOfflineStash();
-  }catch(e){ops.forEach(([c,r])=>delete pushed[c+"/"+r.id]);if(kitsChanged)kitsPushed="";setSync("off","Couldn't sync: "+(e.code||e.message));}
+    for(let i=0;i<ops.length;i+=400){
+      const slice=ops.slice(i,i+400);const b=fsdb.batch();const pairs=[];
+      slice.forEach(([c,r])=>{const row=stampRow(r);b.set(userRef().collection(c).doc(r.id),row);pairs.push([c,r.id,row.writeId])});
+      const commit=b.commit();commit.catch(reportFail);
+      await commitDurable(commit,pairs);
+    }
+    if(kitsChanged){
+      var wid=GearLogic.newWriteId();inflightWrites.__kits={writeId:wid,snapshot:kj};kitsPushed=kj;
+      var commit=userRef().collection("meta").doc("kits").set({kits:clean(kits),updatedAt:now(),writeId:wid,serverUpdatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+      commit.catch(reportFail);
+      await commitDurable(commit,[["meta","kits",wid]]);
+    }
+    if(!offlineNow())setSync("on","Synced");
+  }catch(e){reportFail(e)}
 }
 function onCloudChange(){
   mirror();render();
@@ -51,7 +75,7 @@ function subscribeCloud(){
     },e=>setSync("off","Sync error: "+(e.code||e.message))));
   });
   cloudUnsubs.push(userRef().collection("meta").doc("kits").onSnapshot(d=>{
-    const data=d.exists?d.data():{};const k=data.kits||{};const flight=inflightWrites.__kits||null;var offlineHeld=false;try{offlineHeld=!!localStorage.getItem("gearLocker.offline")}catch{}const localPending=!!(flight&&JSON.stringify(kits)!==flight.snapshot)||offlineHeld;
+    const data=d.exists?d.data():{};const k=data.kits||{};const flight=inflightWrites.__kits||null;const localPending=!!(flight&&JSON.stringify(kits)!==flight.snapshot);
     const merged=GearLogic.mergeKitsByServerTime(kits,k,{localStamp:kitsServerAt,remoteStamp:data.serverUpdatedAt,localPending:localPending,inflightWriteId:flight?flight.writeId:"",remoteWriteId:data.writeId||""});
     kitsPushed=JSON.stringify(k);if(merged.serverUpdatedAt)kitsServerAt=merged.serverUpdatedAt;if(flight&&data.writeId===flight.writeId&&!localPending)delete inflightWrites.__kits;
     const before=JSON.stringify(kits);kits=merged.kits||{};
@@ -94,7 +118,6 @@ function startCloud(){
   if(!initFirebase())return;
   fsdb=firebase.firestore();
   try{fsdb.enablePersistence({synchronizeTabs:true}).catch(()=>{})}catch{}
-  watchOffline();
   const auth=firebase.auth();
   const P=firebase.auth.Auth.Persistence;
   let keep=true;try{keep=localStorage.getItem("gearLocker.keep")!=="0"}catch{}

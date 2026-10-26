@@ -56,7 +56,14 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.doesNotMatch(read("js/cloud.js"), /if\(!window\.GEAR_QA\)\{try\{fsdb\.enablePersistence/);
   assert.match(read("js/social.js"), /loanSharePlan/);
   assert.match(read("js/social.js"), /batch\.set\(ref,lendDoc/);
-  assert.match(read("js/security.js"), /item name, brand and color, dates, and your email/);
+  assert.match(read("js/security.js"), /item name, brand, color and category, dates, your name and your email/);
+  assert.doesNotMatch(read("js/core.js"), /gearLocker\.offline/);
+  assert.doesNotMatch(read("js/core.js"), /stashOffline|offlinePending/);
+  assert.doesNotMatch(read("js/cloud.js"), /disableNetwork|gearLocker\.offline|clearOfflineStash/);
+  assert.match(read("js/cloud.js"), /GearLogic\.serverRow/);
+  assert.match(read("js/cloud.js"), /hasPendingWrites/);
+  assert.match(read("js/records.js"), /loanNeedsItem/);
+  assert.match(read("js/security.js"), /gearLocker\.offline/);
   assert.match(read("css/app.css"), /\.btn\{[^}]*min-height:44px/);
   assert.match(read("css/app.css"), /\.acct button\{[^}]*min-height:44px/);
   assert.match(read("css/app.css"), /\.detail \.lnk\{[^}]*min-height:44px/);
