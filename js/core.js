@@ -129,23 +129,43 @@ function render(){
       <span class="meta">${i.mountedOn&&itemById(i.mountedOn)?`on <em>${esc(itemById(i.mountedOn).name)}</em>`:i.setupOn?`<em>${esc(i.setupOn)}</em>`:"Spare"}${onLoan(i.id)?`<span class="tag" style="display:block">on loan · ${esc(onLoan(i.id).borrower)}</span>`:""}</span>
       <span class="meta">${esc(i.location||"—")}</span>
       <span class="cond ${esc(i.condition)}">${esc((i.condition||"").replace("-"," "))}</span>
-      <span class="val">${i.value?money(i.qty*i.value):"—"}${lookingUp.has(i.id)?`<span class="tag">looking up…</span>`:(i.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
+      <span class="val">${i.value?money(i.qty*i.value):"—"}${lookingUp.has(i.id)?`<span class="tag">looking up…</span>`:GearLogic.saleRestricted(i)?"":(i.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
 }
 
 /* ---------- pricing ---------- */
+function saleDraft(){return {name:$("fName").value,brand:$("fBrand").value,category:$("fCat").value,caliber:$("fCal")?.value||"",arm:$("fArm")?.value||""}}
+function syncSaleFields(){
+  const restricted=GearLogic.saleRestricted(saleDraft());
+  const retail=$("fRetail").closest(".f");if(retail)retail.hidden=restricted;
+  const lab=$("fVal").closest(".f")?.querySelector("label");if(lab)lab.textContent=restricted?"Insured value ($)":"Value each ($)";
+  $("fVal").placeholder=restricted?"What you insure it for":"Auto from retail";
+  if($("mktBtn")&&!lookingUp.has(editing?.id))$("mktBtn").textContent=restricted?"Look up weight":"Market check";
+  if(restricted)showPrice(editing||saleDraft());
+}
 function autoValue(){
-  if(valueTouched)return;
+  if(valueTouched||GearLogic.saleRestricted(saleDraft()))return;
   const r=parseFloat($("fRetail").value);
   if(r>0)$("fVal").value=Math.round(r*(FACTOR[$("fCond").value]??0.6));
 }
-$("fRetail").oninput=autoValue;$("fCond").onchange=autoValue;
+$("fRetail").oninput=autoValue;$("fCond").onchange=()=>{autoValue();syncSaleFields()};
+["fName","fBrand","fCat","fCal","fArm"].forEach(id=>{const el=$(id);if(!el)return;el.addEventListener("input",syncSaleFields);el.addEventListener("change",syncSaleFields)});
 $("fVal").oninput=()=>{valueTouched=$("fVal").value!==""};
+function marketSourceText(item){
+  if(GearLogic.saleRestricted(item))return "";
+  const rows=(Array.isArray(item&&item.marketSources)?item.marketSources:[]).filter(s=>s&&(s.label||s.url)).slice(0,4);
+  return rows.filter(s=>/^https:\/\//.test(s.url||"")).map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label||"source")}</a>`).join(" · ");
+}
 function showPrice(i){
   const out=$("priceOut");
+  if(i&&GearLogic.saleRestricted(i)){
+    if(lookingUp.has(i.id)){out.innerHTML=`<span class="tag">Looking up weight…</span><br>This does not search stores or prices.`;return}
+    out.textContent="Insured value is a number you enter. It is not a store price. Look up weight does not search stores.";
+    return;
+  }
   if(i&&lookingUp.has(i.id)){out.innerHTML=`<span class="tag">Looking up…</span><br>Checking eBay, TacSwap and store prices plus the weight.`;return}
   if(i?.marketCheck==="requested"&&!window.LOOKUP_URL){out.innerHTML=`<span class="tag">Market check queued</span><br>Real eBay, TacSwap and store prices fill in on the next check run.`;return}
   if(i?.priceSource==="market"){
-    const links=(Array.isArray(i.marketSources)?i.marketSources:[]).filter(s=>/^https:\/\//.test(s?.url||"")).slice(0,4).map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label||"source")}</a>`).join(" · ");
+    const links=marketSourceText(i);
     out.innerHTML=`<span class="tag">Market check ${esc(i.priceDate||"")}</span><br>${i.retailNew?`New retail <b>${money(i.retailNew)}</b> · `:""}${(i.usedLow||i.usedHigh)?`Used <b>${money(i.usedLow)}–${money(i.usedHigh)}</b> · `:""}This one <b>${money(i.value)}</b>${i.priceNote?`<br>${esc(i.priceNote)}`:""}${links?`<br>${links}`:""}`;return}
   out.textContent="Enter the new retail price and Value each fills in for your condition. Market check looks up real eBay, TacSwap and store prices.";
 }
@@ -165,7 +185,7 @@ function openForm(item){
   $("fMount").innerHTML=mountOpts(item?.id);$("fMount").value=item?.mountedOn||"";
   $("fGun").innerHTML=gunOpts();$("fGun").value=item?.forGun||"";$("fNick").value=item?.nick||"";
   $("fWt").value=item?.weight??"";$("fCal").value=item?.caliber||"";$("fBase").value=item?.baseRounds??"";fireFields();
-  showPrice(item);
+  showPrice(item);syncSaleFields();
   $("saveMoreBtn").hidden=!!item;$("saveBtn").textContent=item?"Save changes":"Save";
   $("form").hidden=false;resetSheetScroll("formSheet");if(!item)setTimeout(()=>$("fName").focus(),60);syncLock();
 }
@@ -223,13 +243,14 @@ $("delBtn").onclick=async()=>{
   closeForm();formFrom=null;viewing=null;$("detail").hidden=true;syncLock();render();await persist();toast("Deleted");
 };
 if(!window.LOOKUP_URL){$("mktBtn").onclick=async()=>{
+  if(GearLogic.saleRestricted(saleDraft())){toast("Weight lookup needs a connection");return}
   const rec=await saveCurrent({marketCheck:"requested",marketCheckAt:now()});if(!rec)return;
   editing=rec;$("mktBtn").disabled=true;$("mktBtn").textContent="Check queued";showPrice(rec);
   toast(dir?"Market check queued":"Queued. Choose your folder so the check can find it.");
 };
 $("bulkMktBtn").onclick=async()=>{
   const t=now();let n=0;
-  all=all.map(i=>{if(i.deleted||i.marketCheck==="requested"||i.priceSource==="market")return i;n++;return{...i,marketCheck:"requested",marketCheckAt:t,updatedAt:t}});
+  all=all.map(i=>{if(i.deleted||GearLogic.saleRestricted(i)||i.marketCheck==="requested"||i.priceSource==="market")return i;n++;return{...i,marketCheck:"requested",marketCheckAt:t,updatedAt:t}});
   if(!n){toast("Everything is already market-checked or queued");return}
   render();await persist();toast(`Queued ${n} item${n===1?"":"s"} for a market check`);
 };}

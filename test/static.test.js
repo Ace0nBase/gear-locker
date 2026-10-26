@@ -64,6 +64,14 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/cloud.js"), /hasPendingWrites/);
   assert.match(read("js/records.js"), /loanNeedsItem/);
   assert.match(read("js/security.js"), /gearLocker\.offline/);
+  assert.doesNotMatch(read("js/comms.js"), /Buy this|Buy cheapest|tbm=shop|google\.com\/search|\/ammo|Cheapest similar|Check all prices/);
+  assert.doesNotMatch(read("js/social.js"), /<a href="\$\{esc\(d\.url\)\}/);
+  assert.match(read("js/core.js"), /GearLogic\.saleRestricted\(item\)/);
+  assert.match(read("js/cloud.js"), /marketSourceText\(i\)/);
+  assert.match(read("js/cloud.js"), /weightOnly/);
+  assert.doesNotMatch(read("js/cloud.js"), /links\.map\(s=>`<a href=/);
+  assert.match(read("api/worker.js"), /Ammo price search is turned off/);
+  assert.doesNotMatch(read("api/worker.js"), /AmmoSeek|function ammoLookup/);
   assert.match(read("css/app.css"), /\.btn\{[^}]*min-height:44px/);
   assert.match(read("css/app.css"), /\.acct button\{[^}]*min-height:44px/);
   assert.match(read("css/app.css"), /\.detail \.lnk\{[^}]*min-height:44px/);

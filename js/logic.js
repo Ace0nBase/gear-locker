@@ -296,10 +296,81 @@ export function serviceWorkerAllowed(loc, qa) {
   return !!qa && loc.protocol === "http:" && host;
 }
 
+const GEAR_CATEGORIES = new Set([
+  "comms & radios", "medical", "packs & bags", "clothing & boots", "helmet & head",
+  "holsters & slings", "belts & rigs", "pouches", "armor & carriers", "nvg & optics",
+  "lights & lasers", "cases & bags", "cleaning & maintenance", "mags & ammo storage",
+  "knives & tools",
+]);
+
+function normCat(category) {
+  return String(category || "").trim().toLowerCase();
+}
+
+function itemBlob(item) {
+  return [item.name, item.brand, item.load, item.caliber, item.armType].map(v => String(v || "").toLowerCase()).join(" ");
+}
+
+function ammoContainer(blob) {
+  return /\bammo\s+(can|box|bag|crate|pouch)\b/.test(blob);
+}
+
+function accessoryNotFirearm(blob) {
+  return /\b(holster|pouch|sling|scabbard|case|bag)\b/.test(blob)
+    && !/\blower\b/.test(blob)
+    && !/\bframe\b/.test(blob)
+    && !/suppress|supress|silenc/.test(blob);
+}
+
+function clearCartridge(blob) {
+  if (ammoContainer(blob) || accessoryNotFirearm(blob)) return false;
+  return /\d+(?:\.\d+)?\s*mm\b/.test(blob)
+    || /\.\d{2,3}\b/.test(blob)
+    || /\d+\s*ga\b/.test(blob)
+    || /\b22\s*lr\b/.test(blob)
+    || /\b5\.56\b/.test(blob)
+    || /\b7\.62\b/.test(blob)
+    || /\d+\s*gr\b/.test(blob)
+    || /\b(ammunition|cartridges?)\b/.test(blob)
+    || /\bammo\b/.test(blob);
+}
+
+const LOWER_PLATFORM = "(?:ar[\\s-]?15|ar15|ar[\\s-]?10|ar10|\\bar\\b|\\bm4|\\b308\\b)";
+const LOWER_NEAR = new RegExp(LOWER_PLATFORM + ".{0,40}lower|lower.{0,40}" + LOWER_PLATFORM);
+
+function firearmIdentity(blob) {
+  if (ammoContainer(blob) || accessoryNotFirearm(blob)) return false;
+  if (/suppress|supress|silenc/.test(blob)) return true;
+  if (/\bpolymer\s*80\b|\bpf-?\s*940/.test(blob)) return true;
+  if (/\b(pistol|rifle|handgun|firearm)\s+frame\b/.test(blob)) return true;
+  if (/\b(?!pack\b|photo\b|tent\b|bike\b|picture\b)[a-z0-9][\w.+-]*\s+frame\b/.test(blob)) return true;
+  if (/\b(stripped|serialized|complete)\s+(lower|receiver)\b/.test(blob)) return true;
+  if (/\blower\s+receiver\b/.test(blob)) return true;
+  if (/\b80%\s*(frame|lower|receiver)\b/.test(blob)) return true;
+  if (LOWER_NEAR.test(blob)) return true;
+  if (/\b(pistols?|rifles?|shotguns?|handguns?|revolvers?|carbines?)\b/.test(blob)) return true;
+  return false;
+}
+
+// The app must not shop for firearms, firearm parts that are the firearm, or ammunition.
+export function saleRestricted(item) {
+  if (!item || typeof item !== "object") return false;
+  const arm = String(item.arm || "").trim().toUpperCase();
+  if (arm === "FA" || arm === "SU") return true;
+  const category = normCat(item.category);
+  if (category === "firearms" || category === "suppressors" || category === "ammo" || category === "ammunition") return true;
+  const blob = itemBlob(item);
+  if (!category && item.caliber && (item.load || item.cpr != null || item.rounds != null)) return true;
+  if (category === "mags & ammo storage") return clearCartridge(blob);
+  if (GEAR_CATEGORIES.has(category)) return false;
+  if (clearCartridge(blob)) return true;
+  return firearmIdentity(blob);
+}
+
 const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
-  refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
+  refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
 };
 globalThis.GearLogic = GearLogic;

@@ -6,7 +6,7 @@
 // Vars (dashboard, kept across deploys): FIREBASE_PROJECT, ALLOWED_ORIGINS, MODEL, FALLBACK_MODEL, ALLOWED_EMAILS (required), DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS
 // An empty ALLOWED_EMAILS list turns lookups off for everyone, including the owner.
 
-import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, parseAllowlist } from "../js/logic.js";
+import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, parseAllowlist, saleRestricted } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -63,9 +63,23 @@ const CONDITION = {
   "Needs-repair": "damaged/needs repair: below the low end of the used range",
 };
 function prompt(it) {
-  const firearm = it.category === "Firearms";
-  const wish = it.kind === "wish";
-  return `You look up real, current US market data for one piece of tactical / outdoor gear for a personal inventory app.
+  const restricted = saleRestricted(it) || it.weightOnly;
+  const wish = it.kind === "wish" && !restricted;
+  if (restricted) {
+    return `You look up the published weight of one piece of gear for a personal inventory app. Do not look up a price. Do not name a store, a seller, or a place to buy it.
+
+Item: ${it.name}
+Brand / model: ${it.brand || "unknown"}
+Category: ${it.category || "unknown"}
+
+Use web search only for the maker's listed weight (at most 2 searches). Do not price firearms, suppressors, frames, lower receivers, or ammunition.
+Set retailNew, usedLow, usedHigh, and value to null. Set priceNote to "" and sources to [].
+weightOz = the weight of ONE unit in ounces (1 lb = 16 oz, 1 g = 0.035274 oz), rounded to 0.1. If sizes differ and none is given, use size Medium and say so in weightNote.
+
+When done, reply with ONLY this JSON object:
+{"retailNew": null, "usedLow": null, "usedHigh": null, "value": null, "weightOz": number|null, "priceNote": "", "weightNote": "short source, e.g. maker spec", "sources": []}`;
+  }
+  return `You look up real, current US market data for one piece of tactical / outdoor gear for a personal inventory app. Do not price firearms, suppressors, frames, lower receivers, or ammunition. If this item is one of those, set retailNew, usedLow, usedHigh, and value to null, priceNote to "", and sources to []. You may still return weightOz.
 
 Item: ${it.name}
 Brand / model: ${it.brand || "unknown"}
@@ -76,7 +90,7 @@ Condition: ${it.condition || "Good"}
 Use web search (at most 3 searches). Good searches:
 - "<brand> <name> price" for the manufacturer, Amazon or a major retailer: the current NEW price and the published WEIGHT
 - "<brand> <name> amazon" for the Amazon price
-- "<brand> <name> ebay sold" and "<brand> <name> tacswap" for USED prices${firearm ? "\nThis is a firearm: do NOT price it (set retailNew, usedLow, usedHigh, value to null). Only find the listed unloaded weight." : ""}${wish ? "\nThis is a wishlist item the user wants to buy. If the brand is blank the name may be a generic need (e.g. \"Eye protection\"): pick a well-regarded mid-range product, price it, and name it in priceNote." : ""}
+- "<brand> <name> ebay sold" and "<brand> <name> tacswap" for USED prices${wish ? "\nThis is a wishlist item the user wants to buy. If the brand is blank the name may be a generic need (e.g. \"Eye protection\"): pick a well-regarded mid-range product, price it, and name it in priceNote." : ""}
 
 If the brand is blank or "unknown", the user doesn't know the maker: work out the most likely kind of item from the name, category and color, and give typical prices and weight for a common mid-range version of it. Start priceNote with "Estimate:" and name what you based it on (e.g. "Estimate: typical MOLLE IFAK pouch, $25-45 new").
 Always give a price even if used comps are thin: if you only find new prices, set retailNew from them and estimate usedLow/usedHigh as about 50-75% of new.
@@ -198,6 +212,7 @@ When done, reply with ONLY this JSON object:
 {"price": number|null, "where": "site or seller, e.g. 'TacSwap' or 'Amazon'", "url": "https link to the listing", "condition": "new|used|like new", "note": "one short sentence, e.g. 'Used, good condition, ships free'"}`;
 }
 async function dealCheck(env, w) {
+  if (saleRestricted(w)) return { price: null, where: "", url: "", condition: "", note: "", date: new Date().toISOString().slice(0, 10), hit: false };
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
   const messages = [{ role: "user", content: dealPrompt(w) }];
   let data, all = [];
@@ -274,13 +289,14 @@ async function runDueWatches(env, budget) {
     if (await readCount(env, alertQuotaKey(u.uid, now)) >= alertLimit) continue;
     eligible.push(u);
   }
-  const picked = selectDueWatches(eligible, { now, budget, minGapMs: gapMs });
+  eligible.forEach(u => { u.list = (u.list || []).filter(w => w && !saleRestricted(w)); });
+  const picked = selectDueWatches(eligible.filter(u => u.list.length), { now, budget, minGapMs: gapMs });
   const dirty = new Map();
   let done = 0;
   for (const p of picked) {
     const u = eligible.find(x => x.uid === p.uid);
     const w = u && u.rec.list.find(x => x.id === p.watch.id);
-    if (!w) continue;
+    if (!w || saleRestricted(w)) continue;
     if (!(await chargeScheduledAlert(env, u.uid)).ok) continue;
     const wasHit = !!(w.best && w.best.hit);
     try {
@@ -321,35 +337,6 @@ Reply with ONLY this JSON:
   let j = null; for (const c of (t.match(/\{[\s\S]*?\}/g) || []).reverse()) { try { const o = JSON.parse(c); if ("battery" in o || "none" in o) { j = o; break } } catch {} }
   if (!j) throw new Error("couldn't read the battery answer");
   return { none: !!j.none, battery: String(j.battery || "").slice(0, 40), count: Math.max(0, Math.min(8, +j.count || 1)), life: String(j.life || "").slice(0, 80), swapMonths: Math.max(0.25, Math.min(60, +j.swapMonths || 6)) };
-}
-
-/* ---------- ammo price per round ---------- */
-async function ammoLookup(env, a) {
-  const ask = `Find what this ammo costs per round to buy online in the US RIGHT NOW (in stock).
-Ammo: ${a.caliber} ${a.brand} ${a.load}
-Use web search (at most 2 searches). AmmoSeek, Lucky Gunner, Target Sports USA, Palmetto State Armory, Brownells, MidwayUSA, Sportsman's Warehouse and Bass Pro are good sources. Price per round = box price ÷ rounds in the box (use the best in-stock price; ignore shipping unless it's included).
-1) cpr: the per-round price of THIS exact product (same brand and load). If the brand or load is blank, use a typical in-stock price for that caliber and load type.
-2) low: the cheapest in-stock ammo in the same caliber and the same kind (range/FMJ vs. defensive/JHP vs. match), any brand.
-Reply with ONLY this JSON:
-{"cpr": number|null, "where": "store name", "url": "https link to that product page", "low": {"cpr": number|null, "desc": "brand + load, e.g. 'Blazer Brass 115gr FMJ'", "where": "store name", "url": "https link"}, "note": "one short line, e.g. 'Sold in 50-rd boxes; case of 1,000 is cheaper'"}`;
-  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
-  const messages = [{ role: "user", content: ask }];
-  let data;
-  for (let i = 0; i < 3; i++) {
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 3000, tools, messages }) });
-    data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data?.error?.message || ("Claude API error " + r.status));
-    if (data.stop_reason !== "pause_turn") break;
-    messages.push({ role: "assistant", content: data.content });
-  }
-  const j = findJson(textOf(data.content), ["low", "note"]);
-  if (!j) throw new Error("couldn't read the ammo price answer");
-  const num = v => { const n = +v; return isFinite(n) && n > 0 && n < 50 ? Math.round(n * 1000) / 1000 : null; };
-  const url = u => /^https:\/\//.test(u || "") ? String(u).slice(0, 400) : "";
-  const lo = j.low || {};
-  return { cpr: num(j.cpr), where: String(j.where || "").slice(0, 40), url: url(j.url),
-    low: num(lo.cpr) ? { cpr: num(lo.cpr), desc: String(lo.desc || "").slice(0, 80), where: String(lo.where || "").slice(0, 40), url: url(lo.url) } : null,
-    note: String(j.note || "").slice(0, 140) };
 }
 
 /* ---------- PACE plan builder ---------- */
@@ -415,15 +402,22 @@ async function lookupOne(env, it) {
     id: String(it.id || "").slice(0, 80), name: String(it.name || "").slice(0, 120), brand: String(it.brand || "").slice(0, 120),
     category: String(it.category || "").slice(0, 60), condition: String(it.condition || "Good").slice(0, 20), color: String(it.color || "").slice(0, 40),
     notes: "", kind: it.kind === "wish" ? "wish" : "item",
+    arm: String(it.arm || "").slice(0, 8), caliber: String(it.caliber || "").slice(0, 40), load: String(it.load || "").slice(0, 80),
+    weightOnly: it.weightOnly === true || it.weightOnly === "true",
   };
   if (!clean.name) return { id: clean.id, ok: false, error: "missing name" };
+  if (clean.kind === "wish" && saleRestricted(clean)) return { id: clean.id, ok: false, error: "Price search skips this item." };
   let data;
   try { data = await callClaude(env, env.MODEL || "claude-haiku-5-5", clean); }
   catch (e) {
     if (env.FALLBACK_MODEL && (e.status === 400 || e.status === 404)) data = await callClaude(env, env.FALLBACK_MODEL, clean);
     else throw e;
   }
-  return { id: clean.id, ok: true, ...parseResult(data) };
+  const parsed = parseResult(data);
+  if (saleRestricted(clean) || clean.weightOnly) {
+    return { id: clean.id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: parsed.weightOz, priceNote: "", weightNote: parsed.weightNote, sources: [] };
+  }
+  return { id: clean.id, ok: true, ...parsed };
 }
 
 const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
@@ -472,7 +466,7 @@ export default {
         const max = +(env.MAX_WATCHES || 10);
         const inList = Array.isArray(body.watches) ? body.watches : [];
         const old = new Map(rec.list.map(w => [w.id, w]));
-        const next = inList.slice(0, max).filter(w => w && w.id && w.name && +w.target > 0).map(w => {
+        const next = inList.slice(0, max).filter(w => w && w.id && w.name && +w.target > 0 && !saleRestricted(w)).map(w => {
           const o = old.get(String(w.id)) || {};
           const same = o.name === String(w.name) && o.brand === String(w.brand || "");
           return { id: String(w.id).slice(0, 80), name: String(w.name).slice(0, 120), brand: String(w.brand || "").slice(0, 120), category: String(w.category || "").slice(0, 60),
@@ -486,6 +480,12 @@ export default {
       if (url.pathname === "/watch/check") {
         const w = rec.list.find(x => x.id === String(body.id || ""));
         if (!w) return json({ error: "Set an alert price on this item first" }, 400, h);
+        if (saleRestricted(w)) {
+          w.best = { price: null, where: "", url: "", condition: "", note: "", date: new Date().toISOString().slice(0, 10), hit: false };
+          w.lastErr = "";
+          await saveRec();
+          return json(pub(), 200, h);
+        }
         if (w.lastCheck && Date.now() - Date.parse(w.lastCheck) < 10 * 60e3) return json(pub(), 200, h);
         const bill = await chargeScheduledAlert(env, user.sub);
         if (!bill.ok) return json({ error: `Daily lookup limit reached (${+(env.DAILY_AI_LIMIT || 40)} per day). Try again tomorrow.` }, 429, h);
@@ -506,14 +506,7 @@ export default {
       try { return json({ result: await paceBuild(env, b) }, 200, h); }
       catch (e) { return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
-    if (url.pathname === "/ammo") {
-      const a = { caliber: String(body.caliber || "").slice(0, 40), brand: String(body.brand || "").slice(0, 60), load: String(body.load || "").slice(0, 80) };
-      if (!a.caliber) return json({ error: "Add a caliber first" }, 400, h);
-      const ammoBill = await chargeAi(env, user.sub, 1);
-      if (!ammoBill.ok) return json({ error: ammoBill.error }, ammoBill.status, h);
-      try { return json({ result: await ammoLookup(env, a) }, 200, h); }
-      catch (e) { return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
-    }
+    if (url.pathname === "/ammo") return json({ error: "Ammo price search is turned off." }, 410, h);
     if (url.pathname === "/battery") {
       const battBill = await chargeAi(env, user.sub, 1);
       if (!battBill.ok) return json({ error: battBill.error }, battBill.status, h);

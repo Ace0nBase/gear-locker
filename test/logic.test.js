@@ -4,6 +4,7 @@ import {
   clearUserLocal, shareItemFields, decideAccess, chargeDecision, quotaKey, alertQuotaKey,
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
+  saleRestricted,
 } from "../js/logic.js";
 
 function memStorage(seed) {
@@ -221,6 +222,53 @@ test("offline edits flush immediately and the local test page can cache itself",
   assert.equal(serviceWorkerAllowed({ protocol: "http:", hostname: "localhost" }, true), true);
   assert.equal(serviceWorkerAllowed({ protocol: "http:", hostname: "127.0.0.1" }, false), false);
   assert.equal(serviceWorkerAllowed({ protocol: "http:", hostname: "example.com" }, true), false);
+});
+
+test("price search and sale links skip firearms, ammunition, and the parts that are firearms", () => {
+  assert.equal(saleRestricted({ category: "Firearms", name: "Rifle" }), true);
+  assert.equal(saleRestricted({ category: "firearms", name: "Carbine" }), true);
+  assert.equal(saleRestricted({ category: "FIREARMS", name: "Rifle" }), true);
+  assert.equal(saleRestricted({ category: "Suppressors", name: "Can" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Glock 19 pistol" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Ruger 10/22 rifle" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Remington 870 shotgun" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "S&W revolver" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Home defense handgun" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "16 inch carbine" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "AR-15 rifle" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "AR 15 lower" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Aero M4E1 lower" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Polymer80 PF940C frame" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Glock 19 frame" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Stripped lower receiver" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Pistol frame" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "80% frame" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "supressor" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "SilencerCo Omega 300" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "9mm 115gr" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Federal 5.56 M193" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "12ga buckshot" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Hornady Critical Defense 9mm" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: ".308 Win 168gr match" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "22LR bulk pack" }), true);
+  assert.equal(saleRestricted({ category: "Mags & Ammo Storage", name: "9mm 115gr" }), true);
+  assert.equal(saleRestricted({ name: "Range ammo", caliber: "9mm", load: "115gr FMJ", rounds: 500 }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "9mm ammunition" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "115gr FMJ" }), true);
+  assert.equal(saleRestricted({ category: "Pouches", name: "Admin pouch", arm: "FA" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Tube", arm: "SU" }), true);
+  assert.equal(saleRestricted({ category: "Mags & Ammo Storage", name: "Ammo can" }), false);
+  assert.equal(saleRestricted({ category: "Pouches", name: "Ammo pouch" }), false);
+  assert.equal(saleRestricted({ category: "Misc", name: "Ammo pouch" }), false);
+  assert.equal(saleRestricted({ category: "Pouches", name: "Double mag pouch" }), false);
+  assert.equal(saleRestricted({ category: "NVG & Optics", name: "Red dot" }), false);
+  assert.equal(saleRestricted({ category: "Comms & Radios", name: "Handheld receiver" }), false);
+  assert.equal(saleRestricted({ category: "Holsters & Slings", name: "Holster" }), false);
+  assert.equal(saleRestricted({ category: "Holsters & Slings", name: "Glock 19 holster" }), false);
+  assert.equal(saleRestricted({ category: "Misc", name: "Glock 19 holster" }), false);
+  assert.equal(saleRestricted({ category: "Misc", name: "Upper receiver" }), false);
+  assert.equal(saleRestricted({ category: "Misc", name: "Pack frame" }), false);
+  assert.equal(saleRestricted(null), false);
 });
 
 test("kit merge uses the server stamp and keeps a pending local edit", () => {

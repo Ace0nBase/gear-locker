@@ -1,6 +1,6 @@
 // Local lookup stub for npm run qa. It never calls Claude and it refuses
 // the live Firebase project. Run it only on 127.0.0.1. It is not the production worker.
-import { decideAccess, chargeDecision, quotaKey } from "../js/logic.js";
+import { decideAccess, chargeDecision, quotaKey, saleRestricted } from "../js/logic.js";
 
 const memory = new Map();
 const memKv = {
@@ -36,7 +36,12 @@ function cors(req) {
 }
 
 function fakeItem(it) {
-  return { id: String(it.id || ""), ok: true, retailNew: 40, usedLow: 20, usedHigh: 30, value: 28, weightOz: 12, priceNote: "Local test price. No live lookup was made.", weightNote: "Local test weight", sources: [] };
+  const id = String(it.id || "");
+  if (it.kind === "wish" && saleRestricted(it)) return { id, ok: false, error: "Price search skips this item." };
+  if (saleRestricted(it) || it.weightOnly) {
+    return { id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: 12, priceNote: "", weightNote: "Local test weight", sources: [] };
+  }
+  return { id, ok: true, retailNew: 40, usedLow: 20, usedHigh: 30, value: 28, weightOz: 12, priceNote: "Local test price. No live lookup was made.", weightNote: "Local test weight", sources: [{ label: "Local test shop", url: "https://example.com/gear" }] };
 }
 
 export default {
@@ -66,7 +71,7 @@ export default {
     }
     if (url.pathname === "/identify") return json({ result: { name: "Sample pouch", brand: "", category: "Pouches", color: "Coyote", confidence: "low", summary: "Local test only. No photo was sent anywhere." } }, 200, h);
     if (url.pathname === "/battery") return json({ result: { none: false, battery: "CR123A", count: 1, life: "Local test", swapMonths: 6 } }, 200, h);
-    if (url.pathname === "/ammo") return json({ result: { cpr: 0.4, where: "Local test", url: "", low: null, note: "Local test price. No store was contacted." } }, 200, h);
+    if (url.pathname === "/ammo") return json({ error: "Ammo price search is turned off." }, 410, h);
     if (url.pathname === "/pace") return json({ result: { name: "Local test plan", summary: "Stub plan. No live lookup was made.", steps: { p: { method: "Cell call", detail: "Call", when: "First" }, a: {}, c: {}, e: {} }, checkin: "", rally: "", codes: "", newFreqs: [], gaps: [] } }, 200, h);
     if (url.pathname.startsWith("/watch/")) return json({ ok: true, watches: [], max: 10, vapidPublicKey: "", push: false }, 200, h);
     return json({ error: "Not found" }, 404, h);

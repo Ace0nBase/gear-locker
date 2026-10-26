@@ -27,5 +27,13 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.match(src, /MIN_ALERT_GAP_HOURS:\s*"20"/);
   assert.match(src, /notes:\s*""/);
   assert.equal((src.match(/max_uses:\s*3/g) || []).length, 1);
-  assert.equal((src.match(/max_uses:\s*2/g) || []).length, 4);
+  assert.equal((src.match(/max_uses:\s*2/g) || []).length, 3);
+  assert.match(src, /Ammo price search is turned off/);
+  assert.match(src, /Do not look up a price/);
+  assert.doesNotMatch(src, /function ammoLookup|AmmoSeek/);
+  const dealAt = src.indexOf("async function dealCheck");
+  const guardAt = src.indexOf("if (saleRestricted(w))", dealAt);
+  const fetchAt = src.indexOf("https://api.anthropic.com", dealAt);
+  assert.ok(dealAt > 0 && guardAt > dealAt && guardAt < fetchAt);
+  assert.match(src, /!saleRestricted\(w\)/);
 });
