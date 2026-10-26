@@ -1,0 +1,6 @@
+# Local stub only. No production KV, no cron, no live worker name.
+# npm run qa starts this with wrangler dev on 127.0.0.1. Do not deploy it.
+name = "gear-locker-api-local"
+main = "stub.js"
+compatibility_date = "2026-10-15"
+workers_dev = false
