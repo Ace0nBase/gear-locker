@@ -11,17 +11,48 @@ function setArr(c,a){if(c==="items")all=a;else db[c]=a}
 function userRef(){return fsdb.collection("users").doc(cloudUser.uid)}
 function setSync(state,txt){const d=$("syncDot");d.className="sync "+state;d.title=txt||"";}
 function pushCloudSoon(){if(!cloudUser||!fsdb)return Promise.resolve();clearTimeout(pushTimer);var delay=GearLogic.cloudWriteDelay(typeof navigator!=="undefined"?navigator.onLine:true);if(delay===0)return pushCloud();pushTimer=setTimeout(pushCloud,delay);return Promise.resolve()}
+function offlineNow(){return typeof navigator!=="undefined"&&navigator.onLine===false}
+function seenLocal(pairs){
+  var unsubs=[];
+  var promise=new Promise(resolve=>{
+    if(!pairs.length){resolve();return}
+    var left=new Set(pairs.map(p=>p[0]+"/"+p[1]));
+    var done=false;
+    var finish=()=>{if(done)return;done=true;unsubs.splice(0).forEach(u=>{try{u()}catch(e){}});resolve()};
+    pairs.forEach(function(p){
+      var c=p[0],id=p[1],wid=p[2];
+      unsubs.push(userRef().collection(c).doc(id).onSnapshot({includeMetadataChanges:true},function(snap){
+        var data=snap.exists?snap.data():null;
+        if(data&&data.writeId===wid&&(snap.metadata.hasPendingWrites||!snap.metadata.fromCache)){left.delete(c+"/"+id);if(!left.size)finish()}
+      },finish));
+    });
+  });
+  return {promise:promise,cancel:()=>unsubs.splice(0).forEach(u=>{try{u()}catch(e){}})};
+}
+function commitDurable(commit,pairs){if(!offlineNow())return commit;var watch=seenLocal(pairs);return Promise.race([commit,watch.promise]).finally(()=>watch.cancel())}
 async function pushCloud(){
   if(!cloudUser||cloudReady.size<CLOUD_COLS.length+1)return;
   const ops=[];
   CLOUD_COLS.forEach(c=>arrOf(c).forEach(r=>{const k=c+"/"+r.id;if(r.id&&pushed[k]!==r.updatedAt){ops.push([c,r]);pushed[k]=r.updatedAt}}));
   const kj=JSON.stringify(kits);const kitsChanged=kj!==kitsPushed;
   if(!ops.length&&!kitsChanged)return;
+  var reported=false;
+  var reportFail=e=>{if(reported)return;reported=true;ops.forEach(([c,r])=>delete pushed[c+"/"+r.id]);if(kitsChanged)kitsPushed="";setSync("off","Couldn't sync: "+(e.code||e.message))};
   try{
-    for(let i=0;i<ops.length;i+=400){const b=fsdb.batch();ops.slice(i,i+400).forEach(([c,r])=>b.set(userRef().collection(c).doc(r.id),stampRow(r)));await b.commit()}
-    if(kitsChanged){var wid=GearLogic.newWriteId();inflightWrites.__kits={writeId:wid,snapshot:kj};kitsPushed=kj;await userRef().collection("meta").doc("kits").set({kits:clean(kits),updatedAt:now(),writeId:wid,serverUpdatedAt:firebase.firestore.FieldValue.serverTimestamp()})}
-    setSync("on","Synced");
-  }catch(e){ops.forEach(([c,r])=>delete pushed[c+"/"+r.id]);if(kitsChanged)kitsPushed="";setSync("off","Couldn't sync: "+(e.code||e.message));}
+    for(let i=0;i<ops.length;i+=400){
+      const slice=ops.slice(i,i+400);const b=fsdb.batch();const pairs=[];
+      slice.forEach(([c,r])=>{const row=stampRow(r);b.set(userRef().collection(c).doc(r.id),row);pairs.push([c,r.id,row.writeId])});
+      const commit=b.commit();commit.catch(reportFail);
+      await commitDurable(commit,pairs);
+    }
+    if(kitsChanged){
+      var wid=GearLogic.newWriteId();inflightWrites.__kits={writeId:wid,snapshot:kj};kitsPushed=kj;
+      var commit=userRef().collection("meta").doc("kits").set({kits:clean(kits),updatedAt:now(),writeId:wid,serverUpdatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+      commit.catch(reportFail);
+      await commitDurable(commit,[["meta","kits",wid]]);
+    }
+    if(!offlineNow())setSync("on","Synced");
+  }catch(e){reportFail(e)}
 }
 function onCloudChange(){
   mirror();render();

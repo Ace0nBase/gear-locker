@@ -61,6 +61,7 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.doesNotMatch(read("js/core.js"), /stashOffline|offlinePending/);
   assert.doesNotMatch(read("js/cloud.js"), /disableNetwork|gearLocker\.offline|clearOfflineStash/);
   assert.match(read("js/cloud.js"), /GearLogic\.serverRow/);
+  assert.match(read("js/cloud.js"), /hasPendingWrites/);
   assert.match(read("js/records.js"), /loanNeedsItem/);
   assert.match(read("js/security.js"), /gearLocker\.offline/);
   assert.match(read("css/app.css"), /\.btn\{[^}]*min-height:44px/);
