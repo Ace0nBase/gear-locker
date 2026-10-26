@@ -5,6 +5,7 @@ import {
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
   saleRestricted,
+  keepSignedIn, firestoreMemoryOnly, settleOrTimeout, signOutConfirmNeeded, SIGN_OUT_WAIT_MS, armoryLookupBlocked,
 } from "../js/logic.js";
 
 function memStorage(seed) {
@@ -269,6 +270,40 @@ test("price search and sale links skip firearms, ammunition, and the parts that 
   assert.equal(saleRestricted({ category: "Misc", name: "Upper receiver" }), false);
   assert.equal(saleRestricted({ category: "Misc", name: "Pack frame" }), false);
   assert.equal(saleRestricted(null), false);
+});
+
+test("keep-signed-in off uses a memory cache and sign-out confirms only when a save is still pending", async () => {
+  assert.equal(keepSignedIn(memStorage({})), true);
+  assert.equal(keepSignedIn(memStorage({ "gearLocker.keep": "1" })), true);
+  assert.equal(keepSignedIn(memStorage({ "gearLocker.keep": "0" })), false);
+  assert.equal(firestoreMemoryOnly(true), false);
+  assert.equal(firestoreMemoryOnly(false), true);
+  assert.equal(SIGN_OUT_WAIT_MS, 1500);
+  assert.equal(signOutConfirmNeeded(true), false);
+  assert.equal(signOutConfirmNeeded(false), true);
+  assert.equal(await settleOrTimeout(Promise.resolve("saved"), 50), true);
+  assert.equal(await settleOrTimeout(new Promise(() => {}), 30), false);
+  assert.equal(await settleOrTimeout(Promise.reject(new Error("failed")), 50), false);
+});
+
+test("never send arms room items blocks photo and battery lookups for those items", () => {
+  assert.equal(armoryLookupBlocked(false, { category: "Firearms", name: "Rifle" }), false);
+  assert.equal(armoryLookupBlocked(true, { category: "Firearms", name: "Rifle" }), true);
+  assert.equal(armoryLookupBlocked(true, { category: "Firearms", arm: "no", name: "Rifle" }), true);
+  assert.equal(armoryLookupBlocked(true, { category: "Suppressors", name: "Can" }), true);
+  assert.equal(armoryLookupBlocked(true, { category: "NVG & Optics", name: "Red dot" }), true);
+  assert.equal(armoryLookupBlocked(true, { category: "NVG & Optics", name: "NOD" }), true);
+  assert.equal(armoryLookupBlocked(true, { category: "Lights & Lasers", name: "Weapon light" }), true);
+  assert.equal(armoryLookupBlocked(true, { arm: "OP", name: "Scope" }), true);
+  assert.equal(armoryLookupBlocked(true, { arm: "WL", name: "Light" }), true);
+  assert.equal(armoryLookupBlocked(true, { arm: "LA", name: "PEQ" }), true);
+  assert.equal(armoryLookupBlocked(true, { arm: "KN", category: "Knives & Tools", name: "Fixed blade" }), true);
+  assert.equal(armoryLookupBlocked(true, { category: "Knives & Tools", name: "Fixed blade" }), true);
+  assert.equal(armoryLookupBlocked(true, { category: "Knives & Tools", name: "Leatherman" }), false);
+  assert.equal(armoryLookupBlocked(true, { category: "Pouches", name: "Mag pouch", arm: "no" }), false);
+  assert.equal(armoryLookupBlocked(true, { category: "Comms & Radios", name: "Handheld radio" }), false);
+  assert.equal(armoryLookupBlocked(true, { category: "Helmet & Head", name: "Headset" }), false);
+  assert.equal(armoryLookupBlocked(true, null), false);
 });
 
 test("kit merge uses the server stamp and keeps a pending local edit", () => {

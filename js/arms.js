@@ -198,7 +198,10 @@ function recFields(){
   const s=effArm();document.querySelectorAll(".f.rec").forEach(e=>e.hidden=!s);
   document.querySelectorAll("[data-recs]").forEach(e=>{e.hidden=!s||!e.dataset.recs.split(" ").includes(s)});
   if(s){$("fArmTypeL").textContent=ARM[s].type;$("fArmId").placeholder=editing?.armId||"Auto ("+nextArmId(s)+")"}
+  if(typeof syncPhotoId==="function")syncPhotoId();
 }
+function photoDraft(){return {name:$("fName").value,brand:$("fBrand").value,category:$("fCat").value,arm:$("fArm").value}}
+function syncPhotoId(){const blocked=GearLogic.armoryLookupBlocked(!!kits._settings?.privateArms,photoDraft());$("idBtn").hidden=blocked;if(blocked)$("idOut").hidden=true}
 $("fArm").addEventListener("change",recFields);
 $("fCat").addEventListener("change",recFields);$("fName").addEventListener("change",recFields);
 var REC_IDS={fArmId:"armId",fSerial:"serial",fArmType:"armType",fAcq:"acquired",fFrom:"acquiredFrom",fBbl:"bbl",fForm:"nfaForm",fStamp:"stampDate",fAdapter:"adapter",fArmMount:"armMount",fBatt:"battery",fBlade:"bladeLen",fSteel:"steel",fHandle:"handle",fMarks:"markings"};
@@ -299,9 +302,10 @@ $("swapSheet").addEventListener("click",async e=>{
 
 /* identify unknown gear from a photo */
 function shrinkImage(file,max=1024){return new Promise((res,rej)=>{const img=new Image();img.onload=()=>{const s=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement("canvas");c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);c.getContext("2d").drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(img.src);res(c.toDataURL("image/jpeg",0.82).split(",")[1])};img.onerror=()=>rej(new Error("Couldn't open that photo"));img.src=URL.createObjectURL(file)})}
-$("idBtn").onclick=()=>{if(!window.LOOKUP_URL||!cloudUser){toast("Sign in to use photo ID");return}$("idFile").click()};
+$("idBtn").onclick=()=>{if(GearLogic.armoryLookupBlocked(!!kits._settings?.privateArms,photoDraft())){toast("Photo ID stays off for Arms Room items.");return}if(!window.LOOKUP_URL||!cloudUser){toast("Sign in to use photo ID");return}$("idFile").click()};
 $("idFile").addEventListener("change",async e=>{
   const f=e.target.files[0];e.target.value="";if(!f)return;
+  if(GearLogic.armoryLookupBlocked(!!kits._settings?.privateArms,photoDraft())){toast("Photo ID stays off for Arms Room items.");return}
   const out=$("idOut");out.hidden=false;out.innerHTML=`<span class="tag">Looking at your photo…</span>`;$("idBtn").disabled=true;
   try{
     const img=await shrinkImage(f);const tok=await firebase.auth().currentUser.getIdToken();
