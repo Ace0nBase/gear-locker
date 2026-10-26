@@ -235,8 +235,9 @@ NEWREC.loans=()=>({out:today()});
 RENDER.loans=()=>{
   const ed=ED.loans,d=ed?.draft||{};const out=L("loans").filter(x=>!x.returned).sort((a,b)=>(a.due||"9").localeCompare(b.due||"9"));const back=L("loans").filter(x=>x.returned).sort((a,b)=>(b.returned||"").localeCompare(a.returned||""));
   const avail=live().filter(i=>!onLoan(i.id)||i.id===d.itemId).sort(byName);
+  const itemBlank=(!d.itemId&&d.itemName)?d.itemName:"— pick an item —";
   const form=ed?edForm("loans",ed.isNew?"Lend an item":"Edit loan",
-    fld("itemId","Item",d.itemId,{type:"select",span:2,opts:[["","— pick an item —"],...avail.map(i=>[i.id,i.name])]})+fld("borrower","Borrowed by",d.borrower,{req:1,ph:"Name"})+fld("contact","Contact",d.contact,{ph:"Phone or email"})+
+    fld("itemId","Item",d.itemId,{type:"select",span:2,opts:[[ "",itemBlank ],...avail.map(i=>[i.id,i.name])]})+fld("borrower","Borrowed by",d.borrower,{req:1,ph:"Name"})+fld("contact","Contact",d.contact,{ph:"Phone or email"})+
     fld("out","Lent on",d.out,{type:"date"})+fld("due","Due back",d.due,{type:"date"})+fld("returned","Returned on",d.returned,{type:"date"})+fld("cond","Condition when lent",d.cond,{ph:"Good, no marks"})+fld("notes","Notes",d.notes,{span:4})):"";
   const nm=x=>esc(itemById(x.itemId)?.name||x.itemName||"(deleted item)");
   $("loansView").innerHTML=`<div class="vhead"><div><h2>Loans</h2><p>Who has your gear and when it's due back. Add a friend's Gear Locker email and the loan shows up in their app too.</p></div><button class="btn" type="button" data-act="new">+ Lend item</button></div>
@@ -245,7 +246,11 @@ RENDER.loans=()=>{
   :`<div class="empty"><b>Nothing on loan</b>When you lend something out, click <em>+ Lend item</em> so you know who has it.</div>`}
   ${back.length?`<div class="slotsHead">Returned <span>${back.length}</span></div><div class="scroll"><table class="tbl"><tbody>${back.slice(0,25).map(x=>`<tr class="click" data-act="edit" data-id="${esc(x.id)}"><td>${nm(x)}</td><td>${esc(x.borrower)}</td><td>${esc(fmtDate(x.out))} → ${esc(fmtDate(x.returned))}</td></tr>`).join("")}</tbody></table></div>`:""}`;
 };
-SAVE.loans=async d=>{if(!d.itemId){toast("Pick an item");return}if(!String(d.borrower||"").trim()){toast("Who borrowed it?");return}await upsertC("loans",d);ED.loans=null;toast("Loan saved");render()};
+SAVE.loans=async d=>{
+  if(GearLogic.loanNeedsItem(d)){toast("Pick an item");return}
+  if(!String(d.borrower||"").trim()){toast("Who borrowed it?");return}
+  if(d.itemId){const it=itemById(d.itemId);if(it){d.itemName=it.name||"";d.itemBrand=it.brand||"";d.itemColor=it.color||"";d.itemCategory=it.category||""}}
+  await upsertC("loans",d);ED.loans=null;toast("Loan saved");render()};
 DEL.loans=async d=>{await removeC("loans",d.id)};
 ACT.loans=async(act,b)=>{if(act==="returned"){const x=L("loans").find(y=>y.id===b.dataset.id);if(!x)return;await upsertC("loans",{...x,returned:today()});toast("Marked returned");render()}};
 
