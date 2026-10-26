@@ -136,7 +136,7 @@ function loanNudge(){const due=L("loans").filter(loanDue);if(due.length)toast(du
 async function apiPost(path,body){const tok=await firebase.auth().currentUser.getIdToken();const r=await fetch(window.LOOKUP_URL.replace(/\/$/,"")+path,{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+tok},body:JSON.stringify(body)});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||("Error "+r.status));return j}
 var watchTimer=null;
 function syncWatches(){clearTimeout(watchTimer);watchTimer=setTimeout(async()=>{if(!window.LOOKUP_URL||!cloudUser)return;
-  const list=L("wish").filter(w=>w.status!=="got"&&+w.target>0).map(w=>({id:w.id,name:w.name,brand:w.brand||"",category:w.category||"",target:+w.target}));
+  const list=L("wish").filter(w=>w.status!=="got"&&+w.target>0&&!GearLogic.saleRestricted(w)).map(w=>({id:w.id,name:w.name,brand:w.brand||"",category:w.category||"",target:+w.target}));
   try{const j=await apiPost("/watch/sync",{watches:list});if(j.dropped)toast(`Price alerts are limited to ${j.max} items`,4000)}catch(e){if(list.length)toast("Price alerts: "+e.message,4000)}},800)}
 var vapidPublic="";
 function rememberPush(j){if(j&&j.vapidPublicKey)vapidPublic=j.vapidPublicKey}
@@ -151,7 +151,8 @@ function applyWatch(ws){let ch=false,news=[];ws.forEach(r=>{const w=db.wish.find
 {const _dw=DEL.wish;DEL.wish=async d=>{await _dw(d);syncWatches()}}
 {const _aw=ACT.wish;ACT.wish=async(act,b)=>{
   if(act==="watchnow"){const w=db.wish.find(x=>x.id===b.dataset.id);if(!w)return;b.disabled=true;b.textContent="Searching…";
-    try{await apiPost("/watch/sync",{watches:L("wish").filter(x=>x.status!=="got"&&+x.target>0).map(x=>({id:x.id,name:x.name,brand:x.brand||"",category:x.category||"",target:+x.target}))});
+    if(GearLogic.saleRestricted(w)){toast("Price search skips firearms and ammunition.");renderExtra();return}
+    try{await apiPost("/watch/sync",{watches:L("wish").filter(x=>x.status!=="got"&&+x.target>0&&!GearLogic.saleRestricted(x)).map(x=>({id:x.id,name:x.name,brand:x.brand||"",category:x.category||"",target:+x.target}))});
       const j=await apiPost("/watch/check",{id:w.id});applyWatch(j.watches||[]);const d=db.wish.find(x=>x.id===w.id)?.deal;toast(d?.price?`Lowest found: ${money(d.price)} at ${d.where}`:"No listings found right now",5000)}
     catch(e){toast("Price search: "+e.message,5000)}renderExtra();return}
   if(act==="dealseen"){const w=db.wish.find(x=>x.id===b.dataset.id);if(w&&w.deal){w.dealSeen=w.deal.date;w.updatedAt=now();await persist();updateBadges();renderExtra()}return}
@@ -166,7 +167,7 @@ function applyWatch(ws){let ch=false,news=[];ws.forEach(r=>{const w=db.wish.find
     anchor?anchor.after(box):fe.querySelector(".actions").before(box)}
   v.querySelectorAll('tr[data-act="edit"]').forEach(tr=>{const w=db.wish.find(x=>x.id===tr.dataset.id);if(!w)return;const cell=tr.children[1];
     if(+w.target>0){const d=w.deal;const hit=d&&d.hit;
-      cell.insertAdjacentHTML("beforeend",`<div class="watch ${hit?"hit":""}">${hit?"Price alert: ":"Watching ≤ "+money(w.target)+(d&&d.price?" · lowest ":"")}${d&&d.price?`<b>${money(d.price)}</b> at ${d.url&&/^https:\/\//.test(d.url)?`<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.where||"link")}</a>`:esc(d.where||"")}${d.condition?` (${esc(d.condition)})`:""}`:d?" · nothing listed yet":" · first check within a day"}${hit?` · your max ${money(w.target)}`:""}</div>`);
+      cell.insertAdjacentHTML("beforeend",`<div class="watch ${hit?"hit":""}">${hit?"Price alert: ":"Watching ≤ "+money(w.target)+(d&&d.price?" · lowest ":"")}${d&&d.price?`<b>${money(d.price)}</b>${d.where?` at ${esc(d.where)}`:""}${d.condition?` (${esc(d.condition)})`:""}`:d?" · nothing listed yet":" · first check within a day"}${hit?` · your max ${money(w.target)}`:""}</div>`);
       const btns=tr.querySelector(".vbtns");if(btns){btns.insertAdjacentHTML("afterbegin",`<button class="btn ghost" type="button" data-act="watchnow" data-id="${esc(w.id)}">Search now</button>`);if(hit&&w.dealSeen!==d.date)btns.insertAdjacentHTML("afterbegin",`<button class="btn ghost" type="button" data-act="dealseen" data-id="${esc(w.id)}">Seen it</button>`)}}});
 }}
 

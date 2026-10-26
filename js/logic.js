@@ -285,10 +285,50 @@ export function serviceWorkerAllowed(loc, qa) {
   return !!qa && loc.protocol === "http:" && host;
 }
 
+const GEAR_CATEGORIES = new Set([
+  "Comms & Radios", "Medical", "Packs & Bags", "Clothing & Boots", "Helmet & Head",
+  "Holsters & Slings", "Belts & Rigs", "Pouches", "Armor & Carriers", "NVG & Optics",
+  "Lights & Lasers", "Cases & Bags", "Cleaning & Maintenance", "Mags & Ammo Storage",
+  "Knives & Tools",
+]);
+
+// A frame, a lower receiver, and a suppressor are the firearm. An upper, a magazine, and a radio are not.
+function firearmPart(blob) {
+  return /\b(stripped|serialized|complete)\s+(lower|receiver)\b/.test(blob)
+    || /\blower\s+receiver\b/.test(blob)
+    || /\b(ar-?15|ar15)\s+(lower|receiver)\b/.test(blob)
+    || /\b(pistol|rifle|handgun|firearm)\s+frame\b/.test(blob)
+    || /\b80%\s*(frame|lower|receiver)\b/.test(blob)
+    || /\b(suppressor|silencer)\b/.test(blob);
+}
+
+function ammunition(item, blob) {
+  const category = String((item && item.category) || "");
+  if (category === "Mags & Ammo Storage") return false;
+  if (/\bammo\s+(can|box|bag|crate|pouch)\b/.test(blob)) return false;
+  if (!category && item && item.caliber && (item.load || item.cpr != null || item.rounds != null)) return true;
+  if (category === "Ammo" || category === "Ammunition") return true;
+  if (/\b(ammunition|cartridges?)\b/.test(blob)) return true;
+  if (/\bammo\b/.test(blob)) return true;
+  if (/\b(fmj|jhp|jsp|tmj|hollow[\s-]?point)\b/.test(blob) && /\b(\d+(\.\d+)?\s*mm|\d+\s*gr|grain)\b/.test(blob)) return true;
+  return false;
+}
+
+// The app must not link to, or shop for, firearms or ammunition.
+export function saleRestricted(item) {
+  if (!item || typeof item !== "object") return false;
+  const category = String(item.category || "");
+  if (category === "Firearms" || category === "Suppressors") return true;
+  const blob = [item.name, item.brand, item.load, item.caliber].map(v => String(v || "").toLowerCase()).join(" ");
+  if (ammunition(item, blob)) return true;
+  if (GEAR_CATEGORIES.has(category)) return false;
+  return firearmPart(blob);
+}
+
 const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
-  refreshAuthClaims, loanSharePlan, orphanLoansFromLends, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
+  refreshAuthClaims, loanSharePlan, orphanLoansFromLends, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
 };
 globalThis.GearLogic = GearLogic;

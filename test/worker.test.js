@@ -28,4 +28,9 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.match(src, /notes:\s*""/);
   assert.equal((src.match(/max_uses:\s*3/g) || []).length, 1);
   assert.equal((src.match(/max_uses:\s*2/g) || []).length, 4);
+  const dealAt = src.indexOf("async function dealCheck");
+  const guardAt = src.indexOf("if (saleRestricted(w))", dealAt);
+  const fetchAt = src.indexOf("https://api.anthropic.com", dealAt);
+  assert.ok(dealAt > 0 && guardAt > dealAt && guardAt < fetchAt);
+  assert.match(src, /!saleRestricted\(w\)/);
 });

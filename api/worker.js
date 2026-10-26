@@ -6,7 +6,7 @@
 // Vars (dashboard, kept across deploys): FIREBASE_PROJECT, ALLOWED_ORIGINS, MODEL, FALLBACK_MODEL, ALLOWED_EMAILS (required), DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS
 // An empty ALLOWED_EMAILS list turns lookups off for everyone, including the owner.
 
-import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, parseAllowlist } from "../js/logic.js";
+import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, parseAllowlist, saleRestricted } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -198,6 +198,7 @@ When done, reply with ONLY this JSON object:
 {"price": number|null, "where": "site or seller, e.g. 'TacSwap' or 'Amazon'", "url": "https link to the listing", "condition": "new|used|like new", "note": "one short sentence, e.g. 'Used, good condition, ships free'"}`;
 }
 async function dealCheck(env, w) {
+  if (saleRestricted(w)) return { price: null, where: "", url: "", condition: "", note: "", date: new Date().toISOString().slice(0, 10), hit: false };
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
   const messages = [{ role: "user", content: dealPrompt(w) }];
   let data, all = [];
@@ -274,13 +275,14 @@ async function runDueWatches(env, budget) {
     if (await readCount(env, alertQuotaKey(u.uid, now)) >= alertLimit) continue;
     eligible.push(u);
   }
-  const picked = selectDueWatches(eligible, { now, budget, minGapMs: gapMs });
+  eligible.forEach(u => { u.list = (u.list || []).filter(w => w && !saleRestricted(w)); });
+  const picked = selectDueWatches(eligible.filter(u => u.list.length), { now, budget, minGapMs: gapMs });
   const dirty = new Map();
   let done = 0;
   for (const p of picked) {
     const u = eligible.find(x => x.uid === p.uid);
     const w = u && u.rec.list.find(x => x.id === p.watch.id);
-    if (!w) continue;
+    if (!w || saleRestricted(w)) continue;
     if (!(await chargeScheduledAlert(env, u.uid)).ok) continue;
     const wasHit = !!(w.best && w.best.hit);
     try {
@@ -486,6 +488,12 @@ export default {
       if (url.pathname === "/watch/check") {
         const w = rec.list.find(x => x.id === String(body.id || ""));
         if (!w) return json({ error: "Set an alert price on this item first" }, 400, h);
+        if (saleRestricted(w)) {
+          w.best = { price: null, where: "", url: "", condition: "", note: "", date: new Date().toISOString().slice(0, 10), hit: false };
+          w.lastErr = "";
+          await saveRec();
+          return json(pub(), 200, h);
+        }
         if (w.lastCheck && Date.now() - Date.parse(w.lastCheck) < 10 * 60e3) return json(pub(), 200, h);
         const bill = await chargeScheduledAlert(env, user.sub);
         if (!bill.ok) return json({ error: `Daily lookup limit reached (${+(env.DAILY_AI_LIMIT || 40)} per day). Try again tomorrow.` }, 429, h);

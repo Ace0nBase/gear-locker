@@ -161,12 +161,17 @@ function autoValue(){
 }
 $("fRetail").oninput=autoValue;$("fCond").onchange=autoValue;
 $("fVal").oninput=()=>{valueTouched=$("fVal").value!==""};
+function marketSourceText(item){
+  const rows=(Array.isArray(item&&item.marketSources)?item.marketSources:[]).filter(s=>s&&(s.label||s.url)).slice(0,4);
+  if(GearLogic.saleRestricted(item))return rows.map(s=>esc(s.label||"")).filter(Boolean).join(" · ");
+  return rows.filter(s=>/^https:\/\//.test(s.url||"")).map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label||"source")}</a>`).join(" · ");
+}
 function showPrice(i){
   const out=$("priceOut");
   if(i&&lookingUp.has(i.id)){out.innerHTML=`<span class="tag">Looking up…</span><br>Checking eBay, TacSwap and store prices plus the weight.`;return}
   if(i?.marketCheck==="requested"&&!window.LOOKUP_URL){out.innerHTML=`<span class="tag">Market check queued</span><br>Real eBay, TacSwap and store prices fill in on the next check run.`;return}
   if(i?.priceSource==="market"){
-    const links=(Array.isArray(i.marketSources)?i.marketSources:[]).filter(s=>/^https:\/\//.test(s?.url||"")).slice(0,4).map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label||"source")}</a>`).join(" · ");
+    const links=marketSourceText(i);
     out.innerHTML=`<span class="tag">Market check ${esc(i.priceDate||"")}</span><br>${i.retailNew?`New retail <b>${money(i.retailNew)}</b> · `:""}${(i.usedLow||i.usedHigh)?`Used <b>${money(i.usedLow)}–${money(i.usedHigh)}</b> · `:""}This one <b>${money(i.value)}</b>${i.priceNote?`<br>${esc(i.priceNote)}`:""}${links?`<br>${links}`:""}`;return}
   out.textContent="Enter the new retail price and Value each fills in for your condition. Market check looks up real eBay, TacSwap and store prices.";
 }

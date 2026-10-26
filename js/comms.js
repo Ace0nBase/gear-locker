@@ -7,8 +7,6 @@ all.forEach(i=>{try{delete i._kinds}catch{}});
 /* 2) ammo market prices (kept separate from the inventory total) */
 var AMMO_STALE=3*864e5;
 var ammoName=a=>[a.caliber,a.brand,a.load].filter(Boolean).join(" ");
-var buyUrl=a=>a.mkt?.url||"https://www.google.com/search?tbm=shop&q="+encodeURIComponent(ammoName(a)+" ammo");
-var lowUrl=a=>a.mkt?.low?.url||"https://www.google.com/search?tbm=shop&q="+encodeURIComponent((a.mkt?.low?.desc||a.caliber)+" ammo");
 var ammoDeal=a=>{const m=a.mkt;if(!m||!+a.alertCpr)return null;const best=[m.cpr,m.low?.cpr].filter(x=>+x>0);const b=best.length?Math.min(...best):0;return b&&b<=+a.alertCpr?b:null};
 var ammoBusy=new Set(),ammoAutoRan=false;
 async function checkAmmo(ids,quiet){
@@ -43,8 +41,6 @@ async function checkAmmo(ids,quiet){
        </div>
        ${deal?`<div class="apDeal">Under your $${(+a.alertCpr).toFixed(2)}/rd alert</div>`:""}
        <div class="apBtns">
-        <a class="btn" href="${esc(buyUrl(a))}" target="_blank" rel="noopener noreferrer">Buy this</a>
-        ${m.low?`<a class="btn ghost" href="${esc(lowUrl(a))}" target="_blank" rel="noopener noreferrer">Buy cheapest</a>`:""}
         <button class="btn ghost" type="button" data-act="ammoshot" data-id="${esc(a.id)}">I shot some</button>
         <button class="btn ghost" type="button" data-act="ammocheck" data-id="${esc(a.id)}"${busy?" disabled":""}>${busy?"Checking…":"Check price"}</button>
        </div>
