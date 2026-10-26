@@ -4,65 +4,29 @@ var _kwRe={};
 function hasKw(t,k){const r=_kwRe[k]||(_kwRe[k]=new RegExp("(^|[^a-z0-9])"+k.trim().replace(/[.*+?^${}()|[\]\\]/g,"\\$&")));return r.test(t)}
 all.forEach(i=>{try{delete i._kinds}catch{}});
 
-/* 2) ammo market prices (kept separate from the inventory total) */
-var AMMO_STALE=3*864e5;
+/* 2) ammo on hand. Show what you paid. Do not look up retailer prices. */
 var ammoName=a=>[a.caliber,a.brand,a.load].filter(Boolean).join(" ");
-var ammoDeal=a=>{const m=a.mkt;if(!m||!+a.alertCpr)return null;const best=[m.cpr,m.low?.cpr].filter(x=>+x>0);const b=best.length?Math.min(...best):0;return b&&b<=+a.alertCpr?b:null};
-var ammoBusy=new Set(),ammoAutoRan=false;
-async function checkAmmo(ids,quiet){
-  if(!window.LOOKUP_URL||!cloudUser){if(!quiet)toast("Sign in to check prices");return}
-  ids=ids.filter(id=>!ammoBusy.has(id));if(!ids.length)return;ids.forEach(id=>ammoBusy.add(id));renderExtra();
-  let ok=0,err="";
-  const one=async id=>{const a=db.ammo.find(x=>x.id===id&&!x.deleted);if(!a)return;
-    try{const j=await apiPost("/ammo",{caliber:a.caliber||"",brand:a.brand||"",load:a.load||""});const r=j.result||{};
-      const cur=db.ammo.find(x=>x.id===id&&!x.deleted);if(cur){const hist=(cur.mkt?.hist||[]).slice(-11);if(+r.cpr)hist.push([today(),+r.cpr]);
-        cur.mkt={cpr:+r.cpr||null,where:r.where||"",url:r.url||"",low:r.low&&+r.low.cpr?r.low:null,note:r.note||"",at:today(),hist};cur.updatedAt=now();ok++}}
-    catch(e){err=e.message}finally{ammoBusy.delete(id)}};
-  const q=[...ids];await Promise.all([0,1].map(async()=>{while(q.length)await one(q.shift())}));
-  await persist();renderExtra();updateBadges();
-  if(!quiet)toast(ok?`Prices updated for ${ok} ammo line${ok>1?"s":""}`:"Price check: "+(err||"no results"),4000);
-  const deals=L("ammo").filter(ammoDeal);if(deals.length&&quiet)toast(`Ammo deal: ${ammoName(deals[0])} at $${ammoDeal(deals[0]).toFixed(2)}/rd`,6000);
-}
 {const _r=RENDER.ammo;RENDER.ammo=()=>{_r();const v=$("ammoView");const recs=L("ammo");
-  // stats: what you paid vs. what it's worth today
-  const st=v.querySelector(".stats");if(st){const paidStat=[...st.querySelectorAll(".stat")].find(s=>/Ammo value/.test(s.textContent));if(paidStat)paidStat.querySelector("span").textContent="What I paid";
-    const priced=recs.filter(a=>+a.mkt?.cpr);const mv=priced.reduce((s,a)=>s+(+a.mkt.cpr)*(+a.rounds||0),0);
-    st.insertAdjacentHTML("beforeend",`<div class="stat"><b>${priced.length?money(mv):"—"}</b><span>Worth today</span></div>`)}
-  if(recs.length){
-    const head=v.querySelector(".vhead > div");head?.insertAdjacentHTML("beforeend",`<p class="hint" style="margin:4px 0 0">Ammo is kept out of your inventory total since you shoot it.</p>`);
-    const busyAll=recs.some(a=>ammoBusy.has(a.id));
-    const cards=recs.slice().sort((a,b)=>(a.caliber||"").localeCompare(b.caliber||"")).map(a=>{const m=a.mkt||{};const deal=ammoDeal(a);const busy=ammoBusy.has(a.id);
-      const diff=+m.cpr&&+a.cpr?(m.cpr-a.cpr)/a.cpr:null;
-      return `<div class="ammoP${deal?" deal":""}"><div class="apTop"><b>${esc(ammoName(a)||"Ammo")}</b><small>${(+a.rounds||0).toLocaleString()} rds${a.location?" · "+esc(a.location):""}</small></div>
-       <div class="apGrid">
-        <div><span>I paid</span><b>${+a.cpr?"$"+(+a.cpr).toFixed(2):"—"}<i>/rd</i></b></div>
-        <div><span>Today${m.where?" · "+esc(m.where):""}</span><b>${busy?"…":+m.cpr?"$"+(+m.cpr).toFixed(2):"—"}<i>/rd</i></b>${diff!=null?`<small class="${diff>0?"up":"dn"}">${diff>0?"▲":"▼"} ${Math.abs(diff*100).toFixed(0)}% vs. paid</small>`:""}</div>
-        <div><span>Cheapest similar</span><b>${busy?"…":m.low?"$"+(+m.low.cpr).toFixed(2):"—"}<i>/rd</i></b>${m.low?.desc?`<small>${esc(m.low.desc)}${m.low.where?" · "+esc(m.low.where):""}</small>`:""}</div>
-       </div>
-       ${deal?`<div class="apDeal">Under your $${(+a.alertCpr).toFixed(2)}/rd alert</div>`:""}
-       <div class="apBtns">
-        <button class="btn ghost" type="button" data-act="ammoshot" data-id="${esc(a.id)}">I shot some</button>
-        <button class="btn ghost" type="button" data-act="ammocheck" data-id="${esc(a.id)}"${busy?" disabled":""}>${busy?"Checking…":"Check price"}</button>
-       </div>
-       <div class="apShot" id="shot_${esc(a.id)}" hidden><input type="number" min="1" step="1" inputmode="numeric" placeholder="Rounds" aria-label="Rounds shot"><button class="btn" type="button" data-act="ammotake" data-id="${esc(a.id)}">Take off</button></div>
-       <small class="apMeta">${m.at?`Checked ${esc(fmtDate(m.at))}`:"Not checked yet"}${+a.alertCpr?` · alert under $${(+a.alertCpr).toFixed(2)}/rd`:` · set a price alert in Edit`}${m.note?` · ${esc(m.note)}`:""}</small></div>`}).join("");
-    const html=`<div class="slotsHead">Prices <span>${window.LOOKUP_URL?`<button class="btn ghost" type="button" data-act="ammocheckall"${busyAll?" disabled":""}>${busyAll?"Checking…":"Check all prices"}</button>`:""}</span></div><p class="hint" style="margin:4px 0 8px">Prices refresh on their own every few days when you open Ammo. Set an alert price on a line and it's flagged when it drops below.</p><div class="ammoPs">${cards}</div>`;
-    const tables=v.querySelectorAll(".scroll");const anchor=tables[0]||st;anchor?.insertAdjacentHTML("afterend",html);
-  }
-  // edit form: price alert field
-  const f=v.querySelector('form[data-ed="ammo"]');if(f&&!f.querySelector('[name="alertCpr"]')){const d=ED.ammo?.draft||{};const acts=f.querySelector(".actions");acts?.insertAdjacentHTML("beforebegin",fld("alertCpr","Alert me when it's under ($/rd)",d.alertCpr,{type:"number",step:"0.01",ph:"0.25"}))}
-  // refresh stale prices in the background, once per app open
-  if(!ammoAutoRan&&window.LOOKUP_URL&&cloudUser){ammoAutoRan=true;const stale=recs.filter(a=>a.caliber&&(!a.mkt?.at||Date.now()-new Date(a.mkt.at+"T12:00:00")>AMMO_STALE)).slice(0,6).map(a=>a.id);if(stale.length)setTimeout(()=>checkAmmo(stale,true),800)}
+  const st=v.querySelector(".stats");if(st){const paidStat=[...st.querySelectorAll(".stat")].find(s=>/Ammo value/.test(s.textContent));if(paidStat)paidStat.querySelector("span").textContent="What I paid"}
+  const head=v.querySelector(".vhead > div");head?.insertAdjacentHTML("beforeend",`<p class="hint" style="margin:4px 0 0">Ammo stays out of your inventory total. Cost per round is what you paid for that line. Gear Locker does not look up ammo prices or stores.</p>`);
+  if(!recs.length)return;
+  const cards=recs.slice().sort((a,b)=>(a.caliber||"").localeCompare(b.caliber||"")).map(a=>{const paid=+a.cpr&&+a.rounds?(+a.cpr)*(+a.rounds):0;
+    return `<div class="ammoP"><div class="apTop"><b>${esc(ammoName(a)||"Ammo")}</b><small>${(+a.rounds||0).toLocaleString()} rds${a.location?" · "+esc(a.location):""}</small></div>
+     <div class="apGrid">
+      <div><span>I paid</span><b>${paid?money(paid):"—"}</b></div>
+      <div><span>Cost per round</span><b>${+a.cpr?"$"+(+a.cpr).toFixed(2):"—"}<i>/rd</i></b></div>
+     </div>
+     <div class="apBtns"><button class="btn ghost" type="button" data-act="ammoshot" data-id="${esc(a.id)}">I shot some</button></div>
+     <div class="apShot" id="shot_${esc(a.id)}" hidden><input type="number" min="1" step="1" inputmode="numeric" placeholder="Rounds" aria-label="Rounds shot"><button class="btn" type="button" data-act="ammotake" data-id="${esc(a.id)}">Take off</button></div></div>`}).join("");
+  const html=`<div class="slotsHead">What I paid</div><div class="ammoPs">${cards}</div>`;
+  const tables=v.querySelectorAll(".scroll");const anchor=tables[0]||st;anchor?.insertAdjacentHTML("afterend",html);
 }}
 {const _a=ACT.ammo;ACT.ammo=async(act,b,e)=>{
   const id=b?.dataset?.id;
-  if(act==="ammocheckall"){await checkAmmo(L("ammo").filter(a=>a.caliber).map(a=>a.id));return}
-  if(act==="ammocheck"&&id){await checkAmmo([id]);return}
   if(act==="ammoshot"&&id){const box=$("shot_"+id);if(box){box.hidden=!box.hidden;if(!box.hidden)box.querySelector("input").focus()}return}
   if(act==="ammotake"&&id){const box=$("shot_"+id);const n=Math.round(+box.querySelector("input").value||0);if(n<=0){toast("Type how many rounds");return}
     const a=db.ammo.find(x=>x.id===id&&!x.deleted);if(!a)return;a.rounds=Math.max(0,(+a.rounds||0)-n);a.updatedAt=now();await persist();toast(`${n.toLocaleString()} rds off ${ammoName(a)} · ${a.rounds.toLocaleString()} left`);renderExtra();updateBadges();return}
   return _a?_a(act,b,e):undefined}}
-{const _bf=badgeFor;badgeFor=function(k){const n=_bf(k);return k==="ammo"?n+L("ammo").filter(ammoDeal).length:n}}
 
 /* ---------- v27: Comms — frequencies, CHIRP export/import, PACE plans ---------- */
 var MODES=[["FM","FM (wide)"],["NFM","NFM (narrow)"],["AM","AM"]];

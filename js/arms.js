@@ -207,7 +207,7 @@ openForm=function(item){
   _openForm(item);
   $("fArm").value=item?(item.arm||""):"";
   Object.entries(REC_IDS).forEach(([el,k])=>$(el).value=item?.[k]||"");
-  recFields();
+  recFields();if(typeof syncSaleFields==="function")syncSaleFields();
 };
 var _readForm=readForm;
 readForm=function(){

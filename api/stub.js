@@ -66,7 +66,7 @@ export default {
     }
     if (url.pathname === "/identify") return json({ result: { name: "Sample pouch", brand: "", category: "Pouches", color: "Coyote", confidence: "low", summary: "Local test only. No photo was sent anywhere." } }, 200, h);
     if (url.pathname === "/battery") return json({ result: { none: false, battery: "CR123A", count: 1, life: "Local test", swapMonths: 6 } }, 200, h);
-    if (url.pathname === "/ammo") return json({ result: { cpr: 0.4, where: "Local test", url: "", low: null, note: "Local test price. No store was contacted." } }, 200, h);
+    if (url.pathname === "/ammo") return json({ error: "Ammo price search is turned off." }, 410, h);
     if (url.pathname === "/pace") return json({ result: { name: "Local test plan", summary: "Stub plan. No live lookup was made.", steps: { p: { method: "Cell call", detail: "Call", when: "First" }, a: {}, c: {}, e: {} }, checkin: "", rally: "", codes: "", newFreqs: [], gaps: [] } }, 200, h);
     if (url.pathname.startsWith("/watch/")) return json({ ok: true, watches: [], max: 10, vapidPublicKey: "", push: false }, 200, h);
     return json({ error: "Not found" }, 404, h);

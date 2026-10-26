@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   clearUserLocal, shareItemFields, decideAccess, chargeDecision, quotaKey, alertQuotaKey,
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
-  refreshAuthClaims, loanSharePlan, orphanLoansFromLends, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
+  refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
   saleRestricted,
 } from "../js/logic.js";
 
@@ -26,6 +26,7 @@ test("clearUserLocal removes per-user keys and keeps device keys", () => {
     "gearLocker.shareName": "Alex",
     "gearLocker.keep": "1",
     "gearLocker.noFolder": "1",
+    "gearLocker.offline": "{\"items\":[{\"serial\":\"SN\"}]}",
     "gearLocker.extra": "x",
     "other": "stay",
   });
@@ -34,6 +35,7 @@ test("clearUserLocal removes per-user keys and keeps device keys", () => {
   assert.equal(left["gearLocker.items"], undefined);
   assert.equal(left["gearLocker.lock"], undefined);
   assert.equal(left["gearLocker.shareName"], undefined);
+  assert.equal(left["gearLocker.offline"], undefined);
   assert.equal(left["gearLocker.extra"], undefined);
   assert.equal(left["gearLocker.keep"], "1");
   assert.equal(left["gearLocker.noFolder"], "1");
@@ -131,7 +133,7 @@ test("cloud merge prefers the server stamp and keeps a newer local edit on echo"
     { id: "1", name: "edited offline", updatedAt: "2026-10-26T05:00:00.000Z", offlinePending: true },
     { id: "1", name: "server", updatedAt: "2026-10-26T04:00:00.000Z", serverUpdatedAt: "2026-10-26T04:00:00.000Z" }
   );
-  assert.equal(pending.name, "edited offline");
+  assert.equal(pending.name, "server");
   const newerRemote = mergeByServerTime(
     { id: "1", name: "edited offline", updatedAt: "2026-10-26T05:00:00.000Z", offlinePending: true },
     { id: "1", name: "server", updatedAt: "2026-10-26T06:00:00.000Z", serverUpdatedAt: "2026-10-26T06:00:00.000Z" }
@@ -185,7 +187,23 @@ test("an orphan lend becomes a private loan the lender can close", () => {
   assert.equal(recovered[0].friendEmail, "riley@example.com");
   assert.equal(recovered[0].lendShared, true);
   assert.equal(recovered[0].notes, "");
+  assert.equal(recovered[0].itemId, "");
+  assert.equal(loanNeedsItem(recovered[0]), false);
+  assert.equal(loanNeedsItem({ itemId: "i1" }), false);
+  assert.equal(loanNeedsItem({ itemId: "", itemName: "  " }), true);
+  assert.equal(loanNeedsItem({}), true);
   assert.equal(orphanLoansFromLends([{ id: "kept" }, { id: "orphan", deleted: true }], lends).length, 0);
+});
+
+test("server rows drop the offline flag and keep the rest of the item", () => {
+  const src = { id: "1", name: "Rifle", serial: "ABC", notes: "closet", location: "safe", offlinePending: true };
+  const row = serverRow(src);
+  assert.equal(row.offlinePending, undefined);
+  assert.equal("offlinePending" in row, false);
+  assert.equal(row.serial, "ABC");
+  assert.equal(row.notes, "closet");
+  assert.equal(row.location, "safe");
+  assert.equal(src.offlinePending, true);
 });
 
 test("a missing storage file is not counted as blocked", () => {
@@ -208,19 +226,46 @@ test("offline edits flush immediately and the local test page can cache itself",
 
 test("price search and sale links skip firearms, ammunition, and the parts that are firearms", () => {
   assert.equal(saleRestricted({ category: "Firearms", name: "Rifle" }), true);
+  assert.equal(saleRestricted({ category: "firearms", name: "Carbine" }), true);
+  assert.equal(saleRestricted({ category: "FIREARMS", name: "Rifle" }), true);
   assert.equal(saleRestricted({ category: "Suppressors", name: "Can" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Glock 19 pistol" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Ruger 10/22 rifle" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Remington 870 shotgun" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "S&W revolver" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Home defense handgun" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "16 inch carbine" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "AR-15 rifle" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "AR 15 lower" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Aero M4E1 lower" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Polymer80 PF940C frame" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Glock 19 frame" }), true);
   assert.equal(saleRestricted({ category: "Misc", name: "Stripped lower receiver" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "AR-15 lower" }), true);
   assert.equal(saleRestricted({ category: "Misc", name: "Pistol frame" }), true);
   assert.equal(saleRestricted({ category: "Misc", name: "80% frame" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "supressor" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "SilencerCo Omega 300" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "9mm 115gr" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Federal 5.56 M193" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "12ga buckshot" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Hornady Critical Defense 9mm" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: ".308 Win 168gr match" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "22LR bulk pack" }), true);
+  assert.equal(saleRestricted({ category: "Mags & Ammo Storage", name: "9mm 115gr" }), true);
   assert.equal(saleRestricted({ name: "Range ammo", caliber: "9mm", load: "115gr FMJ", rounds: 500 }), true);
   assert.equal(saleRestricted({ category: "Misc", name: "9mm ammunition" }), true);
   assert.equal(saleRestricted({ category: "Misc", name: "115gr FMJ" }), true);
+  assert.equal(saleRestricted({ category: "Pouches", name: "Admin pouch", arm: "FA" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "Tube", arm: "SU" }), true);
   assert.equal(saleRestricted({ category: "Mags & Ammo Storage", name: "Ammo can" }), false);
+  assert.equal(saleRestricted({ category: "Pouches", name: "Ammo pouch" }), false);
+  assert.equal(saleRestricted({ category: "Misc", name: "Ammo pouch" }), false);
   assert.equal(saleRestricted({ category: "Pouches", name: "Double mag pouch" }), false);
   assert.equal(saleRestricted({ category: "NVG & Optics", name: "Red dot" }), false);
   assert.equal(saleRestricted({ category: "Comms & Radios", name: "Handheld receiver" }), false);
   assert.equal(saleRestricted({ category: "Holsters & Slings", name: "Holster" }), false);
+  assert.equal(saleRestricted({ category: "Holsters & Slings", name: "Glock 19 holster" }), false);
+  assert.equal(saleRestricted({ category: "Misc", name: "Glock 19 holster" }), false);
   assert.equal(saleRestricted({ category: "Misc", name: "Upper receiver" }), false);
   assert.equal(saleRestricted({ category: "Misc", name: "Pack frame" }), false);
   assert.equal(saleRestricted(null), false);

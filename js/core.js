@@ -54,27 +54,8 @@ async function syncFromDisk(){
   try{const disk=await readFile();if(disk){const before=JSON.stringify([all,kits,db]);all=merge(all,disk.items);kits=mergeKits(kits,disk.kits);COLS.forEach(c=>db[c]=merge(db[c],disk.db[c]));if(JSON.stringify([all,kits,db])!==before){mirror();render();pushCloudSoon();if(editing){const fresh=all.find(i=>i.id===editing.id);if(fresh){editing=fresh;showPrice(fresh)}}}}}
   catch{}
 }
-function stashOffline(){
-  if(typeof navigator!=="undefined"&&navigator.onLine!==false)return;
-  var mark=r=>{if(r&&r.id)r.offlinePending=true};
-  all.forEach(mark);COLS.forEach(c=>(db[c]||[]).forEach(mark));
-  try{localStorage.setItem("gearLocker.offline",JSON.stringify({items:all,kits,db,savedAt:now()}))}catch{}
-}
-function applyOfflineStash(){
-  var raw=null;try{raw=JSON.parse(localStorage.getItem("gearLocker.offline")||"null")}catch{raw=null}
-  if(!raw||typeof raw!=="object")return;
-  if(Array.isArray(raw.items))all=merge(all,raw.items);
-  if(raw.kits&&typeof raw.kits==="object")kits=mergeKits(kits,raw.kits);
-  if(raw.db&&typeof raw.db==="object")COLS.forEach(c=>{db[c]=merge(db[c]||[],Array.isArray(raw.db[c])?raw.db[c]:[])});
-}
-function clearOfflineStash(){
-  try{localStorage.removeItem("gearLocker.offline")}catch{}
-  var strip=r=>{if(r&&r.offlinePending)delete r.offlinePending};
-  all.forEach(strip);COLS.forEach(c=>(db[c]||[]).forEach(strip));
-}
 async function persist(){
   mirror();
-  if(typeof navigator!=="undefined"&&navigator.onLine===false)stashOffline();
   try{await pushCloudSoon()}catch{}
   if(!dir){$("status").textContent=cloudUser?"":"Saved on this device only.";return}
   try{await writeFile();mirror();$("status").textContent=`Saved to ${dir.name}\\${FILE} · ${new Date().toLocaleTimeString()}`}
@@ -107,7 +88,6 @@ async function boot(){
   try{all=JSON.parse(localStorage.getItem(LS)||"[]")}catch{all=[]}
   try{kits=JSON.parse(localStorage.getItem(LSK)||"{}")||{}}catch{kits={}}
   try{const d=JSON.parse(localStorage.getItem(LSD)||"{}")||{};COLS.forEach(c=>db[c]=Array.isArray(d[c])?d[c]:[])}catch{db=emptyDb()}
-  applyOfflineStash();
   render();
   if(!window.showDirectoryPicker)return;
   try{
@@ -118,7 +98,6 @@ async function boot(){
     else showConnect(true);
   }catch{showConnect(false)}
 }
-window.addEventListener("pagehide",()=>{if(typeof navigator!=="undefined"&&navigator.onLine===false)stashOffline()});
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)syncFromDisk()});
 window.addEventListener("focus",syncFromDisk);
 setInterval(()=>{if(!document.hidden)syncFromDisk()},60000);
@@ -150,24 +129,39 @@ function render(){
       <span class="meta">${i.mountedOn&&itemById(i.mountedOn)?`on <em>${esc(itemById(i.mountedOn).name)}</em>`:i.setupOn?`<em>${esc(i.setupOn)}</em>`:"Spare"}${onLoan(i.id)?`<span class="tag" style="display:block">on loan · ${esc(onLoan(i.id).borrower)}</span>`:""}</span>
       <span class="meta">${esc(i.location||"—")}</span>
       <span class="cond ${esc(i.condition)}">${esc((i.condition||"").replace("-"," "))}</span>
-      <span class="val">${i.value?money(i.qty*i.value):"—"}${lookingUp.has(i.id)?`<span class="tag">looking up…</span>`:(i.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
+      <span class="val">${i.value?money(i.qty*i.value):"—"}${lookingUp.has(i.id)?`<span class="tag">looking up…</span>`:GearLogic.saleRestricted(i)?"":(i.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
 }
 
 /* ---------- pricing ---------- */
+function saleDraft(){return {name:$("fName").value,brand:$("fBrand").value,category:$("fCat").value,caliber:$("fCal")?.value||"",arm:$("fArm")?.value||""}}
+function syncSaleFields(){
+  const restricted=GearLogic.saleRestricted(saleDraft());
+  const retail=$("fRetail").closest(".f");if(retail)retail.hidden=restricted;
+  const lab=$("fVal").closest(".f")?.querySelector("label");if(lab)lab.textContent=restricted?"Insured value ($)":"Value each ($)";
+  $("fVal").placeholder=restricted?"What you insure it for":"Auto from retail";
+  if($("mktBtn")&&!lookingUp.has(editing?.id))$("mktBtn").textContent=restricted?"Look up weight":"Market check";
+  if(restricted)showPrice(editing||saleDraft());
+}
 function autoValue(){
-  if(valueTouched)return;
+  if(valueTouched||GearLogic.saleRestricted(saleDraft()))return;
   const r=parseFloat($("fRetail").value);
   if(r>0)$("fVal").value=Math.round(r*(FACTOR[$("fCond").value]??0.6));
 }
-$("fRetail").oninput=autoValue;$("fCond").onchange=autoValue;
+$("fRetail").oninput=autoValue;$("fCond").onchange=()=>{autoValue();syncSaleFields()};
+["fName","fBrand","fCat","fCal","fArm"].forEach(id=>{const el=$(id);if(!el)return;el.addEventListener("input",syncSaleFields);el.addEventListener("change",syncSaleFields)});
 $("fVal").oninput=()=>{valueTouched=$("fVal").value!==""};
 function marketSourceText(item){
+  if(GearLogic.saleRestricted(item))return "";
   const rows=(Array.isArray(item&&item.marketSources)?item.marketSources:[]).filter(s=>s&&(s.label||s.url)).slice(0,4);
-  if(GearLogic.saleRestricted(item))return rows.map(s=>esc(s.label||"")).filter(Boolean).join(" · ");
   return rows.filter(s=>/^https:\/\//.test(s.url||"")).map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label||"source")}</a>`).join(" · ");
 }
 function showPrice(i){
   const out=$("priceOut");
+  if(i&&GearLogic.saleRestricted(i)){
+    if(lookingUp.has(i.id)){out.innerHTML=`<span class="tag">Looking up weight…</span><br>This does not search stores or prices.`;return}
+    out.textContent="Insured value is a number you enter. It is not a store price. Look up weight does not search stores.";
+    return;
+  }
   if(i&&lookingUp.has(i.id)){out.innerHTML=`<span class="tag">Looking up…</span><br>Checking eBay, TacSwap and store prices plus the weight.`;return}
   if(i?.marketCheck==="requested"&&!window.LOOKUP_URL){out.innerHTML=`<span class="tag">Market check queued</span><br>Real eBay, TacSwap and store prices fill in on the next check run.`;return}
   if(i?.priceSource==="market"){
@@ -191,7 +185,7 @@ function openForm(item){
   $("fMount").innerHTML=mountOpts(item?.id);$("fMount").value=item?.mountedOn||"";
   $("fGun").innerHTML=gunOpts();$("fGun").value=item?.forGun||"";$("fNick").value=item?.nick||"";
   $("fWt").value=item?.weight??"";$("fCal").value=item?.caliber||"";$("fBase").value=item?.baseRounds??"";fireFields();
-  showPrice(item);
+  showPrice(item);syncSaleFields();
   $("saveMoreBtn").hidden=!!item;$("saveBtn").textContent=item?"Save changes":"Save";
   $("form").hidden=false;resetSheetScroll("formSheet");if(!item)setTimeout(()=>$("fName").focus(),60);syncLock();
 }

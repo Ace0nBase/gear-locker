@@ -202,15 +202,17 @@ var PRI={High:0,Medium:1,Low:2};
 NEWREC.wish=()=>({priority:"Medium",status:"want"});
 RENDER.wish=()=>{
   const ed=ED.wish,d=ed?.draft||{};const want=L("wish").filter(w=>w.status!=="got").sort((a,b)=>(PRI[a.priority]??1)-(PRI[b.priority]??1)||byName(a,b));const got=L("wish").filter(w=>w.status==="got");
-  const cost=want.reduce((a,w)=>a+(+w.estPrice||0),0);
+  const showEst=w=>+w.estPrice&&!(GearLogic.saleRestricted(w)&&w.priceSource==="market");
+  const cost=want.reduce((a,w)=>a+(showEst(w)?+w.estPrice:0),0);
+  const draftRestricted=GearLogic.saleRestricted(d);
   const form=ed?edForm("wish",ed.isNew?"Add to wishlist":"Edit wishlist item",
     fld("name","Item",d.name,{span:2,req:1,ph:"Ballistic glasses"})+fld("brand","Brand / model",d.brand,{ph:"Revision StingerHawk"})+fld("category","Category",d.category,{type:"select",opts:CATS.map(c=>[c,c])})+
-    fld("estPrice","Est. price ($)",d.estPrice,{type:"number",step:1})+fld("priority","Priority",d.priority,{type:"select",opts:[["High","High"],["Medium","Medium"],["Low","Low"]]})+fld("link","Link",d.link,{type:"url",span:2,ph:"https://"})+
-    fld("notes","Notes",d.notes,{span:4})+(d.priceSource==="market"?`<p class="hint span4" style="grid-column:1/-1">Market check ${esc(d.priceDate||"")}: ${esc(d.priceNote||"")}</p>`:"")):"";
-  $("wishView").innerHTML=`<div class="vhead"><div><h2>Wishlist</h2><p>Gear you want. <em>Add kit gaps</em> adds essentials you don't own anything for, from the kits you've packed. Market check prices them. Got it moves the item into your inventory.</p></div><div class="vbtns"><button class="btn ghost" type="button" data-act="gaps">Add kit gaps</button><button class="btn ghost" type="button" data-act="checkall">Market check all</button><button class="btn" type="button" data-act="new">+ Add item</button></div></div>
+    fld("estPrice","Est. price ($)",draftRestricted&&d.priceSource==="market"?"":d.estPrice,{type:"number",step:1})+fld("priority","Priority",d.priority,{type:"select",opts:[["High","High"],["Medium","Medium"],["Low","Low"]]})+(draftRestricted?"":fld("link","Link",d.link,{type:"url",span:2,ph:"https://"}))+
+    fld("notes","Notes",d.notes,{span:4})+(!draftRestricted&&d.priceSource==="market"?`<p class="hint span4" style="grid-column:1/-1">Market check ${esc(d.priceDate||"")}: ${esc(d.priceNote||"")}</p>`:"")):"";
+  $("wishView").innerHTML=`<div class="vhead"><div><h2>Wishlist</h2><p>Gear you want. <em>Add kit gaps</em> adds essentials you don't own anything for, from the kits you've packed. Market check prices ordinary gear. Firearms, suppressors, frames, and ammunition are not priced or linked.</p></div><div class="vbtns"><button class="btn ghost" type="button" data-act="gaps">Add kit gaps</button><button class="btn ghost" type="button" data-act="checkall">Market check all</button><button class="btn" type="button" data-act="new">+ Add item</button></div></div>
   ${form}
   <section class="stats"><div class="stat"><b>${want.length}</b><span>On the list</span></div><div class="stat"><b>${money(cost)}</b><span>Est. total</span></div><div class="stat"><b>${want.filter(w=>w.priority==="High").length}</b><span>High priority</span></div><div class="stat"><b>${got.length}</b><span>Bought</span></div></section>
-  ${want.length?`<div class="scroll"><table class="tbl"><thead><tr><th>Priority</th><th>Item</th><th>Needed for</th><th class="n">Est. price</th><th></th></tr></thead><tbody>${want.map(w=>`<tr class="click" data-act="edit" data-id="${esc(w.id)}"><td><span class="pill ${w.priority==="High"?"gap":w.priority==="Medium"?"warn":""}">${esc(w.priority||"Medium")}</span></td><td><b>${esc(w.name)}</b><small>${esc([w.brand,w.category].filter(Boolean).join(" · "))}${w.link&&/^https?:\/\//.test(w.link)?` · <a href="${esc(w.link)}" target="_blank" rel="noopener">link</a>`:""}</small></td><td>${esc((w.kitsNeeding||[]).join(", ")||"—")}</td><td class="n">${+w.estPrice?money(w.estPrice):"—"}${(w.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag" style="display:block">check queued</span>`:w.priceSource==="market"?`<span class="tag" style="display:block">market</span>`:""}</td><td><span class="vbtns">${(window.LOOKUP_URL||w.marketCheck!=="requested")?`<button class="btn ghost" type="button" data-act="check" data-id="${esc(w.id)}">Price check</button>`:""}<button class="btn" type="button" data-act="got" data-id="${esc(w.id)}">Got it</button></span></td></tr>`).join("")}</tbody></table></div>`
+  ${want.length?`<div class="scroll"><table class="tbl"><thead><tr><th>Priority</th><th>Item</th><th>Needed for</th><th class="n">Est. price</th><th></th></tr></thead><tbody>${want.map(w=>{const restricted=GearLogic.saleRestricted(w);return `<tr class="click" data-act="edit" data-id="${esc(w.id)}"><td><span class="pill ${w.priority==="High"?"gap":w.priority==="Medium"?"warn":""}">${esc(w.priority||"Medium")}</span></td><td><b>${esc(w.name)}</b><small>${esc([w.brand,w.category].filter(Boolean).join(" · "))}${!restricted&&w.link&&/^https?:\/\//.test(w.link)?` · <a href="${esc(w.link)}" target="_blank" rel="noopener">link</a>`:""}</small></td><td>${esc((w.kitsNeeding||[]).join(", ")||"—")}</td><td class="n">${showEst(w)?money(w.estPrice):"—"}${restricted?"":(w.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag" style="display:block">check queued</span>`:w.priceSource==="market"?`<span class="tag" style="display:block">market</span>`:""}</td><td><span class="vbtns">${!restricted&&(window.LOOKUP_URL||w.marketCheck!=="requested")?`<button class="btn ghost" type="button" data-act="check" data-id="${esc(w.id)}">Price check</button>`:""}<button class="btn" type="button" data-act="got" data-id="${esc(w.id)}">Got it</button></span></td></tr>`}).join("")}</tbody></table></div>`
   :`<div class="empty"><b>Wishlist is empty</b>Click <em>Add kit gaps</em> to fill it from what your kits are missing, or add items yourself.</div>`}
   ${got.length?`<div class="slotsHead">Bought <span>${got.length}</span></div><p class="hint">${got.map(w=>esc(w.name)).join(" · ")}</p>`:""}`;
 };
@@ -224,9 +226,10 @@ ACT.wish=async(act,b)=>{
       if(ex){ex.kitsNeeding=ks;ex.updatedAt=now();u++;continue}
       db.wish.push({id:uid(),name:S[s][0],category:S[s][1][0],gapSlot:s,kitsNeeding:ks,priority:ks.length>=4?"High":ks.length>=2?"Medium":"Low",status:"want",notes:S[s][3],createdAt:now(),updatedAt:now()});n++}
     await persist();toast(n?`Added ${n} kit gap${n>1?"s":""}`:"No new gaps to add");render();return}
-  if(act==="check"||act==="checkall"){const list=act==="check"?db.wish.filter(w=>w.id===b.dataset.id):db.wish.filter(w=>!w.deleted&&w.status!=="got"&&w.marketCheck!=="requested");list.forEach(w=>{w.marketCheck="requested";w.marketCheckAt=now();w.updatedAt=now()});await persist();toast(list.length?`Queued ${list.length} for a price check`:"Nothing to queue");render();return}
+  if(act==="check"||act==="checkall"){const list=(act==="check"?db.wish.filter(w=>w.id===b.dataset.id):db.wish.filter(w=>!w.deleted&&w.status!=="got"&&w.marketCheck!=="requested")).filter(w=>!GearLogic.saleRestricted(w));list.forEach(w=>{w.marketCheck="requested";w.marketCheckAt=now();w.updatedAt=now()});await persist();toast(list.length?`Queued ${list.length} for a price check`:"Nothing to queue");render();return}
   if(act==="got"){const w=db.wish.find(x=>x.id===b.dataset.id);if(!w)return;
-    const item={id:uid(),name:w.brand?`${w.name}`:w.name,brand:w.brand||"",category:w.category||"Misc",qty:1,condition:"New",retailNew:+w.estPrice||0,value:Math.round((+w.estPrice||0)*0.9),weight:null,weightStatus:"pending",notes:w.notes&&!w.gapSlot?w.notes:"",createdAt:now(),updatedAt:now()};
+    const restricted=GearLogic.saleRestricted(w);const est=restricted&&w.priceSource==="market"?0:+w.estPrice||0;
+    const item={id:uid(),name:w.brand?`${w.name}`:w.name,brand:w.brand||"",category:w.category||"Misc",qty:1,condition:"New",retailNew:restricted?0:est,value:restricted?est:Math.round(est*0.9),weight:null,weightStatus:"pending",notes:w.notes&&!w.gapSlot?w.notes:"",createdAt:now(),updatedAt:now()};
     all.push(item);w.status="got";w.gotAt=now();w.updatedAt=now();await persist();showTab("inv");openForm(all.find(i=>i.id===item.id));toast("Added to inventory. Fill in the details.");return}
 };
 
@@ -235,8 +238,9 @@ NEWREC.loans=()=>({out:today()});
 RENDER.loans=()=>{
   const ed=ED.loans,d=ed?.draft||{};const out=L("loans").filter(x=>!x.returned).sort((a,b)=>(a.due||"9").localeCompare(b.due||"9"));const back=L("loans").filter(x=>x.returned).sort((a,b)=>(b.returned||"").localeCompare(a.returned||""));
   const avail=live().filter(i=>!onLoan(i.id)||i.id===d.itemId).sort(byName);
+  const itemBlank=(!d.itemId&&d.itemName)?d.itemName:"— pick an item —";
   const form=ed?edForm("loans",ed.isNew?"Lend an item":"Edit loan",
-    fld("itemId","Item",d.itemId,{type:"select",span:2,opts:[["","— pick an item —"],...avail.map(i=>[i.id,i.name])]})+fld("borrower","Borrowed by",d.borrower,{req:1,ph:"Name"})+fld("contact","Contact",d.contact,{ph:"Phone or email"})+
+    fld("itemId","Item",d.itemId,{type:"select",span:2,opts:[[ "",itemBlank ],...avail.map(i=>[i.id,i.name])]})+fld("borrower","Borrowed by",d.borrower,{req:1,ph:"Name"})+fld("contact","Contact",d.contact,{ph:"Phone or email"})+
     fld("out","Lent on",d.out,{type:"date"})+fld("due","Due back",d.due,{type:"date"})+fld("returned","Returned on",d.returned,{type:"date"})+fld("cond","Condition when lent",d.cond,{ph:"Good, no marks"})+fld("notes","Notes",d.notes,{span:4})):"";
   const nm=x=>esc(itemById(x.itemId)?.name||x.itemName||"(deleted item)");
   $("loansView").innerHTML=`<div class="vhead"><div><h2>Loans</h2><p>Who has your gear and when it's due back. Add a friend's Gear Locker email and the loan shows up in their app too.</p></div><button class="btn" type="button" data-act="new">+ Lend item</button></div>
@@ -245,7 +249,11 @@ RENDER.loans=()=>{
   :`<div class="empty"><b>Nothing on loan</b>When you lend something out, click <em>+ Lend item</em> so you know who has it.</div>`}
   ${back.length?`<div class="slotsHead">Returned <span>${back.length}</span></div><div class="scroll"><table class="tbl"><tbody>${back.slice(0,25).map(x=>`<tr class="click" data-act="edit" data-id="${esc(x.id)}"><td>${nm(x)}</td><td>${esc(x.borrower)}</td><td>${esc(fmtDate(x.out))} → ${esc(fmtDate(x.returned))}</td></tr>`).join("")}</tbody></table></div>`:""}`;
 };
-SAVE.loans=async d=>{if(!d.itemId){toast("Pick an item");return}if(!String(d.borrower||"").trim()){toast("Who borrowed it?");return}await upsertC("loans",d);ED.loans=null;toast("Loan saved");render()};
+SAVE.loans=async d=>{
+  if(GearLogic.loanNeedsItem(d)){toast("Pick an item");return}
+  if(!String(d.borrower||"").trim()){toast("Who borrowed it?");return}
+  if(d.itemId){const it=itemById(d.itemId);if(it){d.itemName=it.name||"";d.itemBrand=it.brand||"";d.itemColor=it.color||"";d.itemCategory=it.category||""}}
+  await upsertC("loans",d);ED.loans=null;toast("Loan saved");render()};
 DEL.loans=async d=>{await removeC("loans",d.id)};
 ACT.loans=async(act,b)=>{if(act==="returned"){const x=L("loans").find(y=>y.id===b.dataset.id);if(!x)return;await upsertC("loans",{...x,returned:today()});toast("Marked returned");render()}};
 
