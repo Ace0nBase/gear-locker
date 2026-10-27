@@ -201,7 +201,8 @@ function recFields(){
   if(typeof syncPhotoId==="function")syncPhotoId();
 }
 function photoDraft(){const mountedOn=$("fMount")?.value||"";const host=mountedOn?itemById(mountedOn):null;return GearLogic.armorySubject({name:$("fName").value,brand:$("fBrand").value,category:$("fCat").value,arm:$("fArm").value,mountedOn},host)}
-function syncPhotoId(){const blocked=GearLogic.photoIdBlocked(!!kits._settings?.privateArms,photoDraft());$("idBtn").hidden=blocked;if(blocked)$("idOut").hidden=true}
+function photoBlockReason(){const draft=photoDraft();const privateArms=!!kits._settings?.privateArms;if(!GearLogic.photoIdBlocked(privateArms,draft))return "";return GearLogic.photoIdBlockReason(privateArms,draft)||"Choose a category before photo ID."}
+function syncPhotoId(){const blocked=!!photoBlockReason();const btn=$("idBtn");if(btn){btn.hidden=false;btn.disabled=blocked}const reason=$("idReason");if(reason){reason.hidden=!blocked;reason.textContent=blocked?photoBlockReason():""}if(blocked&&$("idOut"))$("idOut").hidden=true}
 $("fArm").addEventListener("change",recFields);
 $("fCat").addEventListener("change",recFields);$("fName").addEventListener("change",recFields);
 var lastArmCat="";
@@ -317,26 +318,28 @@ $("swapSheet").addEventListener("click",async e=>{
 
 /* identify unknown gear from a photo */
 function shrinkImage(file,max=1024){return new Promise((res,rej)=>{const img=new Image();img.onload=()=>{const s=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement("canvas");c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);c.getContext("2d").drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(img.src);res(c.toDataURL("image/jpeg",0.82).split(",")[1])};img.onerror=()=>rej(new Error("Couldn't open that photo"));img.src=URL.createObjectURL(file)})}
-$("idBtn").onclick=()=>{const draft=photoDraft();if(GearLogic.photoIdBlocked(!!kits._settings?.privateArms,draft)){toast(String(draft.category||"").trim()?"Photo ID stays off for Armory items.":"Choose a category before photo ID.");return}if(!window.LOOKUP_URL||!cloudUser){toast("Sign in to use photo ID");return}$("idFile").click()};
+$("idBtn").onclick=()=>{const why=photoBlockReason();if(why){toast(why);return}if(!window.LOOKUP_URL||!cloudUser){toast("Sign in to use photo ID");return}$("idFile").click()};
 $("idFile").addEventListener("change",async e=>{
   const f=e.target.files[0];e.target.value="";if(!f)return;
   const draft=photoDraft();
-  if(GearLogic.photoIdBlocked(!!kits._settings?.privateArms,draft)){toast(String(draft.category||"").trim()?"Photo ID stays off for Armory items.":"Choose a category before photo ID.");return}
+  const why=photoBlockReason();
+  if(why){toast(why);return}
   const out=$("idOut");out.hidden=false;out.innerHTML=`<span class="tag">Looking at your photo…</span>`;$("idBtn").disabled=true;
   try{
     const img=await shrinkImage(f);const tok=await firebase.auth().currentUser.getIdToken();
-    const r=await fetch(window.LOOKUP_URL.replace(/\/$/,"")+"/identify",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+tok},body:JSON.stringify({image:img,hint:$("fName").value.trim()})});
+    const r=await fetch(window.LOOKUP_URL.replace(/\/$/,"")+"/identify",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+tok},body:JSON.stringify({image:img,hint:$("fName").value.trim(),category:draft.category||"",arm:draft.arm||""})});
     const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||"Photo ID failed");
     const g=j.result||{};
+    const suggested=GearLogic.photoIdSuggestion(g.category);
     if(g.name&&(!$("fName").value.trim()||$("fName").dataset.fromPhoto))$("fName").value=g.name,$("fName").dataset.fromPhoto="1";
     if(g.brand&&!$("fBrand").value.trim())$("fBrand").value=g.brand;
-    if(g.category&&CATS.includes(g.category)&&!editing)$("fCat").value=g.category,fireFields(),$("fCat").dispatchEvent(new Event("change"));
+    if(suggested&&!editing)$("fCat").value=suggested,fireFields(),$("fCat").dispatchEvent(new Event("change"));
     if(g.color&&!$("fColor").value.trim())setColor(g.color);
     $("fName").dispatchEvent(new Event("input"));
     const photoRestricted=GearLogic.saleRestricted(saleDraft());
     out.innerHTML=`<span class="tag">Photo ID · ${esc(g.confidence||"low")} confidence</span><br>${esc(g.summary||"")}${g.brand?"":photoRestricted?" Look up weight does not search stores.":" Brand unknown, so prices and weight will be estimated for a typical one."}`;
   }catch(err){out.innerHTML=`<span class="tag">Photo ID</span><br>${esc(lookupFailMessage(err&&err.message,"photo ID"))}`}
-  finally{$("idBtn").disabled=false}
+  finally{if(typeof syncPhotoId==="function")syncPhotoId();else $("idBtn").disabled=false}
 });
 
 /* share a piece of gear (and everything on it) or a kit */

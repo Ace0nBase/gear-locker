@@ -1,4 +1,4 @@
-var CATS=["Firearms","Suppressors","Armor & Carriers","Belts & Rigs","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Mags & Ammo Storage","Cleaning & Maintenance","Misc"];
+var CATS=GearLogic.GEAR_CATEGORIES;
 var FACTOR={"New":0.9,"Good":0.7,"Used":0.55,"Worn":0.4,"Needs-repair":0.2};
 var FILE="gear.json", LS="gearLocker.items", LSK="gearLocker.kits";
 var kits={};
@@ -12,7 +12,7 @@ var now=()=>new Date().toISOString();
 function localISODate(d){const x=d instanceof Date?d:new Date();return x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0")}
 function localDateTime(d){const x=d instanceof Date?d:new Date();return localISODate(x)+"T"+String(x.getHours()).padStart(2,"0")+":"+String(x.getMinutes()).padStart(2,"0")}
 var today=()=>GearLogic.localDay();
-function lookupFailMessage(msg,what){const raw=String(msg||"").replace(/^Market check:\s*/,"").trim();const reach=what?`Couldn't reach ${what}. You can try again.`:"Couldn't reach the price check. You can still save without a price.";const name=what?what.charAt(0).toUpperCase()+what.slice(1):"The lookup";const fail=`${name} didn't finish. Try again in a little while.`;if(/^Couldn't reach /.test(raw))return raw;if(!raw||/failed to fetch|networkerror|load failed|network request failed|appears to be offline|network error/i.test(raw))return reach;if(/claude api error|internal server error|^error \d|unexpected token|syntaxerror|typeerror|^bad |invalid token/i.test(raw))return fail;if(/daily lookup limit|confirm your email|sign in again|turned off|isn't set up|aren't switched on|lookups are paused|price alerts aren't|send a photo|skips |under 2 MB|set an alert price|couldn't read the|no items|missing name/i.test(raw)&&raw.length<180)return raw;return fail}
+function lookupFailMessage(msg,what){const raw=String(msg||"").replace(/^Market check:\s*/,"").trim();const reach=what?`Couldn't reach ${what}. You can try again.`:"Couldn't reach the price check. You can still save without a price.";const name=what?what.charAt(0).toUpperCase()+what.slice(1):"The lookup";const fail=`${name} didn't finish. Try again in a little while.`;if(/^Couldn't reach /.test(raw))return raw;if(!raw||/failed to fetch|networkerror|load failed|network request failed|appears to be offline|network error/i.test(raw))return reach;if(/claude api error|internal server error|^error \d|unexpected token|syntaxerror|typeerror|^bad |invalid token/i.test(raw))return fail;if(/daily lookup limit|confirm your email|sign in again|turned off|isn't set up|aren't switched on|lookups are paused|price alerts aren't|send a photo|skips |under 2 MB|set an alert price|couldn't read the|no items|missing name|photo id isn't available|choose a category before photo id/i.test(raw)&&raw.length<180)return raw;return fail}
 function publicAppUrl(){
   var path=location.pathname.replace(/index\.html$/,"");
   var host=location.hostname;
@@ -54,7 +54,7 @@ async function writeFile(){
 }
 async function syncFromDisk(){
   if(!dir)return;
-  try{const disk=await readFile();if(disk){const before=JSON.stringify([all,kits,db]);all=merge(all,disk.items);kits=mergeKits(kits,disk.kits);COLS.forEach(c=>db[c]=merge(db[c],disk.db[c]));if(JSON.stringify([all,kits,db])!==before){mirror();render();pushCloudSoon();if(editing){const fresh=all.find(i=>i.id===editing.id);if(fresh){editing=fresh;showPrice(fresh)}}}}}
+  try{const disk=await readFile();if(disk){const before=JSON.stringify([all,kits,db]);all=merge(all,disk.items);kits=mergeKits(kits,disk.kits);COLS.forEach(c=>db[c]=merge(db[c],disk.db[c]));const migrated=applyCategoryMigration();if(JSON.stringify([all,kits,db])!==before||migrated){mirror();render();pushCloudSoon();if(migrated)persist();if(editing){const fresh=all.find(i=>i.id===editing.id);if(fresh){editing=fresh;showPrice(fresh)}}}}}
   catch{}
 }
 async function persist(){
@@ -86,6 +86,41 @@ $("connectBtn").onclick=async()=>{
     toast("Connected to "+dir.name);
   }catch(e){if(e?.name!=="AbortError")toast("Couldn't open that folder. Try again.")}
 };
+function magShelfRows(){
+  const rows=[];
+  const take=list=>{(list||[]).forEach(r=>{if(r&&!r.deleted&&GearLogic.magShelfPending(r))rows.push(r)})};
+  take(all);COLS.forEach(c=>take(db[c]));
+  return rows;
+}
+function showMagShelfPrompt(){
+  const el=$("magSheet");if(!el)return;
+  const rows=magShelfRows();
+  if(!rows.length){el.hidden=true;if(typeof syncLock==="function")syncLock();return}
+  el.querySelector(".panel").innerHTML=`<h2>These were on Mags &amp; Ammo Storage</h2>
+    <p class="hint">They are now under Ammo Storage &amp; Loaders. Prices and store links stay off until you answer. Move a magazine or a belt to Magazines &amp; Belts if it belongs there. That shelf does not look up prices or stores. Nothing moves because of its name.</p>
+    <div class="links">${rows.map(r=>`<div class="pk"><span class="pkn"><b>${esc(r.name||"Untitled")}</b><small>${esc([r.brand,r.category].filter(Boolean).join(" · "))}</small></span><button class="btn ghost" type="button" data-mag="move" data-id="${esc(r.id)}">Move to Magazines &amp; Belts</button></div>`).join("")}</div>
+    <div class="actions"><button class="btn ghost" type="button" data-mag="dismiss">Dismiss</button><button class="btn" type="button" data-mag="move-all">Move all to Magazines &amp; Belts</button></div>`;
+  el.hidden=false;if(typeof syncLock==="function")syncLock();
+}
+async function applyMagShelfAnswer(action,id){
+  const stamp=now();
+  const take=list=>GearLogic.answerMagShelf(list,action,id,stamp).records;
+  all=take(all);COLS.forEach(c=>{db[c]=take(db[c])});
+  await persist();render();showMagShelfPrompt();
+}
+document.addEventListener("click",e=>{
+  const b=e.target.closest("#magSheet [data-mag]");if(!b)return;
+  e.preventDefault();applyMagShelfAnswer(b.dataset.mag,b.dataset.id||"");
+});
+function applyCategoryMigration(){
+  const stamp=now();
+  let changed=false;
+  const touch=rows=>{const out=GearLogic.migrateRecordCategories(rows,stamp);if(out.changed)changed=true;return out.records};
+  all=touch(all);
+  COLS.forEach(c=>{db[c]=touch(db[c])});
+  if(typeof showMagShelfPrompt==="function")showMagShelfPrompt();
+  return changed;
+}
 async function boot(){
   if(window.GEAR_QA_BLOCKED)return;
   if(SHARE_ID&&window.FIREBASE_CONFIG){showSharedPage();return}
@@ -93,6 +128,7 @@ async function boot(){
   try{all=JSON.parse(localStorage.getItem(LS)||"[]")}catch{all=[]}
   try{kits=JSON.parse(localStorage.getItem(LSK)||"{}")||{}}catch{kits={}}
   try{const d=JSON.parse(localStorage.getItem(LSD)||"{}")||{};COLS.forEach(c=>db[c]=Array.isArray(d[c])?d[c]:[])}catch{db=emptyDb()}
+  if(applyCategoryMigration())await persist();
   render();
   if(!window.showDirectoryPicker)return;
   try{
@@ -133,7 +169,7 @@ function render(){
       <span class="nm">${esc(i.name)}${i.nick?` <span class="tag">${esc(i.nick)}</span>`:""}<small>${esc([i.brand,i.color,i.category==="Firearms"?(i.caliber?i.caliber+" · ":"")+roundsFired(i.id).toLocaleString()+" rds":"",wtText(i)].filter(Boolean).join(" · "))}</small><small class="where">${esc(i.category)}${i.mountedOn&&itemById(i.mountedOn)?" · on "+esc(itemById(i.mountedOn).name):""}${onLoan(i.id)?" · on loan":""}</small></span>
       <span class="meta">${esc(i.location||"—")}</span>
       <span class="cond ${esc(i.condition)}">${esc((i.condition||"").replace("-"," "))}</span>
-      <span class="val">${GearLogic.countedValue(i)?money(i.qty*GearLogic.countedValue(i)):"—"}${lookingUp.has(i.id)?`<span class="tag">looking up…</span>`:GearLogic.saleRestricted(i)?"":(i.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
+      <span class="val">${GearLogic.countedValue(i)?money(i.qty*GearLogic.countedValue(i)):"—"}${lookingUp.has(i.id)?`<span class="tag">looking up…</span>`:GearLogic.saleRestricted(i)||GearLogic.magShelfPending(i)?"":(i.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
 }
 
 /* ---------- pricing ---------- */
@@ -165,7 +201,7 @@ $("fRetail").oninput=()=>{retailDirty=true;autoValue()};$("fCond").onchange=()=>
 ["fName","fBrand","fCat","fCal","fArm"].forEach(id=>{const el=$(id);if(!el)return;el.addEventListener("input",syncSaleFields);el.addEventListener("change",syncSaleFields)});
 $("fVal").oninput=()=>{valueDirty=$("fVal").value!==""};
 function marketSourceText(item){
-  if(GearLogic.saleRestricted(item))return "";
+  if(GearLogic.saleRestricted(item)||GearLogic.magShelfPending(item))return "";
   const rows=GearLogic.stripGunMarketSources(item&&item.marketSources);
   return rows.map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label||"source")}</a>`).join(" · ");
 }
@@ -176,6 +212,7 @@ function showPrice(i){
     out.textContent="Type the price and the insured value yourself. They are saved with the item. Look up weight does not search stores.";
     return;
   }
+  if(i&&GearLogic.magShelfPending(i)){out.textContent="Prices and store links stay off until you answer the shelf question.";return}
   if(i&&lookingUp.has(i.id)){out.innerHTML=`<span class="tag">Looking up…</span><br>Checking eBay, TacSwap and store prices plus the weight.`;return}
   if(i?.marketCheck==="requested"&&!window.LOOKUP_URL){out.innerHTML=`<span class="tag">Market check queued</span><br>Real eBay, TacSwap and store prices fill in on the next check run.`;return}
   if(i?.priceSource==="market"){
@@ -305,9 +342,9 @@ var S={ // slot library: [label, categories, keywords, tip, exclude]
  carrier:["Plate carrier / chest rig",["Armor & Carriers","Belts & Rigs"],["plate carrier","carrier","jpc","avs","apc","chest rig","spc","fcpc","lv-119","slickster","micro rig","mk3","mk4"],"A carrier or chest rig to run mags and med up front.",["belt"]],
  plates:["Armor plates",["Armor & Carriers"],["plates","plate set","level iii","level iv","lvl iii","lvl iv","iiia","sapi","esapi","armor insert","hesco","rmr"],"Rifle-rated plates sized for your carrier.",["carrier","bag","pouch"]],
  belt:["Battle belt",["Belts & Rigs"],["belt"],"A padded or rigid gun belt for holster, pistol mags and TQ.",[]],
- riflemag:["Rifle mag pouches",["Pouches","Mags & Ammo Storage","Armor & Carriers"],["m4","5.56","556","rifle mag","ar mag","ar-15","kywi","mag pouch","magazine pouch","triple mag","double mag","7.62","308","placard","tacos"],"Pouches for at least 3 rifle mags.",["pistol"]],
- pistolmag:["Pistol mag pouch",["Pouches","Mags & Ammo Storage"],["pistol mag","pistol","9mm","handgun","glock"],"One or two pistol mag pouches on the belt.",[]],
- mags:["Rifle magazines",["Mags & Ammo Storage"],["pmag","magazine","mags","lancer","gen m3","5.56","556","ar-15","ar15","m4","7.62","308"],"Enough loaded mags to fill your pouches.",["pouch","pistol","glock","9mm","handgun","p320","sig 365","m&p","loader"]],
+ riflemag:["Rifle mag pouches",["Pouches","Ammo Storage & Loaders","Magazines & Belts","Armor & Carriers"],["m4","5.56","556","rifle mag","ar mag","ar-15","kywi","mag pouch","magazine pouch","triple mag","double mag","7.62","308","placard","tacos"],"Pouches for at least 3 rifle mags.",["pistol"]],
+ pistolmag:["Pistol mag pouch",["Pouches","Ammo Storage & Loaders","Magazines & Belts"],["pistol mag","pistol","9mm","handgun","glock"],"One or two pistol mag pouches on the belt.",[]],
+ mags:["Rifle magazines",["Ammo Storage & Loaders","Magazines & Belts"],["pmag","magazine","mags","lancer","gen m3","5.56","556","ar-15","ar15","m4","7.62","308"],"Enough loaded mags to fill your pouches.",["pouch","pistol","glock","9mm","handgun","p320","sig 365","m&p","loader"]],
  ifak:["IFAK / trauma kit",["Medical","Pouches"],["ifak","trauma","med kit","medical kit","blowout","first aid","medical pouch"],"A stocked IFAK: gauze, pressure dressing, chest seals.",[]],
  tq:["Tourniquet",["Medical"],["tourniquet","tq","cat gen","sof-t","sof t","sam xt","rmt"],"At least one TQ reachable with either hand.",["holder","pouch"]],
  helmet:["Helmet",["Helmet & Head"],["helmet","ops-core","opscore","high cut","bump","team wendy"],"Ballistic or bump helmet.",["cover","mount","bag"]],
@@ -343,11 +380,11 @@ var S={ // slot library: [label, categories, keywords, tip, exclude]
  rangebag:["Range bag",["Cases & Bags","Packs & Bags"],["range bag","range backpack","shooting bag"],"A bag for ammo, targets and tools.",[]],
  guncase:["Rifle case / bag",["Cases & Bags"],["rifle case","rifle bag","gun case","gun bag","soft case","hard case","double rifle","sbr bag","discreet","long gun","pelican 1700","pelican 1720","pelican 1750","rifle"],"A padded case or bag to transport the long gun.",["pistol","range bag"]],
  pistolcase:["Pistol case",["Cases & Bags"],["pistol case","handgun case","pistol rug","pistol bag","pistol"],"A lockable pistol case or rug.",["holster","mag","rifle"]],
- ammocan:["Ammo can / ammo bag",["Mags & Ammo Storage","Cases & Bags"],["ammo can","ammo box","ammo bag","ammo crate","ammo"],"Ammo for the day, plus extra.",[]],
- pistolmags:["Pistol magazines",["Mags & Ammo Storage"],["pistol","glock","9mm","handgun","p320","sig 365","m&p","45 acp",".45"],"At least 3–4 pistol mags.",["pouch","loader","case","holster"]],
+ ammocan:["Ammo can / ammo bag",["Ammo Storage & Loaders","Magazines & Belts","Cases & Bags"],["ammo can","ammo box","ammo bag","ammo crate","ammo"],"Ammo for the day, plus extra.",[]],
+ pistolmags:["Pistol magazines",["Ammo Storage & Loaders","Magazines & Belts"],["pistol","glock","9mm","handgun","p320","sig 365","m&p","45 acp",".45"],"At least 3–4 pistol mags.",["pouch","loader","case","holster"]],
  timer:["Shot timer",["Misc","Knives & Tools"],["shot timer","timer","pact","amg","ced7000","special pie","competition electronics"],"A shot timer to measure drills.",[]],
  targets:["Targets & stapler",["Misc"],["target","stapler","pasters","staple","steel","ipsc","uspsa","b-8","b8"],"Targets, pasters and a stapler or clips.",[]],
- loader:["Mag loader",["Mags & Ammo Storage","Knives & Tools"],["loader","uplula","maglula","lula","speed loader","stripper"],"A mag loader saves your thumbs.",[]],
+ loader:["Mag loader",["Ammo Storage & Loaders","Magazines & Belts","Knives & Tools"],["loader","uplula","maglula","lula","speed loader","stripper"],"A mag loader saves your thumbs.",[]],
  notebook:["Data book / notebook",["Misc"],["data book","databook","dope","notebook","rite in the rain","log book","logbook","notepad"],"Something to log drills, dope or frequencies.",[]],
  bipod:["Bipod / rear bag",["NVG & Optics","Misc","Cases & Bags"],["bipod","rear bag","squeeze bag","harris","atlas","game changer","shooting pillow","tripod"],"Stable support for precision shooting.",[]],
  mat:["Shooting mat",["Misc","Cases & Bags"],["shooting mat","mat","drag bag"],"A mat for prone positions.",[]],
@@ -355,7 +392,7 @@ var S={ // slot library: [label, categories, keywords, tip, exclude]
  kneepads:["Knee / elbow pads",["Clothing & Boots","Misc"],["knee pad","kneepad","elbow pad","knee pads","arc'teryx pad"],"Pads for kneeling and prone work.",[]],
  simgear:["FoF mask / protection",["Helmet & Head","Misc"],["sim","fof","force on force","force-on-force","paint","utm","simunition","fof mask","neck protector","groin"],"Sim mask, neck and groin protection.",[]],
  trainer:["Training weapon",["Misc"],["blue gun","rings","sirt","training pistol","trainer","airsoft","gbb","laser trainer","dummy gun","inert"],"A training or sim gun.",[]],
- snapcaps:["Snap caps / dummy rounds",["Mags & Ammo Storage","Misc"],["snap cap","dummy round","dummy rounds","a-zoom","azoom","inert round"],"For malfunction drills and dry fire.",[]],
+ snapcaps:["Snap caps / dummy rounds",["Ammo Storage & Loaders","Magazines & Belts","Misc"],["snap cap","dummy round","dummy rounds","a-zoom","azoom","inert round"],"For malfunction drills and dry fire.",[]],
  traumabag:["Trauma bag / med kit",["Medical","Cases & Bags","Packs & Bags"],["trauma bag","med bag","aid bag","medic","first aid kit","stomp","jump kit"],"A larger med bag for the team.",[]],
  antenna:["Spare / upgraded antenna",["Comms & Radios"],["antenna","whip","nagoya","diamond","yagi","j-pole","jpole","roll-up","slim jim"],"A better antenna is the cheapest range boost.",[]],
  ptt:["PTT / radio cables",["Comms & Radios"],["ptt","push to talk","downlead","radio cable","adapter","kenwood plug"],"PTT and cable to tie radio into the headset.",[]],

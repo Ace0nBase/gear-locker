@@ -46,4 +46,8 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.doesNotMatch(src, /"restricted"/);
   assert.doesNotMatch(src, /normalizeGearLabel/);
   assert.match(src, /stripGunMarketSources/);
+  assert.match(src, /\$\{PRICE_BACKSTOP\}/);
+  assert.match(src, /photoIdHardBlocked\(subject\)/);
+  assert.match(src, /pricedPhotoCategories\(CATS\)/);
+  assert.ok(src.indexOf("Do not look up a price") < src.indexOf("${PRICE_BACKSTOP}"));
 });

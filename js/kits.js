@@ -52,7 +52,7 @@ function classify(i){
     else if(c==="Armor & Carriers"&&RX.plates.test(nm)&&!/carrier|rig|bag/.test(nm))out.add("plates");
     else if(c==="Armor & Carriers"&&RX.plateCarrier.test(nm))out.add("carrier_plate");
   }
-  const magCat=c==="Mags & Ammo Storage";
+  const magCat=c==="Ammo Storage & Loaders"||c==="Magazines & Belts";
   if((c==="Pouches"||magCat||c==="Belts & Rigs"||c==="Armor & Carriers")&&(RX.pouch.test(nm)&&(RX.magword.test(nm)||/kywi|taco|placard|shingle/.test(nm)))&&!/dump|admin|radio|med|ifak|utility|gp\b/.test(nm))
     out.add(RX.pistolword.test(nm)?"magpouch_pistol":"magpouch_rifle");
   else if(magCat&&RX.magword.test(nm)&&!/loader|coupler|holster|can\b|box\b/.test(nm))out.add(RX.pistolword.test(nm)?"mag_pistol":"mag_rifle");

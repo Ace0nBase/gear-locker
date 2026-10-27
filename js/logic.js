@@ -301,23 +301,100 @@ function categoryKey(value) {
   return String(value || "").normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-// Automatic prices stop at the firearm, suppressor, ammunition, and lower-receiver
-// shelves, and at a firearm or suppressor record on the Arms Room. A magazine
-// shelf is not one of those. The item name is not checked.
+export const LEGACY_STORAGE_CATEGORY = "Mags & Ammo Storage";
+export const STORAGE_CATEGORY = "Ammo Storage & Loaders";
+const LEGACY_STORAGE_KEY = categoryKey(LEGACY_STORAGE_CATEGORY);
+const STORAGE_KEY = categoryKey(STORAGE_CATEGORY);
+const WEIGHT_ONLY_CATEGORY_KEYS = new Set([
+  categoryKey("Magazines & Belts"),
+  categoryKey("Triggers & Parts"),
+]);
+
+// The old shelf name becomes Ammo Storage & Loaders. Matching is the whole category, not a word inside it.
+export function migrateCategoryName(category) {
+  if (category == null) return category;
+  const raw = String(category);
+  if (raw && categoryKey(raw) === LEGACY_STORAGE_KEY) return STORAGE_CATEGORY;
+  return raw;
+}
+
+export function migrateRecordCategories(records, stamp) {
+  let changed = false;
+  const list = Array.isArray(records) ? records : [];
+  const next = list.map(row => {
+    if (!row || typeof row !== "object") return row;
+    const category = migrateCategoryName(row.category);
+    if (category === row.category) return row;
+    changed = true;
+    return { ...row, category, migratedFromMagShelf: true, updatedAt: stamp || row.updatedAt || "" };
+  });
+  return { records: changed ? next : list, changed };
+}
+
+// True only for a row the category migration marked. The item name is never read.
+export function magShelfPending(item) {
+  return !!(item && item.migratedFromMagShelf === true);
+}
+
+// Move is an explicit answer. Dismiss leaves the row on Ammo Storage & Loaders with its prices and links.
+export function answerMagShelf(records, action, id, stamp) {
+  const list = Array.isArray(records) ? records : [];
+  let changed = false;
+  const next = list.map(row => {
+    if (!magShelfPending(row)) return row;
+    const move = action === "move-all" || (action === "move" && row.id === id);
+    if (action !== "dismiss" && !move) return row;
+    changed = true;
+    if (action === "dismiss") {
+      const copy = { ...row, updatedAt: stamp || row.updatedAt || "" };
+      delete copy.migratedFromMagShelf;
+      return copy;
+    }
+    const moved = keepManualPrice(
+      { ...row, category: "Magazines & Belts" },
+      { retailWasManual: row.priceSource === "manual", valueWasManual: row.valueSource === "manual" },
+    );
+    delete moved.migratedFromMagShelf;
+    moved.updatedAt = stamp || row.updatedAt || "";
+    return moved;
+  });
+  return { records: changed ? next : list, changed };
+}
+
+// Automatic prices stop at the firearm, suppressor, ammunition, lower-receiver,
+// magazine-and-belt, and trigger-part shelves, and at a firearm or suppressor record.
+// Ammo storage and loaders stay priced. The item name is not checked.
 export function saleRestricted(item) {
   if (!item || typeof item !== "object") return false;
   const kind = String(item.kind || item.tab || "").trim().toLowerCase();
   if (kind === "ammo") return true;
   const arm = String(item.arm || "").trim().toUpperCase();
   if (arm === "FA" || arm === "SU") return true;
-  const c = categoryKey(item.category);
+  const c = categoryKey(migrateCategoryName(item.category));
   if (!c) return false;
-  if (/\bmags?\b|\bmagazines?\b|\bstorage\b/.test(c)) return false;
+  if (c === STORAGE_KEY) return false;
+  if (WEIGHT_ONLY_CATEGORY_KEYS.has(c)) return true;
   if (/\b(firearms?|handguns?|rifles?|shotguns?|suppressors?|silencers?|nfa)\b/.test(c)) return true;
   if (/\b(ammunitions?|ammo|cartridges?|reloading)\b/.test(c)) return true;
   if (/\b(lowers?|frames?|receivers?)\b/.test(c)) return true;
   return false;
 }
+
+export const GEAR_CATEGORIES = ["Firearms","Suppressors","Magazines & Belts","Triggers & Parts","Armor & Carriers","Belts & Rigs","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Ammo Storage & Loaders","Cleaning & Maintenance","Misc"];
+
+// Categories Photo ID may fill in. Restricted shelves are left blank so they are not offered as priced.
+export function pricedPhotoCategories(categories) {
+  return (categories || GEAR_CATEGORIES).filter(c => !saleRestricted({ category: c }));
+}
+
+export function photoIdSuggestion(category, categories) {
+  const name = String(category || "");
+  const allowed = pricedPhotoCategories(categories);
+  return allowed.includes(name) ? name : "";
+}
+
+// The priced lookup tells the model to withhold a price for these, without the app guessing from the item name.
+export const PRICE_BACKSTOP = "If the item is a magazine over 30 rounds, an ammunition (linked) belt, or an auto-fire device (bump stocks, auto sears, or similar), return no price and no sources. Set retailNew, usedLow, usedHigh, and value to null. Set priceNote to \"\" and sources to []. Do not name a store or a seller.";
 
 // Firearm marketplaces and firearm or ammunition retailers, matched by domain.
 // Stores that also sell gear drop only a firearm, ammunition, or suppressor path segment.
@@ -595,6 +672,7 @@ export function stampManualPrices(item, before, touch) {
 // A market lookup fills empty and auto-filled numbers. A retail or insured value the user typed stays.
 export function applyMarketPrices(item, result, day) {
   const out = { ...(item && typeof item === "object" ? item : {}) };
+  if (magShelfPending(out)) return out;
   const res = result && typeof result === "object" ? result : {};
   const n = v => (v == null || v === "" || !isFinite(+v)) ? null : Math.round(+v);
   const retailManual = out.priceSource === "manual" && +out.retailNew > 0;
@@ -620,7 +698,7 @@ export function applyMarketPrices(item, result, day) {
 // A deal for a blocked category has no price and no link. Other gear keeps the price and loses a firearm-retailer link.
 export function settleDeal(item, parsed) {
   const empty = blocked => ({ price: null, where: "", url: "", condition: "", note: "", restricted: !!blocked });
-  if (saleRestricted(item)) return empty(true);
+  if (saleRestricted(item) || magShelfPending(item)) return empty(!!saleRestricted(item));
   const clean = parsed && typeof parsed === "object" ? parsed : null;
   if (!clean) return empty(false);
   let url = /^https:\/\//.test(clean.url || "") ? String(clean.url).slice(0, 400) : "";
@@ -647,14 +725,14 @@ export function countedValue(item) {
   if (!item || typeof item !== "object") return 0;
   const n = +item.value;
   if (!isFinite(n) || n <= 0) return 0;
-  if (saleRestricted(item) && item.valueSource !== "manual") return 0;
+  if ((saleRestricted(item) || magShelfPending(item)) && item.valueSource !== "manual") return 0;
   return n;
 }
 
 export function csvExportField(item, key) {
   if (!item || typeof item !== "object") return "";
-  if (saleRestricted(item) && item.priceSource !== "manual" && (key === "retailNew" || key === "priceSource" || key === "priceDate")) return "";
-  if (key === "value" && saleRestricted(item)) {
+  if ((saleRestricted(item) || magShelfPending(item)) && item.priceSource !== "manual" && (key === "retailNew" || key === "priceSource" || key === "priceDate")) return "";
+  if (key === "value" && (saleRestricted(item) || magShelfPending(item))) {
     const n = countedValue(item);
     return n || "";
   }
@@ -755,8 +833,27 @@ export function armoryLookupBlocked(privateArms, item) {
   return false;
 }
 
-// With the opt-out on, a new item has to have a category before Photo ID can run.
+// Firearms, suppressors, lower receivers, and firearm or suppressor records. The opt-out toggle does not turn this off.
+export function photoIdHardBlocked(item) {
+  if (!item || typeof item !== "object") return false;
+  const arm = String(item.arm || "").trim().toUpperCase();
+  if (arm === "FA" || arm === "SU") return true;
+  const c = categoryKey(migrateCategoryName(item.category));
+  if (!c) return false;
+  if (/\b(firearms?|suppressors?|silencers?)\b/.test(c)) return true;
+  if (/\b(lowers?|frames?|receivers?)\b/.test(c)) return true;
+  return false;
+}
+
+export function photoIdBlockReason(privateArms, item) {
+  if (!photoIdBlocked(privateArms, item)) return "";
+  if (privateArms && !photoIdHardBlocked(item) && (!item || !String(item.category || "").trim())) return "Choose a category before photo ID.";
+  return "Photo ID isn't available for this record.";
+}
+
+// Hard-blocked records stay blocked with the opt-out off. With the opt-out on, a new item needs a category, and other Armory records stay off too.
 export function photoIdBlocked(privateArms, item) {
+  if (photoIdHardBlocked(item)) return true;
   if (!privateArms) return false;
   if (!item || !String(item.category || "").trim()) return true;
   return armoryLookupBlocked(true, item);
@@ -850,6 +947,8 @@ const GearLogic = {
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
+  LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, GEAR_CATEGORIES, PRICE_BACKSTOP,
+  migrateCategoryName, migrateRecordCategories, magShelfPending, answerMagShelf, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, photoIdBlockReason,
   timerShotAccepted, radioService, radioTxLabel, mergeFieldConflict,
 };
 globalThis.GearLogic = GearLogic;

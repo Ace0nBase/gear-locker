@@ -48,13 +48,13 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device and the service worker is version 30", () => {
+test("sign-out clears this device and the service worker is version 31", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v30/);
-  assert.match(read("js/cloud.js"), /APP_VERSION="30"/);
+  assert.match(sw, /war-box-v31/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="31"/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
   assert.match(manifest, /maskable-512\.png/);
@@ -103,7 +103,7 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/social.js"), /!GearLogic\.saleRestricted\(w\)&&w\.deal/);
   assert.match(read("js/security.js"), /caliber, load, and Armory type/);
   assert.match(read("js/security.js"), /Headlamps, flashlights, and binoculars still look up/);
-  assert.match(read("js/security.js"), /Firearms, suppressors, frames, and ammunition get a weight-only lookup with no prices or stores/);
+  assert.match(read("js/security.js"), /Firearms, suppressors, frames, ammunition, Magazines &amp; Belts, and Triggers &amp; Parts get a weight-only lookup with no prices or stores/);
   assert.match(read("js/security.js"), /gear mounted on a weapon/);
   assert.match(read("js/comms.js"), /<span>I paid<\/span>/);
   assert.match(read("js/comms.js"), /GearLogic\.csvCell/);
@@ -123,6 +123,12 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.doesNotMatch(read("js/stacks.js"), /combineDuplicates/);
   assert.match(read("js/stacks.js"), /mergeFieldConflict/);
   assert.match(read("css/app.css"), /\.lockBox \.link/);
+  assert.match(read("css/app.css"), /\.lockBox \.link:focus-visible\{outline:2px solid var\(--coyote\);outline-offset:2px\}/);
+  assert.match(read("js/core.js"), /Move to Magazines &amp; Belts/);
+  assert.match(read("js/core.js"), /Move all to Magazines &amp; Belts/);
+  assert.match(read("js/core.js"), /data-mag="dismiss"/);
+  assert.match(read("js/logic.js"), /migratedFromMagShelf/);
+  assert.match(read("index.html"), /id="magSheet"/);
   assert.match(read("js/comms.js"), /GearLogic\.radioTxLabel/);
   assert.match(read("css/app.css"), /\.apShot\[hidden\]\{display:none\}/);
   assert.match(read("api/worker.js"), /publicWeightNote/);
