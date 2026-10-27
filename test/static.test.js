@@ -123,6 +123,7 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.doesNotMatch(read("js/stacks.js"), /combineDuplicates/);
   assert.match(read("js/stacks.js"), /mergeFieldConflict/);
   assert.match(read("css/app.css"), /\.lockBox \.link/);
+  assert.match(read("css/app.css"), /\.lockBox \.link:focus-visible\{outline:2px solid var\(--coyote\);outline-offset:2px\}/);
   assert.match(read("js/core.js"), /Move to Magazines &amp; Belts/);
   assert.match(read("js/core.js"), /Move all to Magazines &amp; Belts/);
   assert.match(read("js/core.js"), /data-mag="dismiss"/);

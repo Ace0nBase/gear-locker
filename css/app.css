@@ -380,6 +380,7 @@ body.sharing .fab,body.sharing .toast{display:none!important}
 .lockBox h1{margin:0;font-family:var(--display);text-transform:uppercase}.lockBox p{margin:0;color:var(--muted)}
 .lockBox .btn,.lockBox input{width:100%}.lockBox img{border-radius:16px}
 .lockBox .link{appearance:none;background:none;border:0;box-shadow:none;color:#80603A;text-decoration:underline;font-size:.9rem;padding:10px 4px;min-height:44px;cursor:pointer}
+.lockBox .link:focus-visible{outline:2px solid var(--coyote);outline-offset:2px}
 @media (prefers-color-scheme:dark){.lockBox .link{color:var(--accent)}}
 body.appLocked .wrap,body.appLocked .sheetWrap,body.appLocked .fab,body.appLocked .toast{visibility:hidden!important}
 body.appCover::after{content:"";position:fixed;inset:0;z-index:600;background:var(--bg)}
