@@ -343,6 +343,13 @@ const STORAGE_KEY = categoryKey(STORAGE_CATEGORY);
 const LEGACY_MAGAZINES_KEY = categoryKey(LEGACY_MAGAZINES_CATEGORY);
 const MAGAZINES_KEY = categoryKey(MAGAZINES_CATEGORY);
 const LEGACY_BELTS_KEY = categoryKey(LEGACY_BELTS_CATEGORY);
+const BELTS_KEY = categoryKey(BELTS_CATEGORY);
+// A saved move applies to the old id and to the shelf that id renames to. A later explicit category is left alone.
+const ANSWER_SHELVES = {
+  belt: [LEGACY_BELTS_KEY, BELTS_KEY],
+  magazines: [LEGACY_MAGAZINES_KEY, MAGAZINES_KEY],
+  storage: [LEGACY_STORAGE_KEY, STORAGE_KEY],
+};
 // Magazines is weight-only. The previous shelf id stays in the block list as an alias.
 const WEIGHT_ONLY_CATEGORY_KEYS = new Set([
   MAGAZINES_KEY,
@@ -374,6 +381,15 @@ function answeredMove(answer, prompt) {
   return !!(answer && answer.prompt === prompt && answer.action === "move" && answer.category);
 }
 
+// Account answers win before the old id is renamed. A row already parked on Belts, Magazines, or Ammo Storage is put back.
+// A category that is neither the old id nor that default shelf is an explicit choice and stays put.
+function savedMoveCategory(from, answer) {
+  if (!answer || !answeredMove(answer, answer.prompt)) return "";
+  const shelves = ANSWER_SHELVES[answer.prompt];
+  if (!shelves || !shelves.includes(from)) return "";
+  return answer.category;
+}
+
 export function migrateRecordCategories(records, stamp, answers) {
   let changed = false;
   const list = Array.isArray(records) ? records : [];
@@ -382,10 +398,8 @@ export function migrateRecordCategories(records, stamp, answers) {
     if (!row || typeof row !== "object") return row;
     const from = categoryKey(row.category);
     const answer = categoryAnswer(book, row);
-    let category = migrateCategoryName(row.category);
-    if (from === LEGACY_BELTS_KEY && answeredMove(answer, "belt")) category = answer.category;
-    if (from === LEGACY_MAGAZINES_KEY && answeredMove(answer, "magazines")) category = answer.category;
-    if (from === LEGACY_STORAGE_KEY && answeredMove(answer, "storage")) category = answer.category;
+    const movedTo = savedMoveCategory(from, answer);
+    let category = movedTo || migrateCategoryName(row.category);
     const beltAnswered = !!(answer && answer.prompt === "belt");
     const magAnswered = !!(answer && answer.prompt === "magazines");
     const storageAnswered = !!(answer && answer.prompt === "storage");
@@ -501,11 +515,11 @@ export function magazinesBeltPending(item) {
   return !!(item && item.migratedFromMagazinesBelts === true);
 }
 
-// Move sends that one row to Belts or Ammo Storage & Loaders. Dismiss leaves every pending row on Magazines.
-// There is no move-all and no name check: a magazine and a belt share this shelf until the owner picks.
+// Move sends that one row to Belts, Pouches, or Ammo Storage & Loaders. Dismiss leaves every pending row on Magazines.
+// There is no move-all and no name check: a magazine and a pouch share this shelf until the owner picks.
 export function answerMagazinesBelt(records, action, id, stamp) {
   const list = Array.isArray(records) ? records : [];
-  const dest = action === "move-belts" ? BELTS_CATEGORY : action === "move-storage" ? STORAGE_CATEGORY : "";
+  const dest = action === "move-belts" ? BELTS_CATEGORY : action === "move-storage" ? STORAGE_CATEGORY : action === "move-pouches" ? "Pouches" : "";
   let changed = false;
   const next = list.map(row => {
     if (!magazinesBeltPending(row)) return row;

@@ -90,13 +90,13 @@ function subscribeCloud(){
     const merged=GearLogic.mergeCategoryAnswers(categoryAnswers,remote);
     const same=JSON.stringify(merged)===JSON.stringify(categoryAnswers);
     const wasReady=!!categoryAnswersReady;
-    categoryAnswersReady=true;
     categoryAnswers=merged;
     try{localStorage.setItem("gearLocker.categoryAnswers",JSON.stringify(categoryAnswers))}catch{}
-    if(!same&&typeof applyCategoryMigration==="function"){
+    categoryAnswersReady=true;
+    if((!wasReady||!same)&&typeof applyCategoryMigration==="function"){
       const migrated=applyCategoryMigration();
       if(migrated&&typeof persist==="function")persist();
-    }else if(!wasReady&&typeof showMagShelfPrompt==="function")showMagShelfPrompt();
+    }
     if(JSON.stringify(categoryAnswers)!==JSON.stringify(remote)&&typeof pushCategoryAnswers==="function")pushCategoryAnswers();
   },e=>setSync("off","Sync error: "+(e.code||e.message))));
 }
@@ -240,11 +240,22 @@ async function qaStorageCheckRun(){
   else toast("Storage check failed. Another account or a signed-out check was not blocked ("+otherCode+" / "+signedOutCode+").",6000);
 }
 }
-var APP_VERSION="31";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+var APP_VERSION="32";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+var swReloadPending=false;
+function showUpdateToast(){
+  const el=$("toast");if(!el)return;
+  el.replaceChildren();
+  el.append("War Box updated. ");
+  const b=document.createElement("button");
+  b.type="button";b.textContent="Reload";
+  b.addEventListener("click",()=>{swReloadPending=false;location.reload()});
+  el.append(b);el.hidden=false;clearTimeout(toast.t);
+}
+function finishSwReload(){if(!swReloadPending)return;swReloadPending=false;location.reload()}
 if("serviceWorker" in navigator&&GearLogic.serviceWorkerAllowed(location,window.GEAR_QA)){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const poke=()=>{if(reg.waiting)reg.waiting.postMessage({type:"skip-waiting"});reg.update().catch(()=>{})};reg.addEventListener("updatefound",()=>{const worker=reg.installing;if(worker)worker.addEventListener("statechange",()=>{if(worker.state==="installed")poke()})});document.addEventListener("visibilitychange",()=>{if(!document.hidden)poke()});setInterval(poke,20*60e3);poke()}).catch(()=>{});
-  navigator.serviceWorker.addEventListener("controllerchange",()=>{if(!hadSW||reloading)return;reloading=true;if(!anySheetOpen())location.reload();else toast("War Box updated. Close and reopen to finish.",6000)});
+  navigator.serviceWorker.addEventListener("controllerchange",()=>{if(!hadSW||reloading)return;reloading=true;if(!anySheetOpen()){location.reload();return}swReloadPending=true;showUpdateToast()});
 }
 
 /* ---------- item detail ---------- */
@@ -384,6 +395,7 @@ function syncLock(){
   const want=anySheetOpen(),has=document.body.classList.contains("locked");
   if(want&&!has){lockY=window.scrollY;document.body.style.top=`-${lockY}px`;document.body.classList.add("locked")}
   else if(!want&&has){document.body.classList.remove("locked");document.body.style.top="";window.scrollTo(0,lockY)}
+  if(!want)finishSwReload();
 }
 function resetSheetScroll(id){const sh=document.querySelector(`#${id} .sheet`);if(sh)sh.scrollTop=0}
 function closeDetail(){$("detail").hidden=true;viewing=null;syncLock()}

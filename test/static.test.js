@@ -55,7 +55,7 @@ test("sign-out clears this device and the service worker cache is version 32", (
   assert.match(appJs, /notes:""/);
   assert.match(sw, /war-box-v32/);
   assert.match(sw, /skip-waiting/);
-  assert.match(read("js/cloud.js"), /APP_VERSION="31"/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="32"/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
   assert.match(manifest, /maskable-512\.png/);
@@ -132,14 +132,20 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/core.js"), /data-belt="dismiss"/);
   assert.doesNotMatch(read("js/core.js"), /Move all to Armor/);
   assert.match(read("js/core.js"), /Move to Belts/);
+  assert.match(read("js/core.js"), /Move to Pouches/);
+  assert.match(read("js/core.js"), /data-belt="move-pouches"/);
   assert.match(read("js/core.js"), /Move to Ammo Storage &amp; Loaders/);
   assert.match(read("js/core.js"), /Wishlist/);
-  assert.match(read("js/core.js"), /\["Armor & Carriers","Belts"\]/);
-  assert.match(read("js/core.js"), /\["Ammo Storage & Loaders","Mags & Ammo Storage","Magazines & Belts","Knives & Tools"\]/);
-  assert.match(read("js/core.js"), /\["Ammo Storage & Loaders","Mags & Ammo Storage","Magazines & Belts","Cases & Bags"\]/);
-  assert.match(read("js/core.js"), /\["Pouches","Ammo Storage & Loaders","Magazines","Magazines & Belts"\]/);
-  assert.match(read("js/core.js"), /\["Ammo Storage & Loaders","Magazines","Magazines & Belts","Misc"\]/);
-  assert.doesNotMatch(read("js/core.js"), /Belts & Rigs/);
+  assert.match(read("js/core.js"), /\["Armor & Carriers","Belts","Belts & Rigs"\]/);
+  assert.match(read("js/core.js"), /\["Belts","Belts & Rigs"\]/);
+  assert.match(read("js/core.js"), /\["Pouches","Ammo Storage & Loaders","Mags & Ammo Storage","Magazines","Magazines & Belts","Armor & Carriers"\]/);
+  assert.match(read("js/core.js"), /\["Ammo Storage & Loaders","Mags & Ammo Storage","Magazines","Magazines & Belts","Knives & Tools"\]/);
+  assert.match(read("js/core.js"), /\["Ammo Storage & Loaders","Mags & Ammo Storage","Magazines","Magazines & Belts","Cases & Bags"\]/);
+  assert.match(read("js/core.js"), /\["Pouches","Ammo Storage & Loaders","Mags & Ammo Storage","Magazines","Magazines & Belts"\]/);
+  assert.match(read("js/core.js"), /\["Ammo Storage & Loaders","Mags & Ammo Storage","Magazines","Magazines & Belts","Misc"\]/);
+  assert.match(read("js/core.js"), /categoryAnswersReady\)return false/);
+  assert.match(read("js/core.js"), /action:"move",category:rec\.category/);
+  assert.doesNotMatch(read("js/core.js"), /on Belts & Rigs/);
   assert.match(read("js/logic.js"), /migratedFromMagShelf/);
   assert.match(read("js/logic.js"), /migratedFromBeltRig/);
   assert.match(read("js/logic.js"), /LEGACY_MAGAZINES_KEY/);
@@ -147,9 +153,17 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("index.html"), /id="beltSheet"/);
   assert.match(read("index.html"), /id="fCatHint"/);
   assert.doesNotMatch(read("js/kits.js"), /Magazines & Belts|Belts & Rigs/);
-  assert.doesNotMatch(read("js/stacks.js"), /Magazines & Belts|Belts & Rigs/);
+  assert.match(read("js/stacks.js"), /\["Magazines","Magazines & Belts","Ammo Storage & Loaders","Mags & Ammo Storage"\]/);
+  assert.doesNotMatch(read("js/stacks.js"), /Belts & Rigs/);
   assert.doesNotMatch(read("README.md"), /linked-ammo/);
   assert.doesNotMatch(read("README.md"), /ammunition belt/);
+  assert.doesNotMatch(read("README.md"), /belted/i);
+  assert.doesNotMatch(read("README.md"), /linked/i);
+  assert.match(read("js/cloud.js"), /swReloadPending/);
+  assert.match(read("js/cloud.js"), /showUpdateToast/);
+  assert.match(read("js/cloud.js"), /textContent="Reload"/);
+  assert.match(read("js/cloud.js"), /finishSwReload/);
+  assert.match(read("css/app.css"), /\.toast button\{[^}]*min-height:44px/);
   assert.match(read("css/app.css"), /\.pkn b\{display:block;min-width:0;overflow-wrap:anywhere\}/);
   assert.match(read("js/cloud.js"), /categoryAnswers/);
   assert.match(read("js/logic.js"), /movedAt/);
@@ -188,6 +202,19 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.equal(pkg.engines.node, ">=22");
   assert.match(read("README.md"), /Node\.js 22 or newer/);
   assert.match(read("README.md"), /Java 21 or newer/);
+});
+
+test("user-facing copy and docs do not say belted or linked", () => {
+  const withoutComments = src => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+  const literals = src => (withoutComments(src).match(/`(?:\\[\s\S]|[^`\\])*`|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'/g) || []).join("\n");
+  const docs = ["index.html", "README.md", "manifest.webmanifest"].map(read).join("\n");
+  const scripts = ["js/core.js", "js/records.js", "js/security.js", "js/cloud.js", "js/comms.js", "js/arms.js", "js/social.js", "js/stacks.js", "js/kits.js", "js/field.js"].map(f => literals(read(f))).join("\n");
+  const logic = literals(read("js/logic.js").replace(/export const PRICE_BACKSTOP =[\s\S]*?;/, ""));
+  const copy = docs + "\n" + scripts + "\n" + logic;
+  const banned = copy.match(/.{0,48}(?:belted|linked).{0,48}/i);
+  assert.equal(banned, null, banned && banned[0]);
+  const shot = new URL("../design/appstore-shots/scripts/seed-data.mjs", import.meta.url);
+  if (fs.existsSync(shot)) assert.doesNotMatch(fs.readFileSync(shot, "utf8"), /Belts & Rigs/);
 });
 
 test("production config stays on the live project and the default alias does not", () => {

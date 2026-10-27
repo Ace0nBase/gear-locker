@@ -405,6 +405,134 @@ test("a migrated seed kit keeps the Range Day loader score", () => {
   assert.equal(after, 10);
 });
 
+test("a fresh device applies saved move answers before the old id is renamed", () => {
+  const stamp = "2026-10-27T19:00:00.000Z";
+  const answers = {
+    rig: { prompt: "belt", action: "move", category: "Armor & Carriers", at: "2026-10-27T12:00:00.000Z" },
+    healed: { prompt: "belt", action: "move", category: "Armor & Carriers", at: "2026-10-27T12:00:00.000Z" },
+    pouch: { prompt: "magazines", action: "move", category: "Pouches", at: "2026-10-27T12:00:00.000Z" },
+    parked: { prompt: "magazines", action: "move", category: "Pouches", at: "2026-10-27T12:00:00.000Z" },
+    stayed: { prompt: "belt", action: "move", category: "Belts", at: "2026-10-27T20:00:00.000Z" },
+    kept: { prompt: "belt", action: "move", category: "Belts", at: "2026-10-27T08:00:00.000Z" },
+    chosen: { prompt: "belt", action: "move", category: "Armor & Carriers", at: "2026-10-27T12:00:00.000Z" },
+  };
+  const out = migrateRecordCategories([
+    { id: "rig", category: "Belts & Rigs", name: "Spiritus MK4 chest rig", updatedAt: "2026-10-27T18:00:00.000Z" },
+    { id: "healed", category: "Belts", name: "Spiritus MK4 chest rig", updatedAt: "2026-10-27T18:00:00.000Z" },
+    { id: "other", category: "Belts & Rigs", name: "AWS SMU battle belt", updatedAt: "2026-10-27T18:00:00.000Z" },
+    { id: "kept", category: "Armor & Carriers", name: "Crye JPC", movedAt: "2026-10-27T11:00:00.000Z", updatedAt: "2026-10-27T11:00:00.000Z" },
+    { id: "pouch", category: "Magazines & Belts", name: "QA triple mag pouch", updatedAt: "2026-10-27T18:00:00.000Z" },
+    { id: "parked", category: "Magazines", name: "QA triple mag pouch", updatedAt: "2026-10-27T18:00:00.000Z" },
+    { id: "mag", category: "Magazines & Belts", name: "PMAG 30", updatedAt: "2026-10-27T18:00:00.000Z" },
+    { id: "chosen", category: "Pouches", name: "Blue Alpha battle belt", updatedAt: "2026-10-27T18:00:00.000Z" },
+    { id: "stayed", category: "Belts & Rigs", name: "rigger's belt", updatedAt: "2026-10-27T18:00:00.000Z" },
+  ], stamp, answers);
+  const row = id => out.records.find(r => r.id === id);
+  assert.equal(row("rig").category, "Armor & Carriers");
+  assert.equal(row("rig").migratedFromBeltRig, undefined);
+  assert.equal(row("rig").movedAt, "2026-10-27T12:00:00.000Z");
+  assert.equal(row("healed").category, "Armor & Carriers");
+  assert.equal(row("healed").movedAt, "2026-10-27T12:00:00.000Z");
+  assert.equal(row("other").category, "Belts");
+  assert.equal(row("other").migratedFromBeltRig, true);
+  assert.equal(row("other").movedAt, undefined);
+  assert.equal(row("kept").category, "Armor & Carriers");
+  assert.equal(row("kept").movedAt, "2026-10-27T11:00:00.000Z");
+  assert.equal(row("pouch").category, "Pouches");
+  assert.equal(row("pouch").migratedFromMagazinesBelts, undefined);
+  assert.equal(row("parked").category, "Pouches");
+  assert.equal(row("mag").category, "Magazines");
+  assert.equal(row("mag").migratedFromMagazinesBelts, true);
+  assert.equal(row("chosen").category, "Pouches");
+  assert.equal(row("chosen").movedAt, undefined);
+  assert.equal(row("stayed").category, "Belts");
+  assert.equal(row("stayed").migratedFromBeltRig, undefined);
+  const again = migrateRecordCategories(out.records, "2026-10-27T21:00:00.000Z", answers);
+  assert.equal(again.records.find(r => r.id === "rig").category, "Armor & Carriers");
+  assert.equal(again.records.find(r => r.id === "other").category, "Belts");
+  assert.equal(again.records.find(r => r.id === "kept").category, "Armor & Carriers");
+  assert.equal(again.records.find(r => r.id === "chosen").category, "Pouches");
+});
+
+test("every checklist slot accepts the old and new ids and scores like main", () => {
+  const coreSrc = fs.readFileSync(new URL("../js/core.js", import.meta.url), "utf8");
+  const start = coreSrc.indexOf("var S={");
+  const end = coreSrc.indexOf("var KITS=");
+  const block = coreSrc.slice(start + "var S=".length, end).trim().replace(/;$/, "");
+  const coreSlots = Function(`"use strict"; return (${block});`)();
+  const stacks = fs.readFileSync(new URL("../js/stacks.js", import.meta.url), "utf8");
+  const live = Function(`"use strict"; return (${block});`)();
+  live.mags = Function(`"use strict"; return (${stacks.match(/S\.mags=(\[[^\n]*\]);/)[1]});`)();
+  delete live.pistolmags;
+  const pairs = [["Magazines", "Magazines & Belts"], ["Belts", "Belts & Rigs"], ["Ammo Storage & Loaders", "Mags & Ammo Storage"]];
+  for (const [id, slot] of Object.entries(coreSlots)) {
+    for (const [a, b] of pairs) {
+      assert.equal(slot[1].includes(a), slot[1].includes(b), `${id} lists ${a} without ${b}`);
+    }
+  }
+  const mainCats = {
+    carrier: ["Armor & Carriers", "Belts & Rigs"],
+    belt: ["Belts & Rigs"],
+    riflemag: ["Pouches", "Ammo Storage & Loaders", "Magazines & Belts", "Armor & Carriers"],
+    pistolmag: ["Pouches", "Ammo Storage & Loaders", "Magazines & Belts"],
+    mags: ["Ammo Storage & Loaders", "Magazines & Belts"],
+    ammocan: ["Ammo Storage & Loaders", "Magazines & Belts", "Cases & Bags"],
+    loader: ["Ammo Storage & Loaders", "Magazines & Belts", "Knives & Tools"],
+    snapcaps: ["Ammo Storage & Loaders", "Magazines & Belts", "Misc"],
+  };
+  const asMain = cat => {
+    if (cat === "Magazines" || cat === "Magazines & Belts") return "Magazines & Belts";
+    if (cat === "Belts" || cat === "Belts & Rigs") return "Belts & Rigs";
+    if (cat === "Mags & Ammo Storage") return "Ammo Storage & Loaders";
+    return cat;
+  };
+  const casesFor = cat => {
+    if (cat === "Magazines" || cat === "Magazines & Belts") return ["Magazines", "Magazines & Belts"];
+    if (cat === "Belts" || cat === "Belts & Rigs") return ["Belts", "Belts & Rigs"];
+    if (cat === "Ammo Storage & Loaders" || cat === "Mags & Ammo Storage") return ["Ammo Storage & Loaders", "Mags & Ammo Storage"];
+    return [cat];
+  };
+  const strict = (cats, slot, item) => {
+    if (!item || item.category === "Firearms" || item.category === "Suppressors") return 0;
+    if (!cats.includes(item.category)) return 0;
+    const text = ` ${[item.name, item.brand, item.notes].join(" ")} `.toLowerCase();
+    const ex = slot[4] || [];
+    if (ex.some(k => text.includes(String(k).toLowerCase()))) return 0;
+    const hit = (slot[2] || []).some(k => {
+      const word = String(k).trim().toLowerCase();
+      if (!word) return false;
+      return new RegExp("(^|[^a-z0-9])" + word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).test(text);
+    });
+    if (!hit) return 0;
+    let sc = 7;
+    if (item.condition === "New" || item.condition === "Good") sc += 1;
+    if (item.condition === "Needs-repair") sc -= 3;
+    return Math.max(sc, 0.5);
+  };
+  const items = [
+    ...SEED_ITEMS,
+    { id: "qa-triple", name: "QA triple mag pouch", category: "Magazines & Belts", condition: "Good" },
+  ];
+  for (const item of items) {
+    for (const category of casesFor(item.category)) {
+      const probe = { ...item, category };
+      for (const [id, slot] of Object.entries(live)) {
+        const ours = starterSlotScore(slot, probe);
+        const mains = strict(mainCats[id] || slot[1], slot, { ...probe, category: asMain(category) });
+        assert.equal(ours, mains, `${item.name} on ${category} / ${id}: ${ours} vs ${mains}`);
+      }
+    }
+  }
+  const triple = { id: "qa-triple", name: "QA triple mag pouch", category: "Magazines & Belts", condition: "Good" };
+  assert.equal(starterSlotScore(live.riflemag, triple), 8);
+  assert.equal(strict(mainCats.riflemag, live.riflemag, triple), 8);
+  const moved = answerMagazinesBelt([{ ...triple, category: "Magazines", migratedFromMagazinesBelts: true }], "move-pouches", "qa-triple", "2026-10-27T12:00:00.000Z").records[0];
+  assert.equal(moved.category, "Pouches");
+  assert.equal(moved.movedAt, "2026-10-27T12:00:00.000Z");
+  assert.equal(starterSlotScore(live.riflemag, moved), 8);
+  assert.equal(starterSlotScore(live.pistolmag, { name: "Glock pistol mag pouch", category: "Pouches", condition: "Good" }), 8);
+});
+
 test("photo ID is blocked for firearm records even when the armory opt-out is off", () => {
   const open = { category: "Pouches", name: "Admin pouch", arm: "" };
   assert.equal(photoIdBlocked(false, open), false);

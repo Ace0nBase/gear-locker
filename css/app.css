@@ -77,6 +77,7 @@ input[type="datetime-local"]{width:100%;max-width:100%;min-width:0}
 .empty b{color:var(--ink);display:block;font-family:var(--display);font-size:1.4rem;text-transform:uppercase;margin-bottom:6px}
 .note{font-size:.82rem;color:var(--muted);margin:0}
 .toast{position:fixed;z-index:80;left:50%;transform:translateX(-50%);top:calc(12px + env(safe-area-inset-top,0px));bottom:auto;max-width:calc(100% - 24px);text-align:center;background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:4px;font-size:.88rem}
+.toast button{display:inline-block;margin-left:8px;background:var(--bg);color:var(--ink);border:0;border-radius:4px;min-height:44px;padding:8px 14px;font-weight:600;vertical-align:middle}
 [hidden]{display:none!important}
 .tabs{display:flex;gap:4px;border-bottom:2px solid var(--ink)}
 .tab{background:transparent;border:0;border-bottom:4px solid transparent;margin-bottom:-2px;padding:8px 16px;font-family:var(--display);font-size:1.15rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
