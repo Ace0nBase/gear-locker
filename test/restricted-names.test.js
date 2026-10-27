@@ -23,7 +23,12 @@ test("firearm, suppressor, ammunition, and lower-receiver shelves are weight-onl
   blocked.forEach(item => assert.equal(saleRestricted(item), true, JSON.stringify(item)));
   assert.equal(saleRestricted({ category: "Mags & Ammo Storage", name: "Ammo can" }), false);
   assert.equal(saleRestricted({ category: "Ammo Storage & Loaders", name: "Ammo can" }), false);
+  assert.equal(saleRestricted({ category: "Magazines", name: "Garden clip" }), true);
   assert.equal(saleRestricted({ category: "Magazines & Belts", name: "Garden clip" }), true);
+  assert.equal(saleRestricted({ category: "Belts & Rigs", name: "linked ammunition belt" }), false);
+  assert.equal(saleRestricted({ category: "Belts & Rigs", name: "duty belt" }), false);
+  assert.equal(saleRestricted({ category: "Belts & Rigs", name: "battle belt" }), false);
+  assert.equal(saleRestricted({ category: "Belts & Rigs", name: "rigger's belt" }), false);
   assert.equal(saleRestricted({ category: "Triggers & Parts", name: "Widget" }), true);
   assert.equal(saleRestricted({ category: "Misc", name: "bump stock" }), false);
   assert.equal(saleRestricted({ category: "Pouches", name: "30 round magazine" }), false);

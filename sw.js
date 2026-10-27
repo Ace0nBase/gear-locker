@@ -1,5 +1,5 @@
 // Offline cache: keeps the app itself available with no signal. Your gear data syncs separately through Firebase.
-const CACHE = "war-box-v31";
+const CACHE = "war-box-v32";
 const SHELL = [
   "./",
   "./index.html",

@@ -26,7 +26,7 @@ function gunType(i){const t=itemNameText(i)+" "+String(i.armType||"").toLowerCas
 var COMPACT=/\b(43x?|48|26|27|42|365|p365|hellcat|shield|pocket|lcp|p3at|\.380|380|nano|g43|g26|cc\b|subcompact|micro|502|naa)\b/;
 function classify(i){
   if(i._kinds)return i._kinds;
-  const out=new Set();const c=i.category||"";const nm=itemNameText(i);const nt=` ${i.notes||""} `.toLowerCase();const arm=armOf(i);
+  const out=new Set();const c=GearLogic.migrateCategoryName(i.category||"");const nm=itemNameText(i);const nt=` ${i.notes||""} `.toLowerCase();const arm=armOf(i);
   const done=()=>{Object.defineProperty(i,"_kinds",{value:out,enumerable:false,configurable:true});return out};
   if(c==="Firearms"||arm==="FA"){out.add(gunType(i)==="pistol"?"gun_pistol":"gun_long");return done()}
   if(c==="Suppressors"||arm==="SU"){out.add("suppressor");return done()}
@@ -52,7 +52,7 @@ function classify(i){
     else if(c==="Armor & Carriers"&&RX.plates.test(nm)&&!/carrier|rig|bag/.test(nm))out.add("plates");
     else if(c==="Armor & Carriers"&&RX.plateCarrier.test(nm))out.add("carrier_plate");
   }
-  const magCat=c==="Ammo Storage & Loaders"||c==="Magazines & Belts";
+  const magCat=c==="Ammo Storage & Loaders"||c==="Magazines";
   if((c==="Pouches"||magCat||c==="Belts & Rigs"||c==="Armor & Carriers")&&(RX.pouch.test(nm)&&(RX.magword.test(nm)||/kywi|taco|placard|shingle/.test(nm)))&&!/dump|admin|radio|med|ifak|utility|gp\b/.test(nm))
     out.add(RX.pistolword.test(nm)?"magpouch_pistol":"magpouch_rifle");
   else if(magCat&&RX.magword.test(nm)&&!/loader|coupler|holster|can\b|box\b/.test(nm))out.add(RX.pistolword.test(nm)?"mag_pistol":"mag_rifle");

@@ -1,6 +1,6 @@
 /* ---------- v12: stricter kit matching, one magazine slot, split / merge stacks ---------- */
 // one "Magazines" slot for rifle and pistol mags
-S.mags=["Magazines (rifle & pistol)",["Ammo Storage & Loaders","Magazines & Belts"],["pmag","magazine","mags","mag ","lancer","gen m3","glock mag","p320 mag","pistol mag","rifle mag","ar mag","ak mag","stanag","magpul","etsgroup","ets "],"Enough loaded mags for the day: rifle, pistol or both.",["pouch","loader","holster","case","carrier","coupler"]];
+S.mags=["Magazines (rifle & pistol)",["Ammo Storage & Loaders","Magazines"],["pmag","magazine","mags","mag ","lancer","gen m3","glock mag","p320 mag","pistol mag","rifle mag","ar mag","ak mag","stanag","magpul","etsgroup","ets "],"Enough loaded mags for the day: rifle, pistol or both.",["pouch","loader","holster","case","carrier","coupler"]];
 delete S.pistolmags;
 KITS.forEach(k=>{k.req=[...new Set(k.req.map(s=>s==="pistolmags"?"mags":s))];k.opt=[...new Set(k.opt.map(s=>s==="pistolmags"?"mags":s))].filter(s=>!k.req.includes(s))});
 Object.keys(kits).forEach(id=>{const p=kits[id]?.picks;if(p&&p.pistolmags){if(!p.mags)p.mags=p.pistolmags;delete p.pistolmags}});
