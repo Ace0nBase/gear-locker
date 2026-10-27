@@ -9,11 +9,12 @@
 // ALLOWED_EMAILS (used only when BETA_ONLY=true), BETA_ONLY, REVIEW_EMAILS, REVIEW_DAILY_LIMIT,
 // DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS, FREE_SPEND_CAP_USD,
 // PLAN_LIMIT_FREE, PLAN_LIMIT_PRO, PLAN_LIMIT_ARMORY, SPEND_INPUT_PER_MILLION, SPEND_OUTPUT_PER_MILLION, SPEND_SEARCH_EACH,
-// SPEND_RESERVE_USD (optional floor under the worst-case lookup hold; it cannot lower that hold)
+// SPEND_RESERVE_USD (optional floor under the worst-case lookup hold; it cannot lower that hold),
+// FALLBACK_INPUT_PER_MILLION, FALLBACK_OUTPUT_PER_MILLION, FALLBACK_SEARCH_EACH (fallback model rates; the hold uses the higher of these and the primary rates)
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, worstCaseSpendMicro } from "../js/logic.js";
+import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
 
@@ -291,7 +292,7 @@ async function reserveCall(env, user, op, count, extra) {
   try {
     return await stub.reserve({
       id: crypto.randomUUID(),
-      reserve: skipSpend ? 0 : worstCaseSpendMicro(env, op) * n,
+      reserve: skipSpend ? 0 : (extra.reserveMicro != null ? Math.max(0, Math.round(+extra.reserveMicro)) : callHoldMicro(env, op, extra.inputTokens) * n),
       cap: spendCapMicro(env),
       skipSpend,
       skipMonth: review,
@@ -310,17 +311,22 @@ async function reserveCall(env, user, op, count, extra) {
     return { ok: false, status: 503, error: LOOKUPS_PAUSED, reserved: 0 };
   }
 }
+function spendOf(env, model, usage) {
+  return estimateSpendMicro(usage, ratesForModel(env, model));
+}
 async function finishCall(env, id, reserved, usage) {
   try {
     const stub = usageStub(env);
     if (!stub || !id || !reserved) return;
-    await stub.reconcile({ id, actual: estimateSpendMicro(usage, spendRates(env)) });
+    const actual = typeof usage === "number" ? Math.max(0, Math.round(usage)) : estimateSpendMicro(usage, spendRates(env));
+    await stub.reconcile({ id, actual });
   } catch { /* the answer is already in hand */ }
 }
 async function clearUsageForUser(env, uid) {
   const stub = usageStub(env);
-  if (!stub || !uid) return;
-  await stub.clearUser({ uid });
+  if (!stub || !uid) throw new Error("usage");
+  const cleared = await stub.clearUser({ uid });
+  if (!cleared || cleared.ok === false) throw new Error("usage");
 }
 async function usageSnapshot(env, uid, now) {
   const stub = usageStub(env);
@@ -330,17 +336,36 @@ async function usageSnapshot(env, uid, now) {
     return (read && read.values) || {};
   } catch { return null; }
 }
+async function deleteWatchRecord(env, uid) {
+  if (!env.WATCH || !uid) throw new Error("watch");
+  for (const key of accountDeletePlan(uid).kvExact) await env.WATCH.delete(key);
+}
 async function deleteUserKv(env, uid) {
-  if (!env.WATCH || !uid) return;
-  const plan = accountDeletePlan(uid);
-  for (const key of plan.kvExact) await env.WATCH.delete(key);
-  for (const prefix of plan.kvPrefixes) {
+  if (!env.WATCH || !uid) throw new Error("watch");
+  for (const prefix of accountDeletePlan(uid).kvPrefixes) {
     let cursor;
     do {
       const page = await env.WATCH.list({ prefix, cursor });
       for (const k of page.keys || []) await env.WATCH.delete(k.name);
       cursor = page.list_complete ? null : page.cursor;
     } while (cursor);
+  }
+}
+async function clearUsageCounters(env, uid) {
+  await clearUsageForUser(env, uid);
+  await deleteUserKv(env, uid);
+}
+async function retryOnce(fn) {
+  try {
+    await fn();
+    return true;
+  } catch {
+    try {
+      await fn();
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 async function deleteAuthUser(env, idToken) {
@@ -409,7 +434,7 @@ async function runDueWatches(env, budget) {
     const w = u && u.rec.list.find(x => x.id === p.watch.id);
     if (!w || saleRestricted(w)) continue;
     const who = { sub: u.uid, email: u.rec.email };
-    const hold = await reserveCall(env, who, "deal", 1, { alertAdd: 1 });
+    const hold = await reserveCall(env, who, "deal", 1, { alertAdd: 1, inputTokens: estimateInputTokens(JSON.stringify(w)) });
     if (!hold.ok) continue;
     const wasHit = !!(w.best && w.best.hit);
     try {
@@ -525,28 +550,43 @@ async function lookupOne(env, it) {
     arm: String(it.arm || "").slice(0, 8), caliber: String(it.caliber || "").slice(0, 40), load: String(it.load || "").slice(0, 80),
     weightOnly: it.weightOnly === true || it.weightOnly === "true",
   };
-  if (!clean.name) return { id: clean.id, ok: false, error: "missing name", usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 } };
-  if (clean.kind === "wish" && saleRestricted(clean)) return { id: clean.id, ok: false, error: "Price search skips this item.", usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 } };
-  let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
-  try { data = await callClaude(env, env.MODEL || "claude-haiku-5-5", clean); usage = addUsage(usage, data.usage); }
+  if (!clean.name) return { id: clean.id, ok: false, error: "missing name", usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spendMicro: 0 };
+  if (clean.kind === "wish" && saleRestricted(clean)) return { id: clean.id, ok: false, error: "Price search skips this item.", usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spendMicro: 0 };
+  let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spendMicro = 0;
+  const primary = env.MODEL || "claude-haiku-5-5";
+  try {
+    data = await callClaude(env, primary, clean);
+    usage = addUsage(usage, data.usage);
+    spendMicro += spendOf(env, primary, data.usage);
+  }
   catch (e) {
     usage = addUsage(usage, e.usage);
+    spendMicro += spendOf(env, primary, e.usage);
     if (env.FALLBACK_MODEL && (e.status === 400 || e.status === 404)) {
-      try { data = await callClaude(env, env.FALLBACK_MODEL, clean); usage = addUsage(usage, data.usage); }
-      catch (e2) { e2.usage = addUsage(usage, e2.usage); throw e2; }
-    } else { e.usage = usage; throw e; }
+      try {
+        data = await callClaude(env, env.FALLBACK_MODEL, clean);
+        usage = addUsage(usage, data.usage);
+        spendMicro += spendOf(env, env.FALLBACK_MODEL, data.usage);
+      }
+      catch (e2) {
+        spendMicro += spendOf(env, env.FALLBACK_MODEL, e2.usage);
+        e2.usage = addUsage(usage, e2.usage);
+        e2.spendMicro = spendMicro;
+        throw e2;
+      }
+    } else { e.usage = usage; e.spendMicro = spendMicro; throw e; }
   }
   const parsed = parseResult(data);
   const settled = settleLookup(clean, parsed);
-  if (!settled.apply) { const e = new Error("couldn't read the lookup answer, try again"); e.usage = usage; throw e; }
+  if (!settled.apply) { const e = new Error("couldn't read the lookup answer, try again"); e.usage = usage; e.spendMicro = spendMicro; throw e; }
   const { apply, ...fields } = settled;
   if (saleRestricted(clean) || clean.weightOnly) {
-    return { id: clean.id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: fields.weightOz, priceNote: "", weightNote: publicWeightNote(parsed.weightNote), sources: [], usage };
+    return { id: clean.id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: fields.weightOz, priceNote: "", weightNote: publicWeightNote(parsed.weightNote), sources: [], usage, spendMicro };
   }
-  return { id: clean.id, ok: true, ...fields, usage };
+  return { id: clean.id, ok: true, ...fields, usage, spendMicro };
 }
 
-const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", BETA_ONLY: "", REVIEW_EMAILS: "", REVIEW_DAILY_LIMIT: "8", FREE_SPEND_CAP_USD: "25", PLAN_LIMIT_FREE: "40", PLAN_LIMIT_PRO: "400", PLAN_LIMIT_ARMORY: "2000", SPEND_INPUT_PER_MILLION: "1", SPEND_OUTPUT_PER_MILLION: "5", SPEND_SEARCH_EACH: "0.01", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
+const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", BETA_ONLY: "", REVIEW_EMAILS: "", REVIEW_DAILY_LIMIT: "8", FREE_SPEND_CAP_USD: "25", PLAN_LIMIT_FREE: "40", PLAN_LIMIT_PRO: "400", PLAN_LIMIT_ARMORY: "2000", SPEND_INPUT_PER_MILLION: "1", SPEND_OUTPUT_PER_MILLION: "5", SPEND_SEARCH_EACH: "0.01", FALLBACK_INPUT_PER_MILLION: "3", FALLBACK_OUTPUT_PER_MILLION: "15", FALLBACK_SEARCH_EACH: "0.01", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
 const ROUTES = ["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/watch/push", "/battery", "/ammo", "/pace"];
 
 export default {
@@ -567,10 +607,12 @@ export default {
       try {
         const cleaned = await deleteUserFirestore(env, idToken, accountUser);
         if (!cleaned.ok) return json({ error: cleaned.error }, 502, h);
+        const watchGone = await retryOnce(() => deleteWatchRecord(env, accountUser.sub));
+        if (!watchGone) return json({ error: "Couldn't remove your price alerts. Your sign-in is still here. Try again." }, 502, h);
         const removed = await deleteAuthUser(env, idToken);
         if (!removed.ok) return json({ error: removed.error }, 502, h);
-        try { await deleteUserKv(env, accountUser.sub); } catch { /* auth is already gone; a retry clears the rest */ }
-        try { await clearUsageForUser(env, accountUser.sub); } catch { /* same retry */ }
+        const countersGone = await retryOnce(() => clearUsageCounters(env, accountUser.sub));
+        if (!countersGone) return json({ error: "Couldn't finish deleting the account. Try again." }, 502, h);
         deleteRevenueCatCustomer(env, accountUser.sub);
         return json({ ok: true }, 200, h);
       } catch { return json({ error: "Couldn't finish deleting the account. Try again." }, 502, h); }
@@ -631,7 +673,7 @@ export default {
           return json(pub(), 200, h);
         }
         if (w.lastCheck && Date.now() - Date.parse(w.lastCheck) < 10 * 60e3) return json(pub(), 200, h);
-        const watchHold = await reserveCall(env, user, "deal", 1, { alertAdd: 1 });
+        const watchHold = await reserveCall(env, user, "deal", 1, { alertAdd: 1, inputTokens: estimateInputTokens(JSON.stringify(body)) });
         if (!watchHold.ok) return json({ error: watchHold.error || "Try again tomorrow." }, watchHold.status || 429, h);
         try {
           const b = await dealCheck(env, w);
@@ -650,7 +692,7 @@ export default {
       const b = { location: S(body.location, 80), scenario: S(body.scenario, 60), distance: S(body.distance, 60), terrain: S(body.terrain, 60), cell: S(body.cell, 40), grid: S(body.grid, 40), people: S(body.people, 80), licensed: S(body.licensed, 80), duration: S(body.duration, 40), notes: S(body.notes, 300),
         devices: (Array.isArray(body.devices) ? body.devices : []).slice(0, 12).map(d => S(d, 40)),
         freqs: (Array.isArray(body.freqs) ? body.freqs : []).slice(0, 150).map((f, i) => ({ i, name: S(f.name, 30), rx: S(f.rx, 12), duplex: S(f.duplex, 6), offset: S(f.offset, 8), tx: S(f.tx, 12), tone: S(f.tone, 16), mode: S(f.mode, 4), service: S(f.service, 24), group: S(f.group, 30), notes: S(f.notes, 80), onRadio: !!f.onRadio })) };
-      const paceHold = await reserveCall(env, user, "pace", 1);
+      const paceHold = await reserveCall(env, user, "pace", 1, { inputTokens: estimateInputTokens(JSON.stringify(b)) });
       if (!paceHold.ok) return json({ error: paceHold.error }, paceHold.status, h);
       try {
         const built = await paceBuild(env, b);
@@ -661,7 +703,7 @@ export default {
     }
     if (url.pathname === "/ammo") return json({ error: "Ammo price search is turned off." }, 410, h);
     if (url.pathname === "/battery") {
-      const battHold = await reserveCall(env, user, "battery", 1);
+      const battHold = await reserveCall(env, user, "battery", 1, { inputTokens: estimateInputTokens(JSON.stringify(body)) });
       if (!battHold.ok) return json({ error: battHold.error }, battHold.status, h);
       try {
         const found = await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) });
@@ -678,7 +720,7 @@ export default {
       if (photoIdHardBlocked(subject)) return json({ error: "Photo ID isn't available for this record." }, 403, h);
       const img = String(body.image || "");
       if (!img || img.length > 2_800_000 || !/^[A-Za-z0-9+/=]+$/.test(img.slice(0, 200))) return json({ error: "Send a photo (JPEG, under 2 MB)" }, 400, h);
-      const idHold = await reserveCall(env, user, "identify", 1);
+      const idHold = await reserveCall(env, user, "identify", 1, { inputTokens: estimateInputTokens(String(body.hint || "") + String(body.category || "")) });
       if (!idHold.ok) return json({ error: idHold.error }, idHold.status, h);
       try {
         const found = await identify(env, img, String(body.hint || "").slice(0, 80));
@@ -690,13 +732,20 @@ export default {
     const max = +(env.MAX_ITEMS || 4);
     const items = Array.isArray(body.items) ? body.items.slice(0, max) : [];
     if (!items.length) return json({ error: "No items" }, 400, h);
-    const lookBill = await reserveCall(env, user, "lookup", items.length);
+    const reserveMicro = items.reduce((sum, it) => sum + callHoldMicro(env, "lookup", estimateInputTokens(prompt(it))), 0);
+    const lookBill = await reserveCall(env, user, "lookup", items.length, { reserveMicro });
     if (!lookBill.ok) return json({ error: lookBill.error }, lookBill.status, h);
 
-    const packed = await Promise.all(items.map(it => lookupOne(env, it).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160), usage: e.usage }))));
-    let spentUsage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
-    const results = packed.map(r => { spentUsage = addUsage(spentUsage, r.usage); const copy = { ...r }; delete copy.usage; return copy; });
-    await finishCall(env, lookBill.id, lookBill.reserved, spentUsage);
+    const packed = await Promise.all(items.map(it => lookupOne(env, it).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160), usage: e.usage, spendMicro: e.spendMicro }))));
+    let actual = 0;
+    const results = packed.map(r => {
+      actual += Math.max(0, Math.round(Number.isFinite(+r.spendMicro) ? +r.spendMicro : estimateSpendMicro(r.usage, spendRates(env))));
+      const copy = { ...r };
+      delete copy.usage;
+      delete copy.spendMicro;
+      return copy;
+    });
+    await finishCall(env, lookBill.id, lookBill.reserved, actual);
     const firstErr = results.find(r => !r.ok)?.error;
     if (results.every(r => !r.ok)) return json({ error: firstErr || "Lookup failed", results }, 502, h);
     return json({ results }, 200, h);

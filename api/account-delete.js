@@ -47,8 +47,9 @@ async function deleteNamed(fetchImpl, idToken, name) {
 }
 
 async function deleteQuery(fetchImpl, idToken, root, structuredQuery) {
-  const docs = await runQuery(fetchImpl, idToken, root, structuredQuery);
-  for (const doc of docs) await deleteNamed(fetchImpl, idToken, doc.name);
+  await forEachMatch(fetchImpl, idToken, root, structuredQuery, async docs => {
+    for (const doc of docs) await deleteNamed(fetchImpl, idToken, doc.name);
+  });
 }
 
 async function deleteCollection(fetchImpl, idToken, url) {
@@ -67,6 +68,32 @@ function equalFilter(field, value) {
   return { fieldFilter: { field: { fieldPath: field }, op: "EQUAL", value: { stringValue: value } } };
 }
 
+// One Firestore page. The loop below continues until a page comes back empty.
+const PAGE_SIZE = 300;
+
+function withPage(structuredQuery, after) {
+  const query = {
+    ...structuredQuery,
+    orderBy: [{ field: { fieldPath: "__name__" }, direction: "ASCENDING" }],
+    limit: PAGE_SIZE,
+  };
+  if (after) query.startAt = { values: [{ referenceValue: after }], before: false };
+  return query;
+}
+
+async function forEachMatch(fetchImpl, idToken, root, structuredQuery, visit) {
+  let after = "";
+  for (;;) {
+    const docs = await runQuery(fetchImpl, idToken, root, withPage(structuredQuery, after));
+    if (!docs.length) return;
+    await visit(docs);
+    const last = String((docs[docs.length - 1] && docs[docs.length - 1].name) || "");
+    if (!last || last === after) throw new Error("page");
+    if (docs.length < PAGE_SIZE) return;
+    after = last;
+  }
+}
+
 async function clearFields(fetchImpl, idToken, name, fields) {
   const mask = fields.map(field => "updateMask.fieldPaths=" + encodeURIComponent(field)).join("&");
   const body = { fields: {} };
@@ -79,12 +106,12 @@ async function clearFields(fetchImpl, idToken, name, fields) {
 
 async function redactQuery(fetchImpl, idToken, root, collectionId, field, value, fields) {
   if (!value) return;
-  const docs = await runQuery(fetchImpl, idToken, root, {
+  await forEachMatch(fetchImpl, idToken, root, {
     from: [{ collectionId, allDescendants: collectionId === "loans" }],
     where: equalFilter(field, value),
-    limit: 300,
+  }, async docs => {
+    for (const doc of docs) await clearFields(fetchImpl, idToken, doc.name, fields);
   });
-  for (const doc of docs) await clearFields(fetchImpl, idToken, doc.name, fields);
 }
 
 export async function deleteUserFirestore(env, idToken, user, fetchImpl) {
@@ -98,7 +125,6 @@ export async function deleteUserFirestore(env, idToken, user, fetchImpl) {
     await deleteQuery(fetchFn, idToken, root, {
       from: [{ collectionId: "shares" }],
       where: equalFilter("owner", uid),
-      limit: 300,
     });
     for (const col of USER_COLLECTIONS) {
       await deleteCollection(fetchFn, idToken, root + "/users/" + encodeURIComponent(uid) + "/" + encodeURIComponent(col));
@@ -106,7 +132,6 @@ export async function deleteUserFirestore(env, idToken, user, fetchImpl) {
     await deleteQuery(fetchFn, idToken, root, {
       from: [{ collectionId: "lends" }],
       where: equalFilter("lender", uid),
-      limit: 300,
     });
     const lower = email.toLowerCase();
     await redactQuery(fetchFn, idToken, root, "loans", "friendEmail", email, ["friendEmail", "updatedAt"]);

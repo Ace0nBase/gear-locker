@@ -5,7 +5,7 @@ import {
   estimateSpendMicro, usageFromResponse, freeSpendBlocked, usageDecision, lookupPlan,
   deleteRevenueCatCustomer, accountDeletePlan, USER_COLLECTIONS,
   signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
-  clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, applyReserve, applyReconcile,
+  clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, priciestRates, spendRates, applyReserve, applyReconcile,
   deleteRetryRoute, runDeleteAttempt, SERVER_DELETE_STEPS, LOOKUPS_PAUSED,
 } from "../js/logic.js";
 import { UsageLedger } from "../api/usage-ledger.js";
@@ -115,13 +115,18 @@ test("a free spend hold is the worst case from the output cap and the search cou
   const usage = operationWorstUsage("lookup");
   assert.equal(usage.output_tokens, MODEL_CALLS.lookup.maxTokens * MODEL_CALLS.lookup.rounds * MODEL_CALLS.lookup.calls);
   assert.equal(usage.web_search_requests, MODEL_CALLS.lookup.searches * MODEL_CALLS.lookup.rounds * MODEL_CALLS.lookup.calls);
-  assert.equal(lookupReserveMicro({}), estimateSpendMicro(usage));
+  assert.equal(usage.input_tokens, MODEL_CALLS.lookup.promptTokens * MODEL_CALLS.lookup.rounds * MODEL_CALLS.lookup.calls);
+  assert.equal(lookupReserveMicro({}), estimateSpendMicro(usage, priciestRates({})));
+  assert.ok(priciestRates({}).outputPerMillion > spendRates({}).outputPerMillion);
+  assert.deepEqual(priciestRates({ FALLBACK_MODEL: "" }), spendRates({ FALLBACK_MODEL: "" }));
+  assert.equal(operationWorstUsage("lookup", 100).input_tokens, 100 * MODEL_CALLS.lookup.rounds * MODEL_CALLS.lookup.calls);
+  assert.ok(callHoldMicro({}, "lookup", 100) < callHoldMicro({}, "lookup"));
   assert.equal(worstCaseSpendMicro({}, "lookup"), lookupReserveMicro({}));
   assert.equal(lookupReserveMicro({ SPEND_RESERVE_USD: "3" }), 3e6);
   assert.equal(lookupReserveMicro({ SPEND_RESERVE_USD: "0.01" }), lookupReserveMicro({}));
   const over = applyReconcile({ spend: 10e6, daily: 1, month: 1, alert: 0 }, { reserved: 2e6, actual: 9e6 });
-  assert.equal(over.billed, 2e6);
-  assert.equal(over.state.spend, 10e6);
+  assert.equal(over.billed, 9e6);
+  assert.equal(over.state.spend, 17e6);
 });
 
 test("loan redaction clears only a matching email and ignores the item name", () => {
@@ -191,10 +196,10 @@ test("20 parallel lookups near the cap let through only what fits", async () => 
   assert.equal(spendSql.rows.get("spend:free"), 10);
   assert.match(spendResults.find(r => !r.ok).error, /Lookups are paused/);
   const capped = spendLedger.reconcile({ id: spendOk[0].id, actual: 50 });
-  assert.equal(capped.billed, 1);
-  assert.ok(capped.spend <= 10);
+  assert.equal(capped.billed, 50);
+  assert.equal(capped.spend, 59);
   const released = spendLedger.reconcile({ id: spendOk[1].id, actual: 0 });
-  assert.ok(released.spend <= 10);
+  assert.equal(released.spend, 58);
   const again = spendLedger.reconcile({ id: spendOk[0].id, actual: 50 });
   assert.equal(again.duplicate, true);
   assert.equal(again.spend, released.spend);
@@ -277,6 +282,79 @@ test("a failed delete survives reload and the retry does not list shares on the 
   assert.equal(leftover.queriedShares, false);
   assert.equal(leftover.state.shares, 0);
   assert.equal(leftover.state.auth, false);
+});
+
+test("a mocked $3.05 lookup records $3.05", () => {
+  const usage = usageFromResponse({
+    usage: {
+      input_tokens: 500_000,
+      output_tokens: 400_000,
+      server_tool_use: { web_search_requests: 5, web_search_tokens: 500_000 },
+    },
+  });
+  const actual = estimateSpendMicro(usage);
+  assert.equal(actual, 3_050_000);
+  const ledger = ledgerWith(fakeSql());
+  const held = ledger.reserve({
+    id: "look-305",
+    reserve: 1_000,
+    cap: 50_000_000,
+    dailyAdd: 1,
+    dailyLimit: 40,
+    monthAdd: 1,
+    monthLimit: 40,
+    dailyKey: "q:user1:2026-10-27",
+    monthKey: "m:user1:2026-10",
+  });
+  assert.equal(held.ok, true);
+  const rec = ledger.reconcile({ id: "look-305", actual });
+  assert.equal(rec.billed, 3_050_000);
+  assert.equal(rec.spend, 3_050_000);
+  assert.equal(ledger.read({ keys: ["spend:free"] }).values["spend:free"], 3_050_000);
+});
+
+test("server cleanup pages 305 shares before it finishes", async () => {
+  const names = Array.from({ length: 305 }, (_, i) => "projects/demo/databases/(default)/documents/shares/s" + String(i).padStart(4, "0"));
+  const left = new Set(names);
+  let shareQueries = 0;
+  let lendQueries = 0;
+  const deleted = [];
+  const fetchImpl = async (url, opts) => {
+    const method = (opts && opts.method) || "GET";
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    const json = (status, data) => ({ status, json: async () => data });
+    if (method === "DELETE") {
+      const name = decodeURIComponent(String(url).split("/documents/")[1] || "");
+      const full = "projects/demo/databases/(default)/documents/" + name;
+      deleted.push(full);
+      left.delete(full);
+      return json(200, {});
+    }
+    if (method === "PATCH") return json(200, {});
+    if (String(url).includes(":runQuery")) {
+      const col = body.structuredQuery.from[0].collectionId;
+      const limit = body.structuredQuery.limit;
+      const after = body.structuredQuery.startAt && body.structuredQuery.startAt.values[0].referenceValue;
+      assert.ok(limit > 0 && limit < 305);
+      if (col === "shares") {
+        shareQueries += 1;
+        let rows = [...left].sort();
+        if (after) rows = rows.filter(name => name > after);
+        rows = rows.slice(0, limit);
+        if (!rows.length) return json(200, [{}]);
+        return json(200, rows.map(name => ({ document: { name } })));
+      }
+      if (col === "lends") lendQueries += 1;
+      return json(200, [{}]);
+    }
+    return json(200, { documents: [] });
+  };
+  const out = await deleteUserFirestore({ FIREBASE_PROJECT: "demo" }, "token", { sub: "abc", email: "a@b.co" }, fetchImpl);
+  assert.equal(out.ok, true);
+  assert.equal(left.size, 0);
+  assert.equal(deleted.length, 305);
+  assert.ok(shareQueries >= 2);
+  assert.ok(lendQueries >= 1);
 });
 
 test("server cleanup treats a missing document as already gone", async () => {

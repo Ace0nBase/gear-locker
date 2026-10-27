@@ -2,17 +2,17 @@
 // The free cap is global, so every reserve has to land on this same instance.
 // reserve() and reconcile() do not await: SQLite exec is synchronous, and the input gate
 // does not let another request run until this method returns.
-// Node tests load this file, so it does not import the Workers runtime.
+// The class extends DurableObject so the real binding exposes these methods over RPC.
 
+import { DurableObject } from "cloudflare:workers";
 import { applyReserve, applyReconcile } from "../js/logic.js";
 
 const SPEND = "spend:free";
 const SEEDED = "seeded:spend";
 
-export class UsageLedger {
+export class UsageLedger extends DurableObject {
   constructor(ctx, env) {
-    this.ctx = ctx;
-    this.env = env;
+    super(ctx, env);
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v INTEGER NOT NULL)").toArray();
   }
 

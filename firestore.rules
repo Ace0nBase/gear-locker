@@ -129,9 +129,9 @@ service cloud.firestore {
         && col in ['items','ammo','sessions','dope','maint','wish','loans','freqs','pace','meta'];
     }
 
+    // The named person may clear only their email. They cannot read the owner's loan or its notes.
+    // The copy they can read is /lends/{id}.
     match /{path=**}/loans/{loanId} {
-      allow read: if emailOk() && resource.data.friendEmail == request.auth.token.email;
-      allow read: if emailOk() && resource.data.friendEmail == request.auth.token.email.lower();
       allow update: if emailOk()
         && resource.data.friendEmail == request.auth.token.email
         && request.resource.data.friendEmail == ""

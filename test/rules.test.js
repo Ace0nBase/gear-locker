@@ -2,7 +2,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { assertFails, assertSucceeds, initializeTestEnvironment } from "@firebase/rules-unit-testing";
-import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
+import { collection, collectionGroup, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
 
 let env;
 
@@ -115,13 +115,15 @@ test("a tombstone blocks later writes and the named person can clear their email
   await env.clearFirestore();
   const owner = as("owner", "owner@example.com", true);
   await assertSucceeds(setDoc(doc(owner, "users/owner/loans/loan1"), {
-    id: "loan1", borrower: "Friend", friendEmail: "friend@example.com", itemId: "i1", updatedAt: "2026-10-26T00:00:00.000Z",
+    id: "loan1", borrower: "Friend", friendEmail: "friend@example.com", notes: "private range note", itemId: "i1", updatedAt: "2026-10-26T00:00:00.000Z",
   }));
   await assertSucceeds(setDoc(doc(owner, "lends/loan1"), loan()));
   await assertSucceeds(setDoc(doc(owner, "users/owner/items/i1"), { name: "Pouch" }));
   await assertSucceeds(setDoc(doc(owner, "shares/share1"), share("owner")));
   await assertSucceeds(setDoc(doc(owner, "lends/loan2"), { ...loan(), borrowerEmail: "named@example.com", borrowerEmailLower: "named@example.com" }));
   const borrower = as("friend", "friend@example.com", true);
+  await assertFails(getDoc(doc(borrower, "users/owner/loans/loan1")));
+  await assertFails(getDocs(query(collectionGroup(borrower, "loans"), where("friendEmail", "==", "friend@example.com"))));
   await assertSucceeds(updateDoc(doc(borrower, "users/owner/loans/loan1"), {
     friendEmail: "", updatedAt: "2026-10-27T00:00:00.000Z",
   }));
@@ -142,7 +144,8 @@ test("a tombstone blocks later writes and the named person can clear their email
   await assertSucceeds(updateDoc(doc(named, "lends/loan2"), {
     borrowerEmail: "", borrowerEmailLower: "", updatedAt: "2026-10-27T00:00:00.000Z",
   }));
-  await assertSucceeds(getDoc(doc(owner, "users/owner/loans/loan1")));
+  const ownLoan = await assertSucceeds(getDoc(doc(owner, "users/owner/loans/loan1")));
+  assert.equal(ownLoan.data().notes, "private range note");
   await assertSucceeds(getDoc(doc(owner, "deletedUsers/owner")));
   await assertFails(updateDoc(doc(owner, "deletedUsers/owner"), { at: "later" }));
   await assertFails(deleteDoc(doc(owner, "deletedUsers/owner")));

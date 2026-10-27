@@ -212,6 +212,7 @@ export const DEFAULT_PLAN_LIMITS = { free: 40, pro: 400, armory: 2000 };
 export const DEFAULT_REVIEW_DAILY_LIMIT = 8;
 export const DEFAULT_FREE_SPEND_CAP_USD = 25;
 export const DEFAULT_SPEND_RATES = { inputPerMillion: 1, outputPerMillion: 5, searchEach: 0.01 };
+export const DEFAULT_FALLBACK_RATES = { inputPerMillion: 3, outputPerMillion: 15, searchEach: 0.01 };
 
 function configuredNumber(raw, fallback) {
   if (raw == null || raw === "") return fallback;
@@ -241,18 +242,49 @@ export function spendRates(env) {
   };
 }
 
+export function ratesForModel(env, model) {
+  const base = spendRates(env);
+  if (!env || !env.FALLBACK_MODEL || model !== env.FALLBACK_MODEL) return base;
+  return {
+    inputPerMillion: configuredNumber(env.FALLBACK_INPUT_PER_MILLION, DEFAULT_FALLBACK_RATES.inputPerMillion),
+    outputPerMillion: configuredNumber(env.FALLBACK_OUTPUT_PER_MILLION, DEFAULT_FALLBACK_RATES.outputPerMillion),
+    searchEach: configuredNumber(env.FALLBACK_SEARCH_EACH, base.searchEach),
+  };
+}
+
+// The hold uses the higher of the primary and fallback rates. A blank FALLBACK_MODEL turns the fallback off.
+export function priciestRates(env) {
+  const base = spendRates(env);
+  const fallbackOn = !env || env.FALLBACK_MODEL == null || String(env.FALLBACK_MODEL) !== "";
+  if (!fallbackOn) return base;
+  const alt = ratesForModel(
+    { ...(env || {}), FALLBACK_MODEL: (env && env.FALLBACK_MODEL) || "claude-sonnet-5-5" },
+    (env && env.FALLBACK_MODEL) || "claude-sonnet-5-5",
+  );
+  return {
+    inputPerMillion: Math.max(base.inputPerMillion, alt.inputPerMillion),
+    outputPerMillion: Math.max(base.outputPerMillion, alt.outputPerMillion),
+    searchEach: Math.max(base.searchEach, alt.searchEach),
+  };
+}
+
 // RevenueCat is not connected. Every account stays on the free plan until that lookup exists.
 export function lookupPlan() {
   return "free";
 }
 
+function tokenCount(...vals) {
+  return vals.reduce((sum, v) => sum + Math.max(0, Math.round(+v || 0)), 0);
+}
+
+// input_tokens plus cache and web-search result tokens. The search count is billed on its own.
 export function usageFromResponse(data) {
   const u = data && data.usage && typeof data.usage === "object" ? data.usage : {};
   const tool = u.server_tool_use && typeof u.server_tool_use === "object" ? u.server_tool_use : {};
   return {
-    input_tokens: Math.max(0, +u.input_tokens || 0),
-    output_tokens: Math.max(0, +u.output_tokens || 0),
-    web_search_requests: Math.max(0, +tool.web_search_requests || 0),
+    input_tokens: tokenCount(u.input_tokens, u.cache_creation_input_tokens, u.cache_read_input_tokens, tool.web_search_tokens, tool.web_search_result_tokens, u.web_search_tokens),
+    output_tokens: Math.max(0, Math.round(+u.output_tokens || 0)),
+    web_search_requests: Math.max(0, Math.round(+tool.web_search_requests || +u.web_search_requests || 0)),
   };
 }
 
@@ -337,6 +369,10 @@ export function clampMaxTokens(n) {
   return Math.min(MAX_OUTPUT_TOKENS, v);
 }
 
+export function estimateInputTokens(text) {
+  return Math.max(0, Math.ceil(String(text == null ? "" : text).length / 4));
+}
+
 // rounds counts every continuation, including the last JSON turn.
 // calls counts a fallback model. searches is the per-round web_search max_uses.
 export const MODEL_CALLS = {
@@ -348,48 +384,56 @@ export const MODEL_CALLS = {
   paceFollow: { maxTokens: 3000, searches: 0, rounds: 1, calls: 1, promptTokens: 8000 },
 };
 
+// Hold = real input, resent each round and on the fallback, plus every search, plus max output.
 export function worstCaseUsage(spec) {
   spec = spec || {};
   const maxTokens = clampMaxTokens(spec.maxTokens);
   const rounds = Math.max(1, Math.floor(+spec.rounds || 1));
   const searches = Math.max(0, Math.floor(+spec.searches || 0));
-  const promptTokens = Math.max(0, Math.floor(spec.promptTokens == null ? 8000 : +spec.promptTokens));
-  const output_tokens = maxTokens * rounds;
-  const web_search_requests = searches * rounds;
-  const echoed = (maxTokens * rounds * (rounds - 1)) / 2;
+  const calls = Math.max(1, Math.floor(+spec.calls || 1));
+  const input = Math.max(0, Math.floor(spec.inputTokens == null
+    ? (spec.promptTokens == null ? 8000 : +spec.promptTokens)
+    : +spec.inputTokens));
   return {
-    input_tokens: Math.round(promptTokens * rounds + echoed),
-    output_tokens,
-    web_search_requests,
+    input_tokens: input * rounds * calls,
+    output_tokens: maxTokens * rounds * calls,
+    web_search_requests: searches * rounds * calls,
   };
 }
 
-export function operationWorstUsage(name) {
-  if (name === "pace") return addUsage(worstCaseUsage(MODEL_CALLS.pace), worstCaseUsage(MODEL_CALLS.paceFollow));
-  const spec = MODEL_CALLS[name] || MODEL_CALLS.lookup;
-  const once = worstCaseUsage(spec);
-  const calls = Math.max(1, Math.floor(+spec.calls || 1));
-  let total = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
-  for (let i = 0; i < calls; i++) total = addUsage(total, once);
-  return total;
+export function operationWorstUsage(name, inputTokens) {
+  if (name === "pace") {
+    const pace = { ...MODEL_CALLS.pace };
+    const follow = { ...MODEL_CALLS.paceFollow };
+    if (inputTokens != null) {
+      pace.inputTokens = inputTokens;
+      follow.inputTokens = inputTokens;
+    }
+    return addUsage(worstCaseUsage(pace), worstCaseUsage(follow));
+  }
+  const spec = { ...(MODEL_CALLS[name] || MODEL_CALLS.lookup) };
+  if (inputTokens != null) spec.inputTokens = inputTokens;
+  return worstCaseUsage(spec);
 }
 
-// Hold the worst case from the clamped output cap and the search count.
+// Priced at the higher of the primary and fallback model rates.
 // SPEND_RESERVE_USD can only raise a lookup hold, never lower it under that worst case.
-export function worstCaseSpendMicro(env, nameOrSpec) {
-  const usage = nameOrSpec && typeof nameOrSpec === "object"
-    ? worstCaseUsage(nameOrSpec)
-    : operationWorstUsage(nameOrSpec || "lookup");
-  let worst = estimateSpendMicro(usage, spendRates(env));
-  const lookup = nameOrSpec == null || nameOrSpec === "lookup";
-  if (lookup && env && env.SPEND_RESERVE_USD != null && String(env.SPEND_RESERVE_USD).trim() !== "") {
+export function callHoldMicro(env, op, inputTokens) {
+  const usage = operationWorstUsage(op || "lookup", inputTokens);
+  let worst = estimateSpendMicro(usage, priciestRates(env));
+  if ((op == null || op === "lookup") && env && env.SPEND_RESERVE_USD != null && String(env.SPEND_RESERVE_USD).trim() !== "") {
     worst = Math.max(worst, Math.round(configuredNumber(env.SPEND_RESERVE_USD, 0) * 1e6));
   }
   return worst;
 }
 
+export function worstCaseSpendMicro(env, nameOrSpec) {
+  if (nameOrSpec && typeof nameOrSpec === "object") return estimateSpendMicro(worstCaseUsage(nameOrSpec), priciestRates(env));
+  return callHoldMicro(env, nameOrSpec || "lookup");
+}
+
 export function lookupReserveMicro(env) {
-  return worstCaseSpendMicro(env, "lookup");
+  return callHoldMicro(env, "lookup");
 }
 
 export function reconcileSpendMicro(current, reserved, actual) {
@@ -441,18 +485,17 @@ export function applyReserve(state, req) {
   };
 }
 
-// Recorded cost cannot exceed the reservation, so the counter cannot pass the cap.
+// The real cost is recorded in full. An overage above the hold is kept.
 export function applyReconcile(state, req) {
   state = state || {};
   req = req || {};
   const reserved = Math.max(0, Math.round(+req.reserved || 0));
   const actual = Math.max(0, Math.round(+req.actual || 0));
-  const billed = Math.min(actual, reserved);
   return {
     ok: true,
-    billed,
+    billed: actual,
     state: {
-      spend: reconcileSpendMicro(state.spend, reserved, billed),
+      spend: reconcileSpendMicro(state.spend, reserved, actual),
       daily: Math.max(0, Math.round(+state.daily || 0)),
       month: Math.max(0, Math.round(+state.month || 0)),
       alert: Math.max(0, Math.round(+state.alert || 0)),
@@ -460,7 +503,7 @@ export function applyReconcile(state, req) {
   };
 }
 
-export const SERVER_DELETE_STEPS = ["firestore", "auth", "kv"];
+export const SERVER_DELETE_STEPS = ["firestore", "watch", "auth", "usage"];
 
 export function deleteRetryRoute(hasTombstone) {
   return hasTombstone ? ["server"] : ["client-data", "tombstone", "server"];
