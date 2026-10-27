@@ -439,11 +439,27 @@ export function operationWorstUsage(name, inputTokens) {
   return worstCaseUsage(spec);
 }
 
+// One searching round budgeted at the input cap. The hold covers it so a large result stays inside the reserve.
+export function flooredSearchRoundMicro(env, spec) {
+  spec = spec || {};
+  const searches = Math.max(0, Math.floor(+spec.searches || 0));
+  if (!searches) return 0;
+  return estimateSpendMicro({
+    input_tokens: ROUND_INPUT_TOKEN_CAP,
+    output_tokens: clampMaxTokens(spec.maxTokens),
+    web_search_requests: searches,
+  }, priciestRates(env));
+}
+
 // Priced at the higher of the primary and fallback model rates.
+// A searching op reserves at least one round at the input cap.
 // SPEND_RESERVE_USD can only raise a lookup hold, never lower it under that worst case.
 export function callHoldMicro(env, op, inputTokens) {
-  const usage = operationWorstUsage(op || "lookup", inputTokens);
+  const name = op || "lookup";
+  const usage = operationWorstUsage(name, inputTokens);
   let worst = estimateSpendMicro(usage, priciestRates(env));
+  const spec = name === "pace" ? MODEL_CALLS.pace : MODEL_CALLS[name];
+  if (spec) worst = Math.max(worst, flooredSearchRoundMicro(env, spec));
   if ((op == null || op === "lookup") && env && env.SPEND_RESERVE_USD != null && String(env.SPEND_RESERVE_USD).trim() !== "") {
     worst = Math.max(worst, Math.round(configuredNumber(env.SPEND_RESERVE_USD, 0) * 1e6));
   }
@@ -720,23 +736,103 @@ export function deletedAccountGate(loadedWith, shown) {
   };
 }
 
-// Counters and the cleanup queue both have to fail before deletion reports an error.
-export function deleteCleanupResult(countersCleared, queueSaved, redactLeft) {
+// Usage counters are the only cleanup the hourly job can finish. A leftover loan redaction
+// stays on the record for follow-up, and the response does not call that "pending".
+export function deleteCleanupResult(countersCleared, queueSaved) {
   if (!countersCleared && !queueSaved) {
     return { status: 502, body: { error: "Couldn't finish deleting the account. Try again." } };
   }
-  const pending = !countersCleared || (!!redactLeft && !!queueSaved);
+  const pending = !countersCleared && !!queueSaved;
   return { status: 200, body: { ok: true, deleted: true, cleanup: pending ? "pending" : "done" } };
 }
 
-// A searching round can carry this much input. The loop stops before the next round would pass the hold.
+// The hourly job can clear usage counters. It keeps a record that still names loans to redact.
+export function cleanupRetryPlan(record) {
+  const pending = record && Array.isArray(record.redactPending) ? record.redactPending.filter(Boolean) : [];
+  if (!pending.length) return { action: "delete" };
+  return {
+    action: "keep",
+    body: {
+      uid: String((record && record.uid) || ""),
+      at: String((record && record.at) || ""),
+      redactPending: pending,
+      usageCleared: true,
+    },
+  };
+}
+
+// One delete request redacts this many lends. The rest stay on the cleanup record.
+export const REDACT_LIMIT = 40;
+
+// A searching round can carry this much input. The loop applies it only after a round that searched,
+// so the first call uses the real estimate and still has to fit the hold.
 export const ROUND_INPUT_TOKEN_CAP = 1_200_000;
 
-export function roundInputTokens(estimated, searches) {
+export function roundInputTokens(estimated, searches, searchedAlready) {
   const est = Math.max(0, Math.floor(+estimated || 0));
   const n = Math.max(0, Math.floor(+searches || 0));
-  if (!n) return est;
+  if (!n || !searchedAlready) return est;
   return Math.max(est, ROUND_INPUT_TOKEN_CAP);
+}
+
+// Lowercase SHA-256 hex. Rules use hashing.sha256 of the same letters. The address itself is not stored.
+export async function emailHash(email) {
+  const norm = String(email || "").trim().toLowerCase();
+  if (!norm || !globalThis.crypto || !crypto.subtle) return "";
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(norm));
+  // Rules hashing.sha256().toHexString() is uppercase.
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+function sameJson(a, b) {
+  if (a === b) return true;
+  if (a == null || b == null || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!sameJson(a[i], b[i])) return false;
+    return true;
+  }
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const key of keys) if (!sameJson(a[key], b[key])) return false;
+  return true;
+}
+
+// updatedAt changes on every build of the lend doc. Extra server fields, such as borrowerReturned, stay.
+export function lendNeedsWrite(desired, existing) {
+  if (existing == null) return true;
+  if (!desired || typeof existing !== "object") return true;
+  for (const key of Object.keys(desired)) {
+    if (key === "updatedAt" || key === "serverUpdatedAt") continue;
+    if (!sameJson(desired[key], existing[key])) return true;
+  }
+  return false;
+}
+
+// Missing or different lends are written. A second pass over the stored doc, with a new updatedAt, is empty.
+export function lendMirrorOps(jobs, desiredById, remoteById, blockedIds) {
+  const remote = remoteById || {};
+  const desired = desiredById || {};
+  const blocked = new Set(blockedIds || []);
+  const ops = [];
+  for (const job of jobs || []) {
+    const id = String((job && job.id) || "");
+    if (!id) continue;
+    const has = Object.prototype.hasOwnProperty.call(remote, id);
+    const existing = has ? remote[id] : undefined;
+    if (blocked.has(id)) {
+      if (existing) ops.push({ id, op: "delete" });
+      ops.push({ id, op: "clear" });
+      continue;
+    }
+    if (job.writeLend) {
+      const doc = desired[id];
+      if (!doc) continue;
+      if (lendNeedsWrite(doc, has ? existing : undefined)) ops.push({ id, op: "set" });
+    } else if (job.deleteLend && existing) {
+      ops.push({ id, op: "delete" });
+    }
+  }
+  return ops;
 }
 
 // A recovered loan keeps the item name when the inventory link is gone.
@@ -1772,7 +1868,8 @@ const GearLogic = {
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, LOOKUPS_PAUSED,
   reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
-  ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, ROUND_INPUT_TOKEN_CAP, roundInputTokens,
+  ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, REDACT_LIMIT, emailHash, lendNeedsWrite, lendMirrorOps,
+  ROUND_INPUT_TOKEN_CAP, roundInputTokens, flooredSearchRoundMicro,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, bulkLookupIds, singleLookupIds, applyMarketPrices,

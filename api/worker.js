@@ -14,7 +14,7 @@
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult } from "../js/logic.js";
+import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
 
@@ -145,10 +145,10 @@ function findJson(text, keys) {
   return null;
 }
 
-function loopCeiling(env, model, messages, maxTokens, searches) {
+function loopCeiling(env, model, messages, maxTokens, searches, searchedAlready) {
   const n = Math.max(0, Math.floor(+searches || 0));
   return estimateSpendMicro({
-    input_tokens: roundInputTokens(estimateInputTokens(JSON.stringify(messages)) + n * SEARCH_RESULT_TOKENS, n),
+    input_tokens: roundInputTokens(estimateInputTokens(JSON.stringify(messages)) + n * SEARCH_RESULT_TOKENS, n, searchedAlready),
     output_tokens: clampMaxTokens(maxTokens),
     web_search_requests: n,
   }, ratesForModel(env, model));
@@ -173,10 +173,11 @@ async function callClaude(env, model, it, budget) {
   let spent = budget && budget.spent || 0;
   const limit = budget && budget.limit;
   let askedJson = false;
+  let searched = false;
   for (let i = 0; i < spec.rounds; i++) {
     const searching = !askedJson && (i === 0 || (data && data.stop_reason === "pause_turn"));
     const searches = searching ? spec.searches : 0;
-    if (limit != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, searches), limit)) break;
+    if (limit != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, searches, searched), limit)) break;
     try { data = await send(spec.maxTokens, searching); }
     catch (e) {
       const roundUsage = e.usage;
@@ -189,6 +190,7 @@ async function callClaude(env, model, it, budget) {
     const roundUsage = usageFromResponse(data);
     usage = addUsage(usage, roundUsage);
     spent += spendOf(env, model, roundUsage);
+    if (searches > 0) searched = true;
     all.push(...(data.content || []));
     if (data.stop_reason === "pause_turn") {
       messages.push({ role: "assistant", content: data.content });
@@ -267,9 +269,9 @@ async function dealCheck(env, w, budget) {
   const model = env.MODEL || "claude-haiku-5-5";
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: spec.searches }];
   const messages = [{ role: "user", content: dealPrompt(w) }];
-  let data, all = [], usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0;
+  let data, all = [], usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
-    if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, spec.searches), budget)) break;
+    if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, spec.searches, searched), budget)) break;
     const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
       headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) });
@@ -277,6 +279,7 @@ async function dealCheck(env, w, budget) {
     const roundUsage = usageFromResponse(data);
     usage = addUsage(usage, roundUsage);
     spent += spendOf(env, model, roundUsage);
+    if (spec.searches > 0) searched = true;
     if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
     all.push(...(data.content || []));
     if (data.stop_reason !== "pause_turn") break;
@@ -391,9 +394,17 @@ async function retryQueuedCleanups(env) {
     const page = await env.WATCH.list({ prefix: CLEANUP_PREFIX, cursor });
     for (const k of page.keys || []) {
       const uid = k.name.slice(CLEANUP_PREFIX.length);
+      let raw;
+      try { raw = await env.WATCH.get(k.name); }
+      catch { continue; }
+      let record = {};
+      try { record = raw ? JSON.parse(raw) : {}; }
+      catch { record = {}; }
       try {
         await clearUsageCounters(env, uid);
-        await env.WATCH.delete(k.name);
+        const plan = cleanupRetryPlan(record && record.uid ? record : { ...record, uid });
+        if (plan.action === "keep") await env.WATCH.put(k.name, JSON.stringify(plan.body));
+        else await env.WATCH.delete(k.name);
         done++;
       } catch { /* the next hourly run tries again */ }
     }
@@ -514,14 +525,15 @@ Reply with ONLY this JSON:
   const model = env.MODEL || "claude-haiku-5-5";
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: spec.searches }];
   const messages = [{ role: "user", content: ask }];
-  let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0;
+  let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
-    if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, spec.searches), budget)) break;
+    if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, spec.searches, searched), budget)) break;
     const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) });
     data = await r.json().catch(() => ({}));
     const roundUsage = usageFromResponse(data);
     usage = addUsage(usage, roundUsage);
     spent += spendOf(env, model, roundUsage);
+    if (spec.searches > 0) searched = true;
     if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
     if (data.stop_reason !== "pause_turn") break;
     messages.push({ role: "assistant", content: data.content });
@@ -571,14 +583,15 @@ Reply with ONLY this JSON:
   const searches = b.location ? spec.searches : 0;
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: spec.searches }];
   const messages = [{ role: "user", content: ask }];
-  let data = null, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0;
+  let data = null, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
-    if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, searches), budget)) break;
+    if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, searches, searched), budget)) break;
     const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, ...(searches ? { tools } : {}), messages }) });
     data = await r.json().catch(() => ({}));
     const roundUsage = usageFromResponse(data);
     usage = addUsage(usage, roundUsage);
     spent += spendOf(env, model, roundUsage);
+    if (searches > 0) searched = true;
     if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
     if (data.stop_reason !== "pause_turn") break;
     messages.push({ role: "assistant", content: data.content });
@@ -616,7 +629,7 @@ async function lookupOne(env, it, budget) {
   let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spendMicro = 0;
   const primary = env.MODEL || "claude-haiku-5-5";
   const limit = budget == null ? null : budget;
-  const fallbackCeiling = () => loopCeiling(env, env.FALLBACK_MODEL, [{ role: "user", content: prompt(clean) }], MODEL_CALLS.lookup.maxTokens, MODEL_CALLS.lookup.searches);
+  const fallbackCeiling = () => loopCeiling(env, env.FALLBACK_MODEL, [{ role: "user", content: prompt(clean) }], MODEL_CALLS.lookup.maxTokens, MODEL_CALLS.lookup.searches, false);
   try {
     data = await callClaude(env, primary, clean, { limit, spent: 0 });
     usage = addUsage(usage, data.usage);

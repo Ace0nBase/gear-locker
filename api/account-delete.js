@@ -2,7 +2,7 @@
 // Rules allow that owner to list and delete their shares, locker, and lends, and to clear their email.
 // 404 means the row is already gone. The auth user is deleted only after this returns ok.
 
-import { USER_COLLECTIONS, loanRedactTargets } from "../js/logic.js";
+import { USER_COLLECTIONS, loanRedactTargets, REDACT_LIMIT, emailHash } from "../js/logic.js";
 
 const GEAR_STILL_HERE = "Couldn't finish removing your gear. Your sign-in is still here. Try again.";
 
@@ -93,21 +93,51 @@ async function forEachMatch(fetchImpl, idToken, root, structuredQuery, visit) {
   }
 }
 
-async function patchFields(fetchImpl, idToken, name, fields, mustExist) {
-  const mask = fields.map(field => "updateMask.fieldPaths=" + encodeURIComponent(field)).join("&");
-  const exists = mustExist ? "&currentDocument.exists=true" : "";
-  const body = { fields: {} };
-  const stamp = new Date().toISOString();
-  for (const field of fields) body.fields[field] = field === "updatedAt" ? { timestampValue: stamp } : { stringValue: "" };
+function commitUrl(project) {
+  return rootUrl(project) + ":commit";
+}
+
+function commitStatus(res) {
+  if (!res) return "failed";
+  if (res.status === 200) return "ok";
+  const status = res.data && res.data.error && res.data.error.status;
+  if (res.status === 404 || status === "NOT_FOUND" || status === "FAILED_PRECONDITION") return "missing";
+  return "failed";
+}
+
+async function commitWrite(fetchImpl, idToken, project, write) {
   let res;
   try {
-    res = await callFs(fetchImpl, idToken, docUrl(name) + "?" + mask + exists, { method: "PATCH", body: JSON.stringify(body) });
+    res = await callFs(fetchImpl, idToken, commitUrl(project), { method: "POST", body: JSON.stringify({ writes: [write] }) });
   } catch {
     return "failed";
   }
-  if (res.status === 200) return "ok";
-  if (res.status === 404) return "missing";
-  return "failed";
+  return commitStatus(res);
+}
+
+// String clears go in the document. updatedAt and serverUpdatedAt are request.time, so a stale local email loses the merge.
+async function patchFields(fetchImpl, idToken, project, name, stringFields, timeFields, mustExist) {
+  const fields = {};
+  for (const field of stringFields) fields[field] = { stringValue: "" };
+  const write = {
+    update: { name, fields },
+    updateMask: { fieldPaths: [...stringFields, ...timeFields] },
+    updateTransforms: timeFields.map(fieldPath => ({ fieldPath, setToServerValue: "REQUEST_TIME" })),
+  };
+  if (mustExist) write.currentDocument = { exists: true };
+  return commitWrite(fetchImpl, idToken, project, write);
+}
+
+async function buryDeletedEmail(fetchImpl, idToken, project, email) {
+  const hash = await emailHash(email);
+  if (!hash) return;
+  const name = "projects/" + project + "/databases/(default)/documents/deletedEmails/" + hash;
+  await commitWrite(fetchImpl, idToken, project, {
+    update: { name, fields: {} },
+    updateMask: { fieldPaths: ["at"] },
+    updateTransforms: [{ fieldPath: "at", setToServerValue: "REQUEST_TIME" }],
+    currentDocument: { exists: false },
+  });
 }
 
 function stringField(doc, field) {
@@ -167,7 +197,12 @@ async function redactBorrowed(fetchImpl, idToken, project, root, email, user) {
     pending.push({ reason: "lends-query" });
     return pending;
   }
-  const plan = loanRedactTargets(docs.map(doc => ({ id: docId(doc), lender: stringField(doc, "lender") })));
+  const overflow = docs.slice(REDACT_LIMIT);
+  const batchDocs = docs.slice(0, REDACT_LIMIT);
+  for (const doc of overflow) {
+    pending.push({ reason: "capped", lend: doc.name, lender: stringField(doc, "lender"), loanId: docId(doc) });
+  }
+  const plan = loanRedactTargets(batchDocs.map(doc => ({ id: docId(doc), lender: stringField(doc, "lender") })));
   for (const path of plan.paths) {
     const name = loanDocName(project, path.lender, path.loanId);
     let got;
@@ -182,12 +217,12 @@ async function redactBorrowed(fetchImpl, idToken, project, root, email, user) {
       if (lenderOnLoan && lenderOnLoan !== path.lender) continue;
       if (hasField(got.data, "friendEmail") && stringField(got.data, "friendEmail").trim().toLowerCase() !== want) continue;
     }
-    const patched = await patchFields(fetchImpl, idToken, name, ["friendEmail", "updatedAt"], true);
+    const patched = await patchFields(fetchImpl, idToken, project, name, ["friendEmail"], ["updatedAt", "serverUpdatedAt"], true);
     if (patched === "missing") continue;
     if (patched !== "ok") pending.push({ lender: path.lender, loanId: path.loanId, reason: "loan" });
   }
-  for (const doc of docs) {
-    const cleared = await patchFields(fetchImpl, idToken, doc.name, ["borrowerEmail", "borrowerEmailLower", "updatedAt"], false);
+  for (const doc of batchDocs) {
+    const cleared = await patchFields(fetchImpl, idToken, project, doc.name, ["borrowerEmail", "borrowerEmailLower"], ["updatedAt", "serverUpdatedAt"], false);
     if (cleared === "failed") pending.push({ lend: doc.name, reason: "lend" });
   }
   return pending;
@@ -215,6 +250,8 @@ export async function deleteUserFirestore(env, idToken, user, fetchImpl) {
   } catch {
     return { ok: false, error: GEAR_STILL_HERE, redactPending: [] };
   }
+  try { await buryDeletedEmail(fetchFn, idToken, project, email); }
+  catch { /* the hash is also written from the signed-in app */ }
   let redactPending = [];
   try {
     redactPending = await redactBorrowed(fetchFn, idToken, project, root, email, user);

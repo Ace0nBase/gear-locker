@@ -48,13 +48,13 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device and the service worker is version 34", () => {
+test("sign-out clears this device and the service worker is version 35", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v34/);
-  assert.match(read("js/cloud.js"), /APP_VERSION="34"/);
+  assert.match(sw, /war-box-v35/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="35"/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
   assert.match(manifest, /maskable-512\.png/);
@@ -70,7 +70,9 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/cloud.js"), /enablePersistence\(\{synchronizeTabs:true\}\)/);
   assert.doesNotMatch(read("js/cloud.js"), /if\(!window\.GEAR_QA\)\{try\{fsdb\.enablePersistence/);
   assert.match(read("js/social.js"), /loanSharePlan/);
-  assert.match(read("js/social.js"), /batch\.set\(ref,lendDoc/);
+  assert.match(read("js/social.js"), /lendNeedsWrite/);
+  assert.match(read("js/social.js"), /hasPendingWrites/);
+  assert.match(read("js/social.js"), /deletedEmails/);
   assert.match(read("js/security.js"), /item name, brand, color and category, dates, your name and your email/);
   assert.doesNotMatch(read("js/core.js"), /gearLocker\.offline/);
   assert.doesNotMatch(read("js/core.js"), /stashOffline|offlinePending/);
@@ -208,6 +210,8 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/cloud.js"), /accountDeleteError/);
   assert.match(read("js/cloud.js"), /if\(accountDeleteError\)/);
   assert.match(read("js/cloud.js"), /deletedUsers/);
+  assert.match(read("js/cloud.js"), /deletedEmails/);
+  assert.match(read("js/cloud.js"), /serverTimestamp\(\)/);
   assert.match(read("js/cloud.js"), /where\("owner","=="/);
   assert.match(read("js/cloud.js"), /deleteRetryRoute/);
   const delFn = read("js/cloud.js");

@@ -2,7 +2,8 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { assertFails, assertSucceeds, initializeTestEnvironment } from "@firebase/rules-unit-testing";
-import { collection, collectionGroup, deleteDoc, doc, getDoc, getDocs, query, setDoc, Timestamp, updateDoc, where, writeBatch } from "firebase/firestore";
+import { collection, collectionGroup, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
+import { emailHash } from "../js/logic.js";
 
 let env;
 
@@ -128,18 +129,18 @@ test("a tombstone blocks later writes and the named person can clear their email
     friendEmail: "", updatedAt: "2026-10-27T00:00:00.000Z",
   }));
   await assertSucceeds(updateDoc(doc(borrower, "users/owner/loans/loan1"), {
-    friendEmail: "", updatedAt: Timestamp.fromDate(new Date("2026-10-27T00:00:00.000Z")),
+    friendEmail: "", updatedAt: serverTimestamp(),
   }));
   await assertFails(updateDoc(doc(borrower, "users/owner/loans/loan1"), { borrower: "Nope" }));
   const stranger = as("stranger", "stranger@example.com", true);
   await assertFails(updateDoc(doc(stranger, "users/owner/loans/loan1"), {
-    friendEmail: "", updatedAt: Timestamp.fromDate(new Date("2026-10-27T00:00:00.000Z")),
+    friendEmail: "", updatedAt: serverTimestamp(),
   }));
   await assertFails(updateDoc(doc(borrower, "lends/loan1"), {
     borrowerEmail: "", borrowerEmailLower: "", updatedAt: "2026-10-27T00:00:00.000Z",
   }));
   await assertSucceeds(updateDoc(doc(borrower, "lends/loan1"), {
-    borrowerEmail: "", borrowerEmailLower: "", updatedAt: Timestamp.fromDate(new Date("2026-10-27T00:00:00.000Z")),
+    borrowerEmail: "", borrowerEmailLower: "", updatedAt: serverTimestamp(),
   }));
   await assertSucceeds(setDoc(doc(owner, "deletedUsers/owner"), { uid: "owner", at: "2026-10-27T00:00:00.000Z" }));
   await assertFails(setDoc(doc(owner, "users/owner/items/i2"), { name: "Belt" }));
@@ -152,7 +153,7 @@ test("a tombstone blocks later writes and the named person can clear their email
   const named = as("named", "named@example.com", true);
   await assertSucceeds(setDoc(doc(named, "deletedUsers/named"), { uid: "named", at: "2026-10-27T00:00:00.000Z" }));
   await assertSucceeds(updateDoc(doc(named, "lends/loan2"), {
-    borrowerEmail: "", borrowerEmailLower: "", updatedAt: Timestamp.fromDate(new Date("2026-10-27T00:00:00.000Z")),
+    borrowerEmail: "", borrowerEmailLower: "", updatedAt: serverTimestamp(),
   }));
   const ownLoan = await assertSucceeds(getDoc(doc(owner, "users/owner/loans/loan1")));
   assert.equal(ownLoan.data().notes, "private range note");
@@ -170,20 +171,49 @@ test("a capitalized friend email can be cleared, and a missing loan is not creat
     id: "caps", friendEmail: "QA-B@Example.test", updatedAt: "2026-10-26T00:00:00.000Z",
   }));
   const borrower = as("vee", "qa-b@example.test", true);
-  await assert.rejects(updateDoc(doc(borrower, "users/owner/loans/missing"), {
-    friendEmail: "", updatedAt: Timestamp.fromDate(new Date("2026-10-27T00:00:00.000Z")),
-  }), err => err && err.code === "not-found");
+  await assertFails(updateDoc(doc(borrower, "users/owner/loans/missing"), {
+    friendEmail: "", updatedAt: serverTimestamp(),
+  }));
   await env.withSecurityRulesDisabled(async context => {
     assert.equal((await getDoc(doc(context.firestore(), "users/owner/loans/missing"))).exists(), false);
   });
   const stranger = as("stranger", "stranger@example.com", true);
   await assertFails(updateDoc(doc(stranger, "users/owner/loans/caps"), {
-    friendEmail: "", updatedAt: Timestamp.fromDate(new Date("2026-10-27T00:00:00.000Z")),
+    friendEmail: "", updatedAt: serverTimestamp(),
   }));
   await assertSucceeds(updateDoc(doc(borrower, "users/owner/loans/caps"), {
-    friendEmail: "", updatedAt: Timestamp.fromDate(new Date("2026-10-27T00:00:00.000Z")),
+    friendEmail: "", updatedAt: serverTimestamp(),
   }));
   const left = await getDoc(doc(owner, "users/owner/loans/caps"));
   assert.equal(left.data().friendEmail, "");
-  assert.equal(left.data().updatedAt.toDate().toISOString(), "2026-10-27T00:00:00.000Z");
+  assert.equal(typeof left.data().updatedAt.toDate, "function");
+});
+
+test("a deleted address is stored as a hash and cannot be published on a lend", async () => {
+  await env.clearFirestore();
+  const email = "gone@example.com";
+  const hash = await emailHash(email);
+  const borrower = as("gone", email, true);
+  await assertFails(setDoc(doc(borrower, "deletedEmails/" + hash), { at: serverTimestamp(), email }));
+  await assertSucceeds(setDoc(doc(borrower, "deletedEmails/" + hash), { at: serverTimestamp() }));
+  await assertFails(updateDoc(doc(borrower, "deletedEmails/" + hash), { at: serverTimestamp() }));
+  const stranger = as("stranger", "stranger@example.com", true);
+  await assertFails(setDoc(doc(stranger, "deletedEmails/" + hash), { at: serverTimestamp() }));
+  const unverified = as("uv", "uv@example.com", false);
+  await assertSucceeds(setDoc(doc(unverified, "deletedEmails/" + await emailHash("uv@example.com")), { at: serverTimestamp() }));
+  const lender = as("owner", "owner@example.com", true);
+  await assertFails(setDoc(doc(lender, "lends/buried"), {
+    ...loan(),
+    borrowerEmail: "Gone@Example.com",
+    borrowerEmailLower: "gone@example.com",
+  }));
+  await assertSucceeds(setDoc(doc(lender, "lends/open"), {
+    ...loan(),
+    borrowerEmail: "still@example.com",
+    borrowerEmailLower: "still@example.com",
+  }));
+  await assertFails(updateDoc(doc(lender, "lends/open"), {
+    borrowerEmail: email,
+    borrowerEmailLower: email,
+  }));
 });

@@ -8,7 +8,8 @@ import {
   clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, priciestRates, spendRates, applyReserve, applyReconcile,
   SEARCH_RESULT_TOKENS, roundFits, roundInputTokens, loanTargetsFromLends, loanRedactTargets, loansToMirror,
   deleteRetryRoute, runDeleteAttempt, SERVER_DELETE_STEPS, LOOKUPS_PAUSED,
-  ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult,
+  ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, REDACT_LIMIT, emailHash, lendMirrorOps,
+  ROUND_INPUT_TOKEN_CAP,
 } from "../js/logic.js";
 import { UsageLedger } from "../api/usage-ledger.js";
 import { deleteUserFirestore } from "../api/account-delete.js";
@@ -433,6 +434,11 @@ test("a borrowed lend clears the lender loan, and a query error is not an empty 
     const method = (opts && opts.method) || "GET";
     const body = opts && opts.body ? JSON.parse(opts.body) : null;
     const json = (status, data) => ({ status, json: async () => data });
+    if (String(url).includes(":commit")) {
+      const write = body && body.writes && body.writes[0];
+      patches.push({ url: String((write && write.update && write.update.name) || url), body: write });
+      return json(200, {});
+    }
     if (method === "PATCH") {
       patches.push({ url: String(url), body });
       return json(200, {});
@@ -454,10 +460,16 @@ test("a borrowed lend clears the lender loan, and a query error is not an empty 
   assert.equal(cleared.ok, true);
   const loanPatch = patches.find(p => p.url.includes("users/owner/loans/loan1"));
   assert.ok(loanPatch);
-  assert.equal(loanPatch.body.fields.friendEmail.stringValue, "");
-  assert.equal(typeof loanPatch.body.fields.updatedAt.timestampValue, "string");
+  assert.equal(loanPatch.body.update.fields.friendEmail.stringValue, "");
+  assert.equal(loanPatch.body.currentDocument.exists, true);
+  assert.ok(loanPatch.body.updateTransforms.some(t => t.fieldPath === "serverUpdatedAt" && t.setToServerValue === "REQUEST_TIME"));
+  assert.ok(loanPatch.body.updateTransforms.some(t => t.fieldPath === "updatedAt" && t.setToServerValue === "REQUEST_TIME"));
   assert.ok(patches.some(p => p.url.includes("lends/loan1")));
   assert.equal(patches.some(p => p.url.includes("/loans/") && !p.url.includes("users/owner/loans/loan1")), false);
+  const buried = patches.find(p => p.url.includes("/deletedEmails/"));
+  assert.ok(buried);
+  assert.equal(buried.body.update.name.endsWith("/" + await emailHash("a@b.co")), true);
+  assert.equal(JSON.stringify(buried.body.update.fields).includes("@"), false);
 
   const none = [];
   const empty = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, async (url, opts) => {
@@ -488,6 +500,11 @@ test("a borrowed lend clears the lender loan, and a query error is not an empty 
   const blockedLoan = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, async (url, opts) => {
     const method = (opts && opts.method) || "GET";
     const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    if (String(url).includes(":commit")) {
+      const name = (body && body.writes && body.writes[0] && body.writes[0].update && body.writes[0].update.name) || "";
+      if (name.includes("users/owner/loans/loan1")) return { status: 403, json: async () => ({}) };
+      return { status: 200, json: async () => ({}) };
+    }
     if (method === "PATCH" && String(url).includes("users/owner/loans/loan1")) {
       return { status: 403, json: async () => ({}) };
     }
@@ -581,6 +598,15 @@ test("orphan, mismatched, changed, and unverified lends do not block account del
         }
         return json(200, [{}]);
       }
+      if (u.includes(":commit")) {
+        const writes = (body && body.writes) || [];
+        for (const w of writes) {
+          const name = (w.update && w.update.name) || "";
+          const exists = w.currentDocument && w.currentDocument.exists === true ? " exists=true" : "";
+          calls.push("COMMIT " + name + exists);
+        }
+        return json(200, {});
+      }
       if (method === "GET" && u.includes("/loans/")) return loanReply(u);
       if (method === "PATCH" || method === "DELETE") return json(200, {});
       return json(200, { documents: [] });
@@ -589,8 +615,8 @@ test("orphan, mismatched, changed, and unverified lends do not block account del
     return { out, calls };
   }
   const user = { sub: "vee", email: "v@example.com", email_verified: true };
-  const loanPatch = calls => calls.some(c => c.startsWith("PATCH") && c.includes("/loans/"));
-  const lendPatch = calls => calls.some(c => c.startsWith("PATCH") && c.includes("/lends/"));
+  const loanPatch = calls => calls.some(c => c.startsWith("COMMIT") && c.includes("/loans/"));
+  const lendPatch = calls => calls.some(c => c.startsWith("COMMIT") && c.includes("/lends/"));
 
   const orphan = await run(user, () => ({ status: 404, json: async () => ({}) }));
   assert.equal(orphan.out.ok, true);
@@ -617,7 +643,7 @@ test("orphan, mismatched, changed, and unverified lends do not block account del
     () => ({ status: 200, json: async () => ({ fields: { friendEmail: { stringValue: "QA-B@Example.test" } } }) }),
   );
   assert.equal(caps.out.ok, true);
-  assert.equal(caps.calls.some(c => c.startsWith("PATCH") && c.includes("/loans/") && c.includes("currentDocument.exists=true")), true);
+  assert.equal(caps.calls.some(c => c.startsWith("COMMIT") && c.includes("/loans/") && c.includes("exists=true")), true);
 
   const unverified = await run({ sub: "vee", email: "v@example.com", email_verified: false }, () => ({ status: 500, json: async () => ({}) }));
   assert.equal(unverified.out.ok, true);
@@ -634,11 +660,18 @@ test("the deleted-account note survives sign-out, and both cleanup failures are 
   const kept = deletedAccountGate("", loaded.shown);
   assert.equal(kept.text, "Your account is deleted.");
   assert.equal(kept.clearStored, false);
-  assert.equal(deleteCleanupResult(true, true, false).body.cleanup, "done");
-  assert.equal(deleteCleanupResult(false, true, false).body.cleanup, "pending");
-  assert.equal(deleteCleanupResult(false, false, true).status, 502);
-  assert.equal(deleteCleanupResult(true, true, true).body.cleanup, "pending");
-  assert.equal(deleteCleanupResult(true, false, true).status, 200);
+  assert.equal(deleteCleanupResult(true, true).body.cleanup, "done");
+  assert.equal(deleteCleanupResult(false, true).body.cleanup, "pending");
+  assert.equal(deleteCleanupResult(false, false).status, 502);
+  assert.equal(deleteCleanupResult(true, true).body.cleanup, "done");
+  assert.equal(deleteCleanupResult(true, false).status, 200);
+  assert.equal(deleteCleanupResult(true, false).body.cleanup, "done");
+  assert.equal(deleteCleanupResult(true, true, true).body.cleanup, "done");
+  const followUp = cleanupRetryPlan({ uid: "abc", at: "t", redactPending: [{ reason: "capped", loanId: "L1" }] });
+  assert.equal(followUp.action, "keep");
+  assert.equal(followUp.body.usageCleared, true);
+  assert.equal(followUp.body.redactPending.length, 1);
+  assert.equal(cleanupRetryPlan({ uid: "abc", at: "t" }).action, "delete");
   const mirrored = loansToMirror([
     { id: "loan1", friendEmail: "QA-B@Example.test" },
     { id: "plain", friendEmail: "" },
@@ -651,12 +684,51 @@ test("the deleted-account note survives sign-out, and both cleanup failures are 
   assert.deepEqual(loansToMirror([{ id: "loan1", friendEmail: "QA-B@Example.test" }], false), []);
 });
 
-test("a searching round budgets 1.2M input tokens and still fits inside the lookup hold", () => {
-  assert.equal(roundInputTokens(50_000, 3), 1_200_000);
-  assert.equal(roundInputTokens(2_000_000, 1), 2_000_000);
-  assert.equal(roundInputTokens(50_000, 0), 50_000);
+test("a second lend repair writes nothing, and a buried address is cleared instead", () => {
+  const desired = {
+    lender: "owner",
+    borrowerEmail: "QA-B@Example.test",
+    borrowerEmailLower: "qa-b@example.test",
+    item: { name: "Radio", brand: "", color: "", category: "" },
+    updatedAt: "t1",
+  };
+  const jobs = [{ id: "L1", writeLend: true, deleteLend: false }];
+  assert.deepEqual(lendMirrorOps(jobs, { L1: desired }, {}), [{ id: "L1", op: "set" }]);
+  const stored = { ...desired, updatedAt: "t2", serverUpdatedAt: "t2", borrowerReturned: "2026-10-01" };
+  assert.deepEqual(lendMirrorOps(jobs, { L1: { ...desired, updatedAt: "t3" } }, { L1: stored }), []);
+  assert.deepEqual(lendMirrorOps(jobs, { L1: { ...desired, borrowerEmail: "other@example.com" } }, { L1: stored }), [{ id: "L1", op: "set" }]);
+  assert.deepEqual(lendMirrorOps(jobs, { L1: desired }, { L1: stored }, ["L1"]), [
+    { id: "L1", op: "delete" },
+    { id: "L1", op: "clear" },
+  ]);
+});
+
+test("the first round of every AI op fits its hold, and the input cap applies after a search", () => {
+  assert.equal(roundInputTokens(50_000, 3), 50_000);
+  assert.equal(roundInputTokens(50_000, 3, false), 50_000);
+  assert.equal(roundInputTokens(50_000, 3, true), 1_200_000);
+  assert.equal(roundInputTokens(2_000_000, 1, true), 2_000_000);
+  assert.equal(roundInputTokens(50_000, 0, true), 50_000);
+  for (const op of ["lookup", "identify", "deal", "battery", "pace"]) {
+    const spec = MODEL_CALLS[op];
+    const input = roundInputTokens(spec.promptTokens + spec.searches * SEARCH_RESULT_TOKENS, spec.searches, false);
+    const first = estimateSpendMicro({
+      input_tokens: input,
+      output_tokens: spec.maxTokens,
+      web_search_requests: spec.searches,
+    }, priciestRates({}));
+    assert.ok(first <= callHoldMicro({}, op), op);
+    if (spec.searches > 0) {
+      const floored = estimateSpendMicro({
+        input_tokens: ROUND_INPUT_TOKEN_CAP,
+        output_tokens: spec.maxTokens,
+        web_search_requests: spec.searches,
+      }, priciestRates({}));
+      assert.ok(floored <= callHoldMicro({}, op), op + " floor");
+    }
+  }
   const oneRound = estimateSpendMicro({
-    input_tokens: roundInputTokens(50_000, 3),
+    input_tokens: roundInputTokens(50_000, 3, true),
     output_tokens: 4000,
     web_search_requests: 3,
   }, priciestRates({}));
@@ -664,4 +736,38 @@ test("a searching round budgets 1.2M input tokens and still fits inside the look
   const loose = estimateSpendMicro({ input_tokens: 48_000, output_tokens: 4000, web_search_requests: 3 }, spendRates({}));
   const tight = estimateSpendMicro({ input_tokens: 1_200_000, output_tokens: 4000, web_search_requests: 3 }, spendRates({}));
   assert.ok(tight - loose >= 860_000);
+});
+
+test("redaction stops at the cap and queues the rest", async () => {
+  const docs = Array.from({ length: REDACT_LIMIT + 1 }, (_, i) => ({
+    name: "projects/demo/databases/(default)/documents/lends/loan" + i,
+    fields: { lender: { stringValue: "owner" }, borrowerEmail: { stringValue: "a@b.co" } },
+  }));
+  let loanGets = 0;
+  let loanCommits = 0;
+  const fetchImpl = async (url, opts) => {
+    const method = (opts && opts.method) || "GET";
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    const json = (status, data) => ({ status, json: async () => data });
+    if (String(url).includes(":commit")) {
+      const name = body.writes[0].update.name || "";
+      if (name.includes("/loans/")) loanCommits += 1;
+      return json(200, {});
+    }
+    if (String(url).includes(":runQuery")) {
+      const q = body.structuredQuery;
+      if (q.from[0].collectionId === "lends" && q.where.fieldFilter.field.fieldPath === "borrowerEmail") {
+        return json(200, docs.map(document => ({ document })));
+      }
+      return json(200, [{}]);
+    }
+    if (method === "GET" && String(url).includes("/loans/")) { loanGets += 1; return json(404, {}); }
+    return json(200, { documents: [] });
+  };
+  const out = await deleteUserFirestore({ FIREBASE_PROJECT: "demo" }, "token", { sub: "abc", email: "a@b.co" }, fetchImpl);
+  assert.equal(out.ok, true);
+  assert.equal(loanGets, REDACT_LIMIT);
+  assert.equal(loanCommits, 0);
+  assert.equal(out.redactPending.filter(row => row.reason === "capped").length, 1);
+  assert.equal(out.redactPending.some(row => row.loanId === "loan" + REDACT_LIMIT), true);
 });
