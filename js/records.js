@@ -219,13 +219,6 @@ RENDER.wish=()=>{
 SAVE.wish=async d=>{if(!String(d.name||"").trim()){toast("Name the item");return}await upsertC("wish",d);ED.wish=null;toast("Saved");render()};
 DEL.wish=async d=>{await removeC("wish",d.id)};
 ACT.wish=async(act,b)=>{
-  if(act==="gaps"){
-    const gaps={};KITS.forEach(k=>{const {a}=coverage(k);k.req.forEach(s=>{if(!a[s])(gaps[s]=gaps[s]||[]).push(k.name)})});
-    let n=0,u=0;
-    for(const [s,ks] of Object.entries(gaps)){const ex=db.wish.find(w=>!w.deleted&&w.gapSlot===s&&w.status!=="got");
-      if(ex){ex.kitsNeeding=ks;ex.updatedAt=now();u++;continue}
-      db.wish.push({id:uid(),name:S[s][0],category:S[s][1][0],gapSlot:s,kitsNeeding:ks,priority:ks.length>=4?"High":ks.length>=2?"Medium":"Low",status:"want",notes:S[s][3],createdAt:now(),updatedAt:now()});n++}
-    await persist();toast(n?`Added ${n} kit gap${n>1?"s":""}`:"No new gaps to add");render();return}
   if(act==="check"||act==="checkall"){const list=(act==="check"?db.wish.filter(w=>w.id===b.dataset.id):db.wish.filter(w=>!w.deleted&&w.status!=="got"&&w.marketCheck!=="requested")).filter(w=>!GearLogic.saleRestricted(w));list.forEach(w=>{w.marketCheck="requested";w.marketCheckAt=now();w.updatedAt=now()});await persist();toast(list.length?`Queued ${list.length} for a price check`:"Nothing to queue");render();return}
   if(act==="got"){const w=db.wish.find(x=>x.id===b.dataset.id);if(!w)return;
     const restricted=GearLogic.saleRestricted(w);const est=restricted&&w.priceSource==="market"?0:+w.estPrice||0;
@@ -245,9 +238,9 @@ RENDER.loans=()=>{
   const nm=x=>esc(itemById(x.itemId)?.name||x.itemName||"(deleted item)");
   $("loansView").innerHTML=`<div class="vhead"><div><h2>Loans</h2><p>Who has your gear and when it's due back. Add a friend's War Box email and the loan shows up in their app too.</p></div><button class="btn" type="button" data-act="new">+ Lend item</button></div>
   ${form}
-  ${out.length?`<div class="slotsHead">Out now <span>${out.length}</span></div><div class="scroll"><table class="tbl"><thead><tr><th>Item</th><th>Borrowed by</th><th>Lent</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>${out.map(x=>{const over=x.due&&x.due<today();return `<tr class="click" data-act="edit" data-id="${esc(x.id)}"><td><b>${nm(x)}</b></td><td>${esc(x.borrower)}${x.contact?`<small>${esc(x.contact)}</small>`:""}</td><td>${esc(fmtDate(x.out))}</td><td>${esc(fmtDate(x.due))}</td><td>${over?`<span class="pill gap">Overdue</span>`:`<span class="pill warn">Out</span>`}</td><td><button class="btn ghost" type="button" data-act="returned" data-id="${esc(x.id)}">Returned</button></td></tr>`}).join("")}</tbody></table></div>`
+  ${out.length?`<div class="slotsHead">Out now <span>${out.length}</span></div><div class="scroll loanOut"><table class="tbl"><thead><tr><th>Item</th><th>Borrowed by</th><th>Lent</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>${out.map(x=>{const over=x.due&&x.due<today();return `<tr class="click" data-act="edit" data-id="${esc(x.id)}"><td><b>${nm(x)}</b></td><td>${esc(x.borrower)}${x.contact?`<small>${esc(x.contact)}</small>`:""}</td><td data-k="Lent">${esc(fmtDate(x.out))}</td><td data-k="Due">${esc(fmtDate(x.due))}</td><td>${over?`<span class="pill gap">Overdue</span>`:`<span class="pill warn">Out</span>`}</td><td><button class="btn ghost" type="button" data-act="returned" data-id="${esc(x.id)}">Returned</button></td></tr>`}).join("")}</tbody></table></div>`
   :`<div class="empty"><b>Nothing on loan</b>When you lend something out, tap <em>+ Lend item</em> so you know who has it.</div>`}
-  ${back.length?`<div class="slotsHead">Returned <span>${back.length}</span></div><div class="scroll"><table class="tbl"><tbody>${back.slice(0,25).map(x=>`<tr class="click" data-act="edit" data-id="${esc(x.id)}"><td>${nm(x)}</td><td>${esc(x.borrower)}</td><td>${esc(fmtDate(x.out))} → ${esc(fmtDate(x.returned))}</td></tr>`).join("")}</tbody></table></div>`:""}`;
+  ${back.length?`<div class="slotsHead">Returned <span>${back.length}</span></div><div class="scroll loanBack"><table class="tbl"><tbody>${back.slice(0,25).map(x=>`<tr class="click" data-act="edit" data-id="${esc(x.id)}"><td>${nm(x)}</td><td>${esc(x.borrower)}</td><td>${esc(fmtDate(x.out))} → ${esc(fmtDate(x.returned))}</td></tr>`).join("")}</tbody></table></div>`:""}`;
 };
 SAVE.loans=async d=>{
   if(GearLogic.loanNeedsItem(d)){toast("Pick an item");return}

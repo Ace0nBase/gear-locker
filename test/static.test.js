@@ -48,12 +48,13 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device and the service worker is version 29", () => {
+test("sign-out clears this device and the service worker is version 30", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
   assert.match(sw, /war-box-v30/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="30"/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
   assert.match(manifest, /maskable-512\.png/);
@@ -115,7 +116,14 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(html, /theme-color" content="#A8865A"/);
   assert.match(manifest, /"theme_color": "#A8865A"/);
   assert.doesNotMatch(read("js/records.js"), /Add kit gaps/);
+  assert.doesNotMatch(read("js/records.js"), /act==="gaps"/);
   assert.doesNotMatch(read("js/core.js"), /Set up on/);
+  assert.doesNotMatch(read("js/core.js"), /i\.setupOn,i\.location/);
+  assert.doesNotMatch(read("js/stacks.js"), /x\.setupOn/);
+  assert.doesNotMatch(read("js/stacks.js"), /combineDuplicates/);
+  assert.match(read("js/stacks.js"), /mergeFieldConflict/);
+  assert.match(read("css/app.css"), /\.lockBox \.link/);
+  assert.match(read("js/comms.js"), /GearLogic\.radioTxLabel/);
   assert.match(read("css/app.css"), /\.apShot\[hidden\]\{display:none\}/);
   assert.match(read("api/worker.js"), /publicWeightNote/);
   assert.match(read("js/cloud.js"), /marketSourceText\(i\)/);

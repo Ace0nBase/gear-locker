@@ -120,7 +120,7 @@ function render(){
   if(filter!=="All"&&!counts[filter])filter="All";
   $("chips").innerHTML=["All",...CATS.filter(c=>counts[c])].map(c=>`<button type="button" class="chip" aria-pressed="${c===filter}" data-c="${esc(c)}">${esc(c)}<small>${c==="All"?items.length:counts[c]}</small></button>`).join("");
   $("locations").innerHTML=[...new Set(items.map(i=>i.location).filter(Boolean))].map(v=>`<option>${esc(v)}</option>`).join("");
-  let rows=items.filter(i=>(filter==="All"||i.category===filter)&&(!q||[i.name,i.brand,i.color,i.setupOn,i.location,i.notes,i.category,i.serial,i.armId].join(" ").toLowerCase().includes(q)));
+  let rows=items.filter(i=>(filter==="All"||i.category===filter)&&(!q||[i.name,i.brand,i.color,i.location,i.notes,i.category,i.serial,i.armId].join(" ").toLowerCase().includes(q)));
   const sortKey=sort==="on"?"name":sort;
   const key={name:i=>(i.name||"").toLowerCase(),loc:i=>(i.location||"~").toLowerCase()}[sortKey]||(i=>(i.name||"").toLowerCase());
   rows.sort(sortKey==="val"?(a,b)=>(b.qty*GearLogic.countedValue(b)||0)-(a.qty*GearLogic.countedValue(a)||0):(a,b)=>key(a).localeCompare(key(b)));

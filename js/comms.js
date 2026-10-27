@@ -58,11 +58,11 @@ function chirpCsv(list,start){const head=CHIRP_HEAD.map(csvCell).join(",");const
 function parseCsv(t){const rows=[];let row=[],cur="",q=false;for(let i=0;i<t.length;i++){const c=t[i];if(q){if(c==='"'){if(t[i+1]==='"'){cur+='"';i++}else q=false}else cur+=c}else if(c==='"')q=true;else if(c===","){row.push(cur);cur=""}else if(c==="\n"||c==="\r"){if(c==="\r"&&t[i+1]==="\n")i++;row.push(cur);rows.push(row);row=[];cur=""}else cur+=c}if(cur||row.length){row.push(cur);rows.push(row)}return rows.filter(r=>r.some(x=>x.trim()))}
 function fromChirp(text){const rows=parseCsv(text);if(!rows.length)return[];const h=rows[0].map(x=>x.trim());const ix=k=>h.indexOf(k);if(ix("Frequency")<0)throw new Error("That isn't a CHIRP .csv (no Frequency column)");
   return rows.slice(1).map(r=>{const g=k=>(r[ix(k)]??"").trim();const rx=fnum(g("Frequency"));if(!rx)return null;let dup=g("Duplex");const tm=g("Tone");
-    const svc=guessService(rx);
+    const svc=guessService(rx, dup);
     return {ch:g("Location"),name:g("Name")||mhz(rx),short:g("Name"),rx:mhz(rx),duplex:dup,offset:dup==="+"||dup==="-"?mhz(g("Offset")):"",tx:dup==="split"?mhz(g("Offset")):"",
       toneMode:["Tone","TSQL","DTCS"].includes(tm)?tm:"",txTone:g("rToneFreq")||"",rxTone:g("cToneFreq")||"",dcs:g("DtcsCode")||"",mode:["FM","NFM","AM"].includes(g("Mode"))?g("Mode"):"FM",
       power:/^(1|low)/i.test(g("Power"))?"Low":"High",notes:g("Comment"),service:svc,group:"Imported",skip:g("Skip")==="S"}}).filter(Boolean)}
-function guessService(rx){return GearLogic.radioService(rx)}
+function guessService(rx, duplex){return GearLogic.radioService(rx, duplex)}
 async function saveFile(name,text,type){const blob=new Blob([text],{type});
   try{const file=new File([blob],name,{type});if(navigator.canShare&&navigator.canShare({files:[file]})&&/iphone|ipad|android/i.test(navigator.userAgent)){await navigator.share({files:[file],title:name});return}}catch(e){if(e.name==="AbortError")return}
   const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},2000)}
@@ -160,7 +160,7 @@ ACT.comms=async(act,b,e)=>{
   if(act==="pdel"){paceCollect();if(!paceEd._armed){paceEd._armed=true;renderExtra();return}await removeC("pace",paceEd.id);paceEd=null;toast("Deleted");render();return}
   if(act==="pprint"){const p=L("pace").find(x=>x.id===b.dataset.id);if(p)printPace(p);return}
 };
-function txLabel(f){const tx=txFreq(f);const offset=tx&&Math.abs(tx-fnum(f.rx))>1e-6;const rxOnly=f.duplex==="off"||!TX_OK(f.service);if((f.duplex==="+"||f.duplex==="-"||f.duplex==="split")&&offset)return mhz(tx);if(rxOnly)return "RX only";return "simplex"}
+function txLabel(f){return GearLogic.radioTxLabel(f)}
 function freqTable(list){return `<table><thead><tr><th>Ch</th><th>Name</th><th>RX MHz</th><th>TX</th><th>Tone</th><th>Mode</th><th>Notes</th></tr></thead><tbody>${list.map(f=>{const lab=txLabel(f);return `<tr><td>${esc(f.ch||"")}</td><td><b>${esc(f.name)}</b></td><td>${esc(mhz(f.rx))}</td><td>${esc(lab)}</td><td>${esc(toneTxt(f)||"—")}</td><td>${esc(f.mode||"FM")}</td><td>${esc(f.notes||"")}</td></tr>`}).join("")}</tbody></table>`}
 function printFreqs(){const cs=commsSet();const list=freqsSorted();const gs=[...new Set(list.map(f=>f.group||"Ungrouped"))];
   $("printSheet").innerHTML=`<div class="ph"><div><h1>FREQUENCY CARD</h1><small>${cs.callsign?esc(cs.callsign)+" · ":""}Printed ${new Date().toLocaleDateString()}</small></div></div>${gs.map(g=>`<h3>${esc(g)}</h3>${freqTable(list.filter(f=>(f.group||"Ungrouped")===g))}`).join("")}${L("pace").map(p=>paceCard(p,true)).join("")}`;window.print()}
@@ -217,7 +217,7 @@ var pgGroup=()=>paceGen?.in?.location?("Local — "+paceGen.in.location).slice(0
 {const _c=collect;collect=function(view){if(view==="comms"&&paceGen&&paceGen.stage!=="result")pgCollect();return _c(view)}}
 async function pgSaveNew(){const r=paceGen.res;const keep=new Set([...document.querySelectorAll("#pgForm [data-nf]:checked")].map(x=>+x.dataset.nf));const map={};
   const have=L("freqs");for(const [k,n] of r.newFreqs.entries()){if(!keep.has(k))continue;const dup=have.find(f=>mhz(f.rx)===mhz(n.rx)&&(f.duplex||"")===(n.duplex||""));if(dup){map[k]=dup.id;continue}
-    const svc=SERVICES.includes(n.service)?n.service:guessService(fnum(n.rx));
+    const svc=SERVICES.includes(n.service)?n.service:guessService(fnum(n.rx), n.duplex);
     const rec=await upsertC("freqs",{name:n.name,short:n.name.replace(/[^\w ]/g,"").slice(0,7).toUpperCase(),rx:mhz(n.rx),duplex:TX_OK(svc)?n.duplex:"off",offset:n.duplex?mhz(n.offset)||"0.600":"",toneMode:n.tone?"Tone":"",txTone:n.tone||"",mode:n.mode||"FM",power:"High",service:svc,group:pgGroup(),notes:[n.notes,n.source&&"src: "+n.source].filter(Boolean).join(" · ")});map[k]=rec.id}
   return map}
 function pgPlanRec(map){const r=paceGen.res,fs=paceGen.sent;const rec={name:r.name||"PACE plan",who:paceGen.in.people||"",checkin:r.checkin,rally:r.rally,codes:r.codes,notes:[r.summary,paceGen.in.location&&"Area: "+paceGen.in.location].filter(Boolean).join(" · ")};
