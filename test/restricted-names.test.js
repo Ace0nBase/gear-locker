@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { saleRestricted, lookupAnswerRestricted, pickModelAnswer, settleLookup, settleDeal, countedValue, csvExportField, keepManualPrice, gunMarketUrl, stripGunMarketText, publicWeightNote } from "../js/logic.js";
+import { saleRestricted, lookupAnswerRestricted, pickModelAnswer, settleLookup, settleDeal, countedValue, csvExportField, keepManualPrice, gunMarketUrl, stripGunMarketText, publicWeightNote, applyMarketPrices } from "../js/logic.js";
 
 test("firearm, suppressor, ammunition, and lower-receiver shelves are weight-only", () => {
   const blocked = [
@@ -251,6 +251,28 @@ test("bare domains, redirects, shorteners, and firearm-seller pages drop", () =>
   assert.equal(gunMarketUrl("https://www.cabelas.com/shop/en/fishing"), false);
   assert.equal(gunMarketUrl("https://www.basspro.com/shop/en/firearms"), true);
   assert.equal(gunMarketUrl("https://www.basspro.com/shop/en/boats"), false);
+  const wrapped = encodeURIComponent("https://www.gunbroker.com/item/1");
+  assert.equal(gunMarketUrl("https://evil.example/?u=" + wrapped), true);
+  assert.equal(gunMarketUrl("https://l.facebook.com/l.php?u=" + wrapped), true);
+  assert.equal(gunMarketUrl("https://out.reddit.com/out?url=" + wrapped), true);
+  assert.equal(gunMarketUrl("https://duckduckgo.com/l/?uddg=" + wrapped), true);
+  assert.equal(gunMarketUrl("https://www.google.co.uk/url?q=" + wrapped), true);
+  assert.equal(gunMarketUrl("https://www.google.de/url?q=" + encodeURIComponent("https://example.com/gear")), false);
+  assert.equal(gunMarketUrl("https://evil.example/?target=" + wrapped), true);
+  assert.equal(gunMarketUrl("https://evil.example/?dest=" + wrapped), true);
+  assert.equal(gunMarketUrl("https://evil.example/?redirect=" + wrapped), true);
+  assert.equal(gunMarketUrl("https://evil.example/?redirect_url=" + wrapped), true);
+  assert.equal(gunMarketUrl("https://evil.example/?to=" + wrapped), true);
+  assert.equal(gunMarketUrl("https://evil.example/?u=" + encodeURIComponent("https://example.com/gear")), false);
+  const nested = "https://evil.example/?u=" + encodeURIComponent("https://l.facebook.com/l.php?u=" + encodeURIComponent("https://duckduckgo.com/l/?uddg=" + wrapped));
+  assert.equal(gunMarketUrl(nested), true);
+  ["https://shorturl.at/abc", "https://rb.gy/abc", "https://tiny.cc/abc", "https://s.id/abc", "https://buff.ly/abc", "https://lnkd.in/abc", "https://bl.ink/abc", "https://t.ly/abc", "https://v.gd/abc", "https://x.co/abc", "https://qr.ae/abc", "https://shorte.st/abc", "https://adf.ly/abc", "https://linktr.ee/redirects/abc"].forEach(url => {
+    assert.equal(gunMarketUrl(url), true, url);
+  });
+  assert.equal(gunMarketUrl("https://linktr.ee/harbor"), false);
+  ["rainierarms.com", "ruger.com", "glock.com", "sgammo.com", "bulkammo.com", "dkfirearms.com", "gunbuyer.com", "gunprime.com", "ar15.com"].forEach(host => {
+    assert.equal(gunMarketUrl(`https://www.${host}/rifle-scopes/`), true, host);
+  });
   const redirected = settleLookup({ category: "Comms & Radios", name: "Harbor HT-100" }, {
     retailNew: 40, value: 28, priceNote: "Local shelf https://www.google.com/url?q=https%3A%2F%2Fgunbroker.com%2Fitem%2F1",
     sources: [
@@ -262,6 +284,60 @@ test("bare domains, redirects, shorteners, and firearm-seller pages drop", () =>
   assert.equal(redirected.retailNew, 40);
   assert.equal(/gunbroker/i.test(redirected.priceNote), false);
   assert.deepEqual(redirected.sources.map(s => s.label), ["Local shelf"]);
+});
+
+test("firearm pages match a whole path segment and gear pages stay", () => {
+  const blocked = ["firearms", "guns", "handguns", "rifles", "pistols", "shotguns", "ammo", "ammunition", "suppressors", "lowers"];
+  blocked.forEach(seg => {
+    assert.equal(gunMarketUrl(`https://www.brownells.com/${seg}/north-line/`), true, seg);
+    assert.equal(gunMarketUrl(`https://www.midwayusa.com/${seg}`), true, seg + " trailing");
+    assert.equal(gunMarketUrl(`https://www.OpticsPlanet.com/${seg.toUpperCase()}/`), true, seg + " case");
+  });
+  const gear = ["rifle-scopes", "pistol-holsters", "rifle-slings", "weapon-lights", "pistol-red-dots", "rifle-cleaning-kits", "rifle-cases", "ammo-cans"];
+  const stores = ["brownells.com", "primaryarms.com", "midwayusa.com", "opticsplanet.com", "academy.com", "scheels.com", "sportsmansguide.com", "eurooptic.com", "sigsauer.com", "budk.com"];
+  gear.forEach(seg => {
+    stores.forEach(host => assert.equal(gunMarketUrl(`https://www.${host}/${seg}/`), false, host + " " + seg));
+  });
+  assert.equal(gunMarketUrl("https://www.sigsauer.com/pistols"), true);
+  assert.equal(gunMarketUrl("https://www.academy.com/camping/tent/"), false);
+});
+
+test("a typed price on ordinary gear is not replaced by a market lookup", () => {
+  const lookup = {
+    retailNew: 40, usedLow: 20, usedHigh: 30, value: 28, priceNote: "Local shelf",
+    sources: [{ label: "Local shelf", url: "https://example.com/gear" }],
+  };
+  const typedRetail = applyMarketPrices({
+    category: "Pouches", name: "Parcel coat", condition: "Good",
+    retailNew: 180, value: 126, priceSource: "manual",
+  }, lookup, "2026-10-27");
+  assert.equal(typedRetail.retailNew, 180);
+  assert.equal(typedRetail.priceSource, "manual");
+  assert.equal(typedRetail.value, 28);
+  assert.equal(typedRetail.usedLow, 20);
+
+  const typedValue = applyMarketPrices({
+    category: "Pouches", name: "Parcel coat", retailNew: 0, value: 90, valueSource: "manual",
+  }, lookup, "2026-10-27");
+  assert.equal(typedValue.value, 90);
+  assert.equal(typedValue.valueSource, "manual");
+  assert.equal(typedValue.retailNew, 40);
+  assert.equal(typedValue.priceSource, "market");
+
+  const typedBoth = applyMarketPrices({
+    category: "Comms & Radios", name: "Harbor HT-100",
+    retailNew: 55, value: 40, priceSource: "manual", valueSource: "manual",
+  }, lookup, "2026-10-27");
+  assert.equal(typedBoth.retailNew, 55);
+  assert.equal(typedBoth.value, 40);
+  assert.equal(typedBoth.priceSource, "manual");
+  assert.equal(typedBoth.valueSource, "manual");
+
+  const empty = applyMarketPrices({ category: "Pouches", name: "Parcel coat", condition: "Good" }, lookup, "2026-10-27");
+  assert.equal(empty.retailNew, 40);
+  assert.equal(empty.value, 28);
+  assert.equal(empty.priceSource, "market");
+  assert.equal(empty.priceDate, "2026-10-27");
 });
 
 test("a restricted weight note drops spelled amounts and retailer words", () => {

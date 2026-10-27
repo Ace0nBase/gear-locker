@@ -320,12 +320,29 @@ export function saleRestricted(item) {
 }
 
 // Firearm marketplaces and firearm or ammunition retailers, matched by domain.
-// Stores that also sell gear drop only their firearm, ammunition, and suppressor pages.
-const GUN_MARKET_HOST = /(^|\.)((gunbroker|armslist|gunsamerica|palmettostatearmory|ammoseek|luckygunner|silencershop|wikiarms|cheaperthandirt|grabagun|budsgunshop|aimsurplus|kygunco|classicfirearms|impactguns|gunsinternational|galleryofguns|slickguns|truegunvalue|targetsportsusa|ammunitiondepot|ammobuy|silencercentral|capitolarmory)\.com|guns\.com|gun\.deals|ammo\.com|psa\.com)$/i;
-const SHORTENER_HOST = /^(bit\.ly|tinyurl\.com|t\.co|goo\.gl|ow\.ly|rebrand\.ly|cutt\.ly|is\.gd)$/i;
-const GEAR_STORE_HOST = /(^|\.)(brownells|primaryarms|natchezss|natchez|cabelas|basspro|sportsmans|sportsmanswarehouse)\.com$/i;
-const FIREARM_PATH = /firearm|ammo|ammunition|suppress|silencer|\blowers?\b|receivers?|rifles?|pistols?|shotguns?|handguns?|reloading|\bnfa\b|cartridges?|\bguns\b/i;
-const LINK_TOKEN = /https?:\/\/[^\s<>"']+|\b(?:www\.)?(?:[a-z0-9-]+\.)+(?:com|deals|ly|gl|gd|co)\b[^\s<>"']*/gi;
+// Stores that also sell gear drop only a firearm, ammunition, or suppressor path segment.
+const GUN_MARKET_HOSTS = new Set([
+  "gunbroker.com", "armslist.com", "gunsamerica.com", "palmettostatearmory.com", "ammoseek.com",
+  "luckygunner.com", "silencershop.com", "wikiarms.com", "cheaperthandirt.com", "grabagun.com",
+  "budsgunshop.com", "aimsurplus.com", "kygunco.com", "classicfirearms.com", "impactguns.com",
+  "gunsinternational.com", "galleryofguns.com", "slickguns.com", "truegunvalue.com", "targetsportsusa.com",
+  "ammunitiondepot.com", "ammobuy.com", "silencercentral.com", "capitolarmory.com", "guns.com",
+  "gun.deals", "ammo.com", "psa.com", "rainierarms.com", "ruger.com", "glock.com", "sgammo.com",
+  "bulkammo.com", "dkfirearms.com", "gunbuyer.com", "gunprime.com", "ar15.com",
+]);
+const SHORTENER_HOSTS = new Set([
+  "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "rebrand.ly", "cutt.ly", "is.gd",
+  "shorturl.at", "rb.gy", "tiny.cc", "s.id", "buff.ly", "lnkd.in", "bl.ink", "t.ly",
+  "v.gd", "x.co", "qr.ae", "shorte.st", "adf.ly",
+]);
+const GEAR_STORE_HOSTS = new Set([
+  "brownells.com", "primaryarms.com", "natchezss.com", "natchez.com", "cabelas.com", "basspro.com",
+  "sportsmans.com", "sportsmanswarehouse.com", "midwayusa.com", "opticsplanet.com", "academy.com",
+  "scheels.com", "sportsmansguide.com", "eurooptic.com", "sigsauer.com", "budk.com",
+]);
+const FIREARM_SEGMENTS = new Set(["firearms", "guns", "handguns", "rifles", "pistols", "shotguns", "ammo", "ammunition", "suppressors", "lowers"]);
+const REDIRECT_KEYS = new Set(["u", "q", "url", "uddg", "target", "dest", "redirect", "redirect_url", "to"]);
+const LINK_TOKEN = /https?:\/\/[^\s<>"']+|\b(?:www\.)?(?:[a-z0-9-]+\.)+(?:com|deals|ly|gl|gd|co|at|cc|id|gy|in|ink|ae|st|ee)\b[^\s<>"']*/gi;
 
 function parsedUrl(value) {
   try { return new URL(String(value)); } catch { return null; }
@@ -351,33 +368,65 @@ function pathText(url) {
   try { return decodeURIComponent(url.pathname || ""); } catch { return url.pathname || ""; }
 }
 
+function hostIn(host, names) {
+  let h = host;
+  while (h) {
+    if (names.has(h)) return true;
+    const dot = h.indexOf(".");
+    if (dot < 0) return false;
+    h = h.slice(dot + 1);
+  }
+  return false;
+}
+
+function firearmSegments(url) {
+  return pathText(url).split("/").map(part => part.trim().toLowerCase()).filter(Boolean).some(part => FIREARM_SEGMENTS.has(part));
+}
+
 function hostBlocked(url) {
   if (!url) return false;
   const host = normalizeHost(url.hostname);
   if (!host) return false;
-  if (SHORTENER_HOST.test(host)) return true;
-  if (GUN_MARKET_HOST.test(host)) return true;
-  if (GEAR_STORE_HOST.test(host) && FIREARM_PATH.test(pathText(url))) return true;
+  if (hostIn(host, SHORTENER_HOSTS)) return true;
+  if (host === "linktr.ee" && /^\/redirects(?:\/|$)/i.test(pathText(url))) return true;
+  if (hostIn(host, GUN_MARKET_HOSTS)) return true;
+  if (hostIn(host, GEAR_STORE_HOSTS) && firearmSegments(url)) return true;
   return false;
 }
 
-function unwrapRedirects(url, hops) {
-  if (!url || hops > 3) return url;
-  const host = normalizeHost(url.hostname);
-  if (host === "google.com" && (url.pathname === "/url" || url.pathname.startsWith("/url/"))) {
-    const target = url.searchParams.get("q") || url.searchParams.get("u") || url.searchParams.get("url");
-    const next = target ? toHttpUrl(target) : null;
-    if (next && next.href !== url.href) return unwrapRedirects(next, hops + 1);
+function httpTarget(value) {
+  let text = String(value || "").trim();
+  for (let i = 0; i < 2 && /%[0-9a-f]{2}/i.test(text); i++) {
+    try {
+      const decoded = decodeURIComponent(text);
+      if (decoded === text) break;
+      text = decoded;
+    } catch { break; }
   }
-  return url;
+  const url = toHttpUrl(text);
+  return url && /^https?:$/i.test(url.protocol) ? url : null;
+}
+
+function redirectTarget(url) {
+  for (const [key, value] of url.searchParams) {
+    if (!REDIRECT_KEYS.has(String(key).toLowerCase())) continue;
+    const next = httpTarget(value);
+    if (next) return next;
+  }
+  return null;
+}
+
+function chainBlocked(url, unwraps) {
+  if (!url) return false;
+  if (hostBlocked(url)) return true;
+  if (unwraps >= 3) return false;
+  const next = redirectTarget(url);
+  if (!next || next.href === url.href) return false;
+  return chainBlocked(next, unwraps + 1);
 }
 
 export function gunMarketUrl(value) {
-  const raw = toHttpUrl(value);
-  if (!raw) return false;
-  if (hostBlocked(raw)) return true;
-  const target = unwrapRedirects(raw, 0);
-  return target !== raw && hostBlocked(target);
+  return chainBlocked(toHttpUrl(value), 0);
 }
 
 export function stripGunMarketSources(sources) {
@@ -509,6 +558,31 @@ export function keepManualPrice(item, touch) {
     delete out.valueSource;
   }
   if (out.weightNote) out.weightNote = publicWeightNote(out.weightNote);
+  return out;
+}
+
+// A market lookup fills empty and auto-filled numbers. A retail or insured value the user typed stays.
+export function applyMarketPrices(item, result, day) {
+  const out = { ...(item && typeof item === "object" ? item : {}) };
+  const res = result && typeof result === "object" ? result : {};
+  const n = v => (v == null || v === "" || !isFinite(+v)) ? null : Math.round(+v);
+  const retailManual = out.priceSource === "manual" && +out.retailNew > 0;
+  const valueManual = out.valueSource === "manual" && +out.value > 0;
+  const retail = n(res.retailNew);
+  const value = n(res.value);
+  if (!retailManual && retail != null) out.retailNew = retail;
+  const usedLow = n(res.usedLow);
+  const usedHigh = n(res.usedHigh);
+  if (usedLow != null) out.usedLow = usedLow;
+  if (usedHigh != null) out.usedHigh = usedHigh;
+  if (!valueManual && value != null) out.value = value;
+  else if (!valueManual && value == null && +out.retailNew > 0) out.value = Math.round(+out.retailNew * (CONDITION_FACTOR[out.condition] ?? 0.6));
+  if (!retailManual) {
+    out.priceSource = "market";
+    if (day) out.priceDate = day;
+  }
+  out.priceNote = stripGunMarketText(res.priceNote || "").slice(0, 240);
+  out.marketSources = stripGunMarketSources(res.sources);
   return out;
 }
 
@@ -656,7 +730,7 @@ const GearLogic = {
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, publicWeightNote, lookupAnswerRestricted, localDay,
-  gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice,
+  gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
 };
 globalThis.GearLogic = GearLogic;

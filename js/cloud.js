@@ -293,22 +293,13 @@ async function apiLookup(list){
 var lookupBody=i=>{const restricted=GearLogic.saleRestricted(i);return {id:i.id,name:i.name,brand:i.brand||"",category:i.category||"",condition:i.condition||"",color:i.color||"",notes:"",arm:i.arm||"",caliber:i.caliber||"",load:i.load||"",weightOnly:restricted}};
 function applyLookup(id,res){
   const it=all.find(x=>x.id===id);if(!it||it.deleted||!res||!res.ok)return false;
-  const n=v=>v==null||v===""||!isFinite(+v)?null:Math.round(+v);
   const restricted=GearLogic.saleRestricted(it);
   if(restricted){delete it.usedLow;delete it.usedHigh;delete it.priceNote;it.marketSources=[]}
-  else{
-    if(n(res.retailNew)!=null)it.retailNew=n(res.retailNew);
-    if(n(res.usedLow)!=null)it.usedLow=n(res.usedLow);
-    if(n(res.usedHigh)!=null)it.usedHigh=n(res.usedHigh);
-    if(n(res.value)!=null&&it.valueSource!=="manual")it.value=n(res.value);
-    else if(it.valueSource!=="manual"&&it.retailNew&&n(res.value)==null)it.value=Math.round(it.retailNew*(FACTOR[it.condition]??0.6));
-    it.priceSource="market";it.priceDate=today();it.priceNote=GearLogic.stripGunMarketText(res.priceNote||"").slice(0,240);
-    it.marketSources=GearLogic.stripGunMarketSources(res.sources);
-  }
+  else Object.assign(it,GearLogic.applyMarketPrices(it,res,today()));
   if(res.weightOz!=null&&isFinite(+res.weightOz)&&+res.weightOz>0&&it.weightSource!=="manual"){it.weight=Math.round(+res.weightOz*10)/10;it.weightSource="lookup";it.weightStatus="done";it.weightNote=restricted?GearLogic.publicWeightNote(res.weightNote||""):GearLogic.stripGunMarketText(res.weightNote||"").slice(0,80)}
   else if(it.weight==null||it.weight==="")it.weightStatus="notfound";
   it.marketCheck="done";delete it.lookupError;it.updatedAt=now();
-  if(!$("form").hidden&&editing&&editing.id===it.id){editing=it;$("fRetail").value=(restricted&&it.priceSource!=="manual")?"":(it.retailNew||"");if(!valueDirty)$("fVal").value=(restricted&&it.valueSource!=="manual")?"":(it.value||"");if(!$("fWt").value&&it.weight!=null)$("fWt").value=it.weight;showPrice(it)}
+  if(!$("form").hidden&&editing&&editing.id===it.id){editing=it;if(!retailDirty)$("fRetail").value=(restricted&&it.priceSource!=="manual")?"":(it.retailNew||"");if(!valueDirty)$("fVal").value=(restricted&&it.valueSource!=="manual")?"":(it.value||"");if(!$("fWt").value&&it.weight!=null)$("fWt").value=it.weight;showPrice(it)}
   return true;
 }
 async function runLookups(ids,quiet){
@@ -329,11 +320,13 @@ async function runLookups(ids,quiet){
 }
 var _saveCurrent=saveCurrent;
 saveCurrent=async function(extra){
-  const before=editing?{...editing}:null;const valueTyped=valueDirty&&$("fVal").value!=="";
+  const before=editing?{...editing}:null;const valueTyped=valueDirty&&$("fVal").value!=="";const retailTyped=retailDirty&&$("fRetail").value!==""&&Math.round(parseFloat($("fRetail").value)||0)>0;
   const rec=await _saveCurrent(extra);if(!rec)return rec;
+  if(retailTyped)rec.priceSource="manual";
+  else if(retailDirty&&!(+rec.retailNew>0)&&rec.priceSource==="manual"){delete rec.priceSource;delete rec.priceDate}
   if(valueTyped&&(!before||+before.value!==+rec.value))rec.valueSource="manual";
   else if(!valueTyped&&rec.valueSource==="manual"&&!$("fVal").value)delete rec.valueSource;
-  if(rec.valueSource!==before?.valueSource)await persist();
+  if(rec.priceSource!==before?.priceSource||rec.valueSource!==before?.valueSource)await persist();
   const restricted=GearLogic.saleRestricted(rec);
   if(restricted){
     const kept=GearLogic.keepManualPrice(rec,{retail:!!retailDirty,value:!!valueDirty,retailWasManual:!!(before&&before.priceSource==="manual"),valueWasManual:!!(before&&before.valueSource==="manual")});
@@ -343,7 +336,7 @@ saveCurrent=async function(extra){
     await persist();
   }
   const changed=!before||before.name!==rec.name||before.brand!==rec.brand||before.category!==rec.category||before.arm!==rec.arm||(!restricted&&before.condition!==rec.condition);
-  const needs=restricted?(rec.weight==null||rec.weight===""):(rec.priceSource!=="market"||rec.weight==null||rec.weight==="");
+  const needs=restricted?(rec.weight==null||rec.weight===""):((rec.priceSource!=="market"&&rec.priceSource!=="manual")||rec.weight==null||rec.weight==="");
   if(window.LOOKUP_URL&&cloudUser&&!extra&&(changed||needs))runLookups([rec.id],true);
   return rec;
 };

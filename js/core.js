@@ -220,7 +220,6 @@ async function saveCurrent(extra){
   if(editing){
     const cur=all.find(i=>i.id===editing.id)||editing;
     rec={...cur,...data};
-    if(editing.priceSource==="market"&&Math.round(editing.value)!==data.value&&!extra)rec.priceSource="manual";
     all=all.map(i=>i.id===rec.id?rec:i);
   }else{
     rec={id:(crypto.randomUUID?crypto.randomUUID():"g"+Date.now()+Math.random().toString(36).slice(2)),createdAt:data.updatedAt,...data};
