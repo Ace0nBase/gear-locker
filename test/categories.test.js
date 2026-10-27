@@ -6,9 +6,11 @@ import {
   MAGAZINES_CATEGORY, LEGACY_MAGAZINES_CATEGORY, BELTS_CATEGORY, LEGACY_BELTS_CATEGORY, ARMOR_CATEGORY,
   saleRestricted, migrateCategoryName, migrateRecordCategories,
   settleLookup, settleDeal, keepManualPrice, stampManualPrices, countedValue, csvExportField, applyMarketPrices,
-  magShelfPending, answerMagShelf, beltRigPending, answerBeltRig,
+  magShelfPending, answerMagShelf, beltRigPending, answerBeltRig, magazinesBeltPending, answerMagazinesBelt,
+  clearMagazineAutoPrices, slotAllowsCategory, starterSlotScore, keepMovedCategory, mergeByServerTime, mergeCategoryAnswers,
   photoIdBlocked, photoIdHardBlocked, photoIdBlockReason, photoIdSuggestion, pricedPhotoCategories,
 } from "../js/logic.js";
+import { SEED_ITEMS } from "../seed-data.mjs";
 
 const priced = {
   retailNew: 40, usedLow: 20, usedHigh: 30, value: 28, weightOz: 12.5,
@@ -210,10 +212,13 @@ test("old magazine and belt ids rename in place, and a rig moves only when the o
   assert.equal(beltRigPending(out.records[1]), true);
   assert.equal(out.records[2].category, "Magazines");
   assert.equal(out.records[2].migratedFromMagShelf, undefined);
+  assert.equal(magazinesBeltPending(out.records[2]), true);
   assert.equal(beltRigPending(out.records[2]), false);
   assert.equal(saleRestricted(out.records[2]), true);
   assert.equal(out.records[2].paid, 80);
   assert.equal(out.records[2].retailNew, 90);
+  assert.equal(out.records[2].priceSource, "manual");
+  assert.equal(out.records[2].value, 0);
   assert.equal(out.records[3].category, "Magazines");
   assert.equal(out.records[3].updatedAt, undefined);
   assert.equal(out.records[4].category, "Armor & Carriers");
@@ -248,6 +253,7 @@ test("old magazine and belt ids rename in place, and a rig moves only when the o
   assert.equal(moved.records[0].retailNew, 220);
   assert.equal(moved.records[0].link, "https://example.com/rig");
   assert.equal(moved.records[0].paid, 200);
+  assert.equal(moved.records[0].movedAt, later);
   assert.equal(moved.records[1].category, "Belts");
   assert.equal(beltRigPending(moved.records[1]), true);
   const dismissed = answerBeltRig(out.records, "dismiss", "", later);
@@ -273,6 +279,130 @@ test("old magazine and belt ids rename in place, and a rig moves only when the o
   assert.equal(blocked.retailNew, null);
   assert.deepEqual(blocked.sources, []);
   assert.equal(blocked.priceNote, "");
+});
+
+test("moving a magazine shelf row clears auto prices and an old id does not undo the move", () => {
+  const stamp = "2026-10-27T12:00:00.000Z";
+  const later = "2026-10-27T13:00:00.000Z";
+  const sources = [{ label: "Amazon", url: "https://www.amazon.com/pmag" }];
+  const out = migrateRecordCategories([
+    {
+      id: "pmag", category: "Magazines & Belts", name: "PMAG 30", paid: 14,
+      retailNew: 28, value: 28, priceSource: "market", priceDate: "2026-10-01", priceNote: "Amazon $28",
+      usedLow: 20, usedHigh: 30, link: "https://www.amazon.com/pmag", marketSources: sources,
+      marketCheck: "done", marketCheckAt: "2026-10-01", deal: { price: 22 }, target: 25, estPrice: 28,
+    },
+    {
+      id: "typed", category: "Magazines", name: "Lancer", paid: 16,
+      retailNew: 20, value: 18, priceSource: "manual", valueSource: "manual",
+    },
+  ], stamp);
+  const pmag = out.records[0];
+  assert.equal(pmag.category, "Magazines");
+  assert.equal(magazinesBeltPending(pmag), true);
+  assert.equal(pmag.paid, 14);
+  assert.equal(pmag.retailNew, 0);
+  assert.equal(pmag.value, 0);
+  assert.equal(pmag.priceSource, undefined);
+  assert.equal(pmag.link, "");
+  assert.deepEqual(pmag.marketSources, []);
+  assert.equal(pmag.deal, undefined);
+  assert.equal(pmag.target, undefined);
+  assert.equal(pmag.estPrice, undefined);
+  assert.equal(pmag.marketCheck, undefined);
+  assert.equal(pmag.priceNote, undefined);
+  assert.equal(countedValue(pmag), 0);
+  assert.equal(out.records[1].retailNew, 20);
+  assert.equal(out.records[1].value, 18);
+  assert.equal(out.records[1].paid, 16);
+  assert.equal(magazinesBeltPending(out.records[1]), false);
+  const again = migrateRecordCategories(out.records, later);
+  assert.equal(again.changed, false);
+  assert.equal(again.records, out.records);
+  const filled = applyMarketPrices(pmag, { retailNew: 40, value: 30, sources }, "2026-10-28");
+  assert.equal(filled.retailNew, 0);
+  assert.equal(filled.value, 0);
+  const moved = answerMagazinesBelt(out.records, "move-belts", "pmag", later);
+  assert.equal(moved.records[0].category, "Belts");
+  assert.equal(moved.records[0].movedAt, later);
+  assert.equal(magazinesBeltPending(moved.records[0]), false);
+  assert.equal(moved.records[0].paid, 14);
+  const stored = answerMagazinesBelt(out.records, "move-storage", "pmag", later);
+  assert.equal(stored.records[0].category, "Ammo Storage & Loaders");
+  const guessed = answerMagazinesBelt(out.records, "move-all", "", later);
+  assert.equal(guessed.changed, false);
+  assert.equal(guessed.records[0].category, "Magazines");
+  const dismissed = answerMagazinesBelt(out.records, "dismiss", "", later);
+  assert.equal(dismissed.records[0].category, "Magazines");
+  assert.equal(magazinesBeltPending(dismissed.records[0]), false);
+  const book = mergeCategoryAnswers({}, { pmag: { prompt: "magazines", action: "dismiss", category: "Magazines", at: later } });
+  const revived = migrateRecordCategories([
+    { id: "pmag", category: "Magazines & Belts", name: "PMAG 30", paid: 14, retailNew: 28, value: 28, priceSource: "market", link: "https://www.amazon.com/pmag", updatedAt: "2026-10-27T15:00:00.000Z" },
+  ], "2026-10-27T16:00:00.000Z", book);
+  assert.equal(revived.records[0].category, "Magazines");
+  assert.equal(magazinesBeltPending(revived.records[0]), false);
+  assert.equal(revived.records[0].retailNew, 0);
+  assert.equal(revived.records[0].paid, 14);
+  const kept = keepMovedCategory(
+    { id: "rig", category: "Belts & Rigs", name: "renamed on the old phone", updatedAt: "2026-10-27T18:00:00.000Z" },
+    { id: "rig", category: "Armor & Carriers", name: "Ferro Slickster", movedAt: later, updatedAt: later },
+    { id: "rig", category: "Belts & Rigs", name: "renamed on the old phone", updatedAt: "2026-10-27T18:00:00.000Z" },
+  );
+  assert.equal(kept.category, "Armor & Carriers");
+  assert.equal(kept.movedAt, later);
+  assert.equal(kept.name, "renamed on the old phone");
+  const merged = mergeByServerTime(
+    { id: "rig", category: "Armor & Carriers", name: "Ferro Slickster", movedAt: later, updatedAt: later },
+    { id: "rig", category: "Belts & Rigs", name: "renamed on the old phone", updatedAt: "2026-10-27T18:00:00.000Z" },
+  );
+  assert.equal(merged.category, "Armor & Carriers");
+  assert.equal(merged.movedAt, later);
+  assert.equal(merged.name, "renamed on the old phone");
+  const reread = migrateRecordCategories([merged], "2026-10-27T19:00:00.000Z");
+  assert.equal(reread.changed, false);
+  assert.equal(reread.records[0].category, "Armor & Carriers");
+  assert.equal(clearMagazineAutoPrices({ category: "Belts", retailNew: 80, paid: 70 }).retailNew, 80);
+  assert.equal(saleRestricted({ category: "Ammunition", name: "belted 5.56" }), true);
+  assert.equal(saleRestricted({ category: "Ammunition", name: "ammunition belt" }), true);
+  assert.equal(saleRestricted({ kind: "ammo", category: "Ammunition", name: "linked belt" }), true);
+  assert.equal(GEAR_CATEGORIES.some(c => /linked/i.test(c)), false);
+});
+
+test("a migrated seed kit keeps the Range Day loader score", () => {
+  const loader = SEED_ITEMS.find(i => i.id === "loader");
+  const carrier = SEED_ITEMS.find(i => i.id === "carrier");
+  const belt = SEED_ITEMS.find(i => i.id === "belt");
+  const ammocan = SEED_ITEMS.find(i => i.id === "ammocan");
+  const snap = SEED_ITEMS.find(i => i.id === "snapcaps");
+  const pouch = SEED_ITEMS.find(i => i.id === "pistolmag");
+  const loaderSlot = ["Mag loader", ["Ammo Storage & Loaders", "Mags & Ammo Storage", "Magazines & Belts", "Knives & Tools"], ["loader", "uplula", "maglula", "lula", "speed loader", "stripper"], "", []];
+  const ammocanSlot = ["Ammo can", ["Ammo Storage & Loaders", "Mags & Ammo Storage", "Magazines & Belts", "Cases & Bags"], ["ammo can", "ammo box", "ammo bag", "ammo crate", "ammo"], "", []];
+  const snapSlot = ["Snap caps", ["Ammo Storage & Loaders", "Magazines", "Magazines & Belts", "Misc"], ["snap cap", "dummy round", "dummy rounds", "a-zoom", "azoom", "inert round"], "", []];
+  const pistolSlot = ["Pistol mag pouch", ["Pouches", "Ammo Storage & Loaders", "Magazines", "Magazines & Belts"], ["pistol mag", "pistol", "9mm", "handgun", "glock"], "", []];
+  const carrierSlot = ["Plate carrier / chest rig", ["Armor & Carriers", "Belts"], ["plate carrier", "carrier", "jpc", "avs", "apc", "chest rig", "spc", "fcpc", "lv-119", "slickster", "micro rig", "mk3", "mk4"], "", ["belt"]];
+  assert.equal(starterSlotScore(loaderSlot, loader), 8);
+  const migrated = migrateRecordCategories(SEED_ITEMS, "2026-10-27T12:00:00.000Z").records;
+  const movedLoader = migrated.find(i => i.id === "loader");
+  assert.equal(movedLoader.category, "Magazines");
+  assert.equal(starterSlotScore(loaderSlot, movedLoader), 8);
+  assert.equal(starterSlotScore(ammocanSlot, migrated.find(i => i.id === "ammocan")), 8);
+  assert.equal(starterSlotScore(snapSlot, migrated.find(i => i.id === "snapcaps")), 8);
+  assert.equal(starterSlotScore(pistolSlot, migrated.find(i => i.id === "pistolmag")), 8);
+  assert.equal(migrated.find(i => i.id === "belt").category, "Belts");
+  assert.equal(migrated.find(i => i.id === "carrier").category, "Armor & Carriers");
+  assert.equal(starterSlotScore(carrierSlot, { ...carrier, category: "Belts" }), 8);
+  assert.equal(starterSlotScore(carrierSlot, { ...carrier, category: "Belts & Rigs" }), 8);
+  assert.equal(slotAllowsCategory(loaderSlot[1], ammocan.category), true);
+  assert.equal(slotAllowsCategory(loaderSlot[1], "Magazines"), true);
+  assert.equal(slotAllowsCategory(pistolSlot[1], snap.category), true);
+  assert.equal(slotAllowsCategory(carrierSlot[1], belt.category), true);
+  assert.equal(slotAllowsCategory(carrierSlot[1], "Belts & Rigs"), true);
+  const before = SEED_ITEMS.filter(i => ["headset", "eyepro", "mags", "holster", "sling", "targets", "loader", "ammocan", "ifak", "tq"].includes(i.id))
+    .reduce((n, i) => n + (starterSlotScore(i.id === "loader" ? loaderSlot : i.id === "ammocan" ? ammocanSlot : ["x", [i.category], [String(i.name).toLowerCase().split(" ")[0]], "", []], i) > 0 ? 1 : 0), 0);
+  assert.equal(before, 10);
+  const after = migrated.filter(i => ["headset", "eyepro", "mags", "holster", "sling", "targets", "loader", "ammocan", "ifak", "tq"].includes(i.id))
+    .reduce((n, i) => n + (starterSlotScore(i.id === "loader" ? loaderSlot : i.id === "ammocan" ? ammocanSlot : ["x", [migrateCategoryName(i.category), i.category], [String(i.name).toLowerCase().split(" ")[0]], "", []], i) > 0 ? 1 : 0), 0);
+  assert.equal(after, 10);
 });
 
 test("photo ID is blocked for firearm records even when the armory opt-out is off", () => {
@@ -357,7 +487,8 @@ test("the price prompt backstop names magazines over 30 rounds, ammunition belts
   assert.match(core, /showBeltRigPrompt/);
   assert.match(worker, /A plate carrier or chest rig uses Armor & Carriers/);
   assert.match(worker, /A battle belt, duty belt, or rigger's belt uses Belts/);
-  assert.doesNotMatch(core, /Mags & Ammo Storage/);
+  assert.doesNotMatch(core, /on Mags & Ammo Storage/);
+  assert.match(core, /Mags &amp; Ammo Storage/);
   assert.match(fs.readFileSync(new URL("../js/arms.js", import.meta.url), "utf8"), /photoIdSuggestion/);
   assert.match(fs.readFileSync(new URL("../js/arms.js", import.meta.url), "utf8"), /idBtn"\)\.disabled|btn\.disabled=blocked/);
 });

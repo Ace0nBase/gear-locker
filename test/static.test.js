@@ -48,12 +48,13 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device and the service worker is version 31", () => {
+test("sign-out clears this device and the service worker cache is version 32", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v31/);
+  assert.match(sw, /war-box-v32/);
+  assert.match(sw, /skip-waiting/);
   assert.match(read("js/cloud.js"), /APP_VERSION="31"/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
@@ -130,7 +131,14 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/core.js"), /Move to Armor &amp; Carriers/);
   assert.match(read("js/core.js"), /data-belt="dismiss"/);
   assert.doesNotMatch(read("js/core.js"), /Move all to Armor/);
-  assert.doesNotMatch(read("js/core.js"), /Magazines & Belts/);
+  assert.match(read("js/core.js"), /Move to Belts/);
+  assert.match(read("js/core.js"), /Move to Ammo Storage &amp; Loaders/);
+  assert.match(read("js/core.js"), /Wishlist/);
+  assert.match(read("js/core.js"), /\["Armor & Carriers","Belts"\]/);
+  assert.match(read("js/core.js"), /\["Ammo Storage & Loaders","Mags & Ammo Storage","Magazines & Belts","Knives & Tools"\]/);
+  assert.match(read("js/core.js"), /\["Ammo Storage & Loaders","Mags & Ammo Storage","Magazines & Belts","Cases & Bags"\]/);
+  assert.match(read("js/core.js"), /\["Pouches","Ammo Storage & Loaders","Magazines","Magazines & Belts"\]/);
+  assert.match(read("js/core.js"), /\["Ammo Storage & Loaders","Magazines","Magazines & Belts","Misc"\]/);
   assert.doesNotMatch(read("js/core.js"), /Belts & Rigs/);
   assert.match(read("js/logic.js"), /migratedFromMagShelf/);
   assert.match(read("js/logic.js"), /migratedFromBeltRig/);
@@ -140,7 +148,11 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("index.html"), /id="fCatHint"/);
   assert.doesNotMatch(read("js/kits.js"), /Magazines & Belts|Belts & Rigs/);
   assert.doesNotMatch(read("js/stacks.js"), /Magazines & Belts|Belts & Rigs/);
-  assert.match(read("README.md"), /There is no linked-ammo category/);
+  assert.doesNotMatch(read("README.md"), /linked-ammo/);
+  assert.doesNotMatch(read("README.md"), /ammunition belt/);
+  assert.match(read("css/app.css"), /\.pkn b\{display:block;min-width:0;overflow-wrap:anywhere\}/);
+  assert.match(read("js/cloud.js"), /categoryAnswers/);
+  assert.match(read("js/logic.js"), /movedAt/);
   assert.match(read("js/comms.js"), /GearLogic\.radioTxLabel/);
   assert.match(read("css/app.css"), /\.apShot\[hidden\]\{display:none\}/);
   assert.match(read("api/worker.js"), /publicWeightNote/);

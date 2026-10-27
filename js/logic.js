@@ -78,7 +78,37 @@ export function serverStampIso(v) {
   return "";
 }
 
+function legacyCategoryId(category) {
+  const key = categoryKey(category);
+  return key === LEGACY_BELTS_KEY || key === LEGACY_MAGAZINES_KEY || key === LEGACY_STORAGE_KEY;
+}
+
+// An explicit Move stamps movedAt. A later save that still carries an old category id does not undo it.
+export function keepMovedCategory(winner, local, remote) {
+  if (!winner || !legacyCategoryId(winner.category)) return winner;
+  const moved = [local, remote].filter(row => row && row.movedAt && !legacyCategoryId(row.category))
+    .sort((a, b) => String(a.movedAt).localeCompare(String(b.movedAt)));
+  const best = moved[moved.length - 1];
+  if (!best) return winner;
+  if (winner.category === best.category && winner.movedAt === best.movedAt) return winner;
+  return { ...winner, category: best.category, movedAt: best.movedAt };
+}
+
+export function mergeCategoryAnswers(local, remote) {
+  const out = { ...(local && typeof local === "object" ? local : {}) };
+  Object.entries(remote && typeof remote === "object" ? remote : {}).forEach(([id, answer]) => {
+    if (!id || !answer || typeof answer !== "object") return;
+    const prev = out[id];
+    if (!prev || String(answer.at || "") >= String(prev.at || "")) out[id] = answer;
+  });
+  return out;
+}
+
 export function mergeByServerTime(local, remote, inflight) {
+  return keepMovedCategory(mergeByServerTimeWinner(local, remote, inflight), local, remote);
+}
+
+function mergeByServerTimeWinner(local, remote, inflight) {
   inflight = inflight || {};
   if (!remote) return local;
   if (!local) return remote;
@@ -334,18 +364,77 @@ export function migrateCategoryName(category) {
   return CATEGORY_RENAMES.get(categoryKey(raw)) || raw;
 }
 
-export function migrateRecordCategories(records, stamp) {
+function categoryAnswer(book, row) {
+  if (!book || !row || !row.id) return null;
+  const answer = book[row.id];
+  return answer && typeof answer === "object" ? answer : null;
+}
+
+function answeredMove(answer, prompt) {
+  return !!(answer && answer.prompt === prompt && answer.action === "move" && answer.category);
+}
+
+export function migrateRecordCategories(records, stamp, answers) {
   let changed = false;
   const list = Array.isArray(records) ? records : [];
+  const book = answers && typeof answers === "object" ? answers : null;
   const next = list.map(row => {
     if (!row || typeof row !== "object") return row;
-    const category = migrateCategoryName(row.category);
-    if (category === row.category) return row;
-    changed = true;
     const from = categoryKey(row.category);
-    const copy = { ...row, category, updatedAt: stamp || row.updatedAt || "" };
-    if (from === LEGACY_STORAGE_KEY) copy.migratedFromMagShelf = true;
-    if (from === LEGACY_BELTS_KEY) copy.migratedFromBeltRig = true;
+    const answer = categoryAnswer(book, row);
+    let category = migrateCategoryName(row.category);
+    if (from === LEGACY_BELTS_KEY && answeredMove(answer, "belt")) category = answer.category;
+    if (from === LEGACY_MAGAZINES_KEY && answeredMove(answer, "magazines")) category = answer.category;
+    if (from === LEGACY_STORAGE_KEY && answeredMove(answer, "storage")) category = answer.category;
+    const beltAnswered = !!(answer && answer.prompt === "belt");
+    const magAnswered = !!(answer && answer.prompt === "magazines");
+    const storageAnswered = !!(answer && answer.prompt === "storage");
+    let copy = row;
+    let dirty = category !== row.category;
+    if (dirty) copy = { ...row, category, updatedAt: stamp || row.updatedAt || "" };
+    if (from === LEGACY_STORAGE_KEY && !storageAnswered && !copy.migratedFromMagShelf) {
+      copy = { ...copy, migratedFromMagShelf: true, updatedAt: stamp || copy.updatedAt || "" };
+      dirty = true;
+    }
+    if (from === LEGACY_BELTS_KEY && !beltAnswered && !copy.migratedFromBeltRig) {
+      copy = { ...copy, migratedFromBeltRig: true, updatedAt: stamp || copy.updatedAt || "" };
+      dirty = true;
+    }
+    if (from === LEGACY_MAGAZINES_KEY && !magAnswered && !copy.migratedFromMagazinesBelts) {
+      copy = { ...copy, migratedFromMagazinesBelts: true, updatedAt: stamp || copy.updatedAt || "" };
+      dirty = true;
+    }
+    if (storageAnswered && copy.migratedFromMagShelf) {
+      copy = { ...copy };
+      delete copy.migratedFromMagShelf;
+      copy.updatedAt = stamp || copy.updatedAt || "";
+      dirty = true;
+    }
+    if (beltAnswered && copy.migratedFromBeltRig) {
+      copy = { ...copy };
+      delete copy.migratedFromBeltRig;
+      copy.updatedAt = stamp || copy.updatedAt || "";
+      dirty = true;
+    }
+    if (magAnswered && copy.migratedFromMagazinesBelts) {
+      copy = { ...copy };
+      delete copy.migratedFromMagazinesBelts;
+      copy.updatedAt = stamp || copy.updatedAt || "";
+      dirty = true;
+    }
+    if (answeredMove(answer, "belt") || answeredMove(answer, "magazines") || answeredMove(answer, "storage")) {
+      if (copy.category === answer.category && !copy.movedAt) {
+        copy = { ...copy, movedAt: answer.at || stamp || copy.updatedAt || "" };
+        dirty = true;
+      }
+    }
+    if (magazineCategory(copy) && magazineAutoDirty(copy)) {
+      copy = clearMagazineAutoPrices({ ...copy, category: migrateCategoryName(copy.category) });
+      copy.updatedAt = stamp || copy.updatedAt || "";
+      dirty = true;
+    }
+    if (!dirty) return row;
+    changed = true;
     return copy;
   });
   return { records: changed ? next : list, changed };
@@ -398,10 +487,113 @@ export function answerBeltRig(records, action, id, stamp) {
     changed = true;
     const copy = { ...row, updatedAt: stamp || row.updatedAt || "" };
     delete copy.migratedFromBeltRig;
-    if (move) copy.category = ARMOR_CATEGORY;
+    if (move) {
+      copy.category = ARMOR_CATEGORY;
+      copy.movedAt = stamp || copy.updatedAt || "";
+    }
     return copy;
   });
   return { records: changed ? next : list, changed };
+}
+
+// True only for a row the Magazines & Belts rename marked. The item name is never read.
+export function magazinesBeltPending(item) {
+  return !!(item && item.migratedFromMagazinesBelts === true);
+}
+
+// Move sends that one row to Belts or Ammo Storage & Loaders. Dismiss leaves every pending row on Magazines.
+// There is no move-all and no name check: a magazine and a belt share this shelf until the owner picks.
+export function answerMagazinesBelt(records, action, id, stamp) {
+  const list = Array.isArray(records) ? records : [];
+  const dest = action === "move-belts" ? BELTS_CATEGORY : action === "move-storage" ? STORAGE_CATEGORY : "";
+  let changed = false;
+  const next = list.map(row => {
+    if (!magazinesBeltPending(row)) return row;
+    const move = !!dest && row.id === id;
+    if (action !== "dismiss" && !move) return row;
+    changed = true;
+    const copy = { ...row, updatedAt: stamp || row.updatedAt || "" };
+    delete copy.migratedFromMagazinesBelts;
+    if (move) {
+      copy.category = dest;
+      copy.movedAt = stamp || copy.updatedAt || "";
+    }
+    return copy;
+  });
+  return { records: changed ? next : list, changed };
+}
+
+export function magazineCategory(item) {
+  const raw = categoryKey(item && item.category);
+  const migrated = categoryKey(migrateCategoryName(item && item.category));
+  return raw === MAGAZINES_KEY || raw === LEGACY_MAGAZINES_KEY || migrated === MAGAZINES_KEY;
+}
+
+function magazineAutoDirty(row) {
+  if (!row || typeof row !== "object") return false;
+  if (row.priceSource !== "manual" && (+row.retailNew > 0 || row.priceSource || row.priceDate || row.priceNote || row.usedLow != null || row.usedHigh != null)) return true;
+  if (row.valueSource !== "manual" && +row.value > 0) return true;
+  if (row.priceSource !== "manual" && row.estPrice != null && row.estPrice !== "" && +row.estPrice > 0) return true;
+  if (row.link) return true;
+  if (Array.isArray(row.marketSources) && row.marketSources.length) return true;
+  if (row.deal) return true;
+  if (row.target != null && row.target !== "" && +row.target > 0) return true;
+  if (row.marketCheck || row.marketCheckAt || row.dealSeen) return true;
+  return false;
+}
+
+// Drop market value, market data, store links, deal, and watch state. Keep a typed price and what I paid.
+export function clearMagazineAutoPrices(row) {
+  if (!row || typeof row !== "object" || !magazineCategory(row)) return row;
+  const retailManual = row.priceSource === "manual";
+  const valueManual = row.valueSource === "manual";
+  const out = keepManualPrice({ ...row }, { retailWasManual: retailManual, valueWasManual: valueManual });
+  delete out.deal;
+  delete out.target;
+  delete out.marketCheck;
+  delete out.marketCheckAt;
+  delete out.dealSeen;
+  if (!retailManual) delete out.estPrice;
+  if (out.link) out.link = "";
+  out.marketSources = [];
+  return out;
+}
+
+// A slot list may name the current shelf, the old id, or both. Gear that already moved to the new id still matches.
+export function slotAllowsCategory(allowed, category) {
+  const list = Array.isArray(allowed) ? allowed : [];
+  const raw = String(category == null ? "" : category);
+  if (!raw) return false;
+  if (list.includes(raw)) return true;
+  const migrated = migrateCategoryName(raw) || raw;
+  if (list.includes(migrated)) return true;
+  return list.some(entry => {
+    const next = migrateCategoryName(entry);
+    return next === raw || next === migrated;
+  });
+}
+
+export function starterSlotScore(slot, item) {
+  if (!slot || !item) return 0;
+  const cats = slot.categories || slot[1] || [];
+  const kws = slot.keywords || slot[2] || [];
+  const ex = slot.exclude || slot[4] || [];
+  const text = ` ${[item.name, item.brand, item.notes].join(" ")} `.toLowerCase();
+  const category = migrateCategoryName(item.category);
+  if (category === "Firearms" || category === "Suppressors" || item.category === "Firearms" || item.category === "Suppressors") return 0;
+  if (!slotAllowsCategory(cats, item.category)) return 0;
+  if (ex.some(k => text.includes(String(k).toLowerCase()))) return 0;
+  const hit = kws.some(k => {
+    const word = String(k).trim().toLowerCase();
+    if (!word) return false;
+    const re = new RegExp("(^|[^a-z0-9])" + word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    return re.test(text);
+  });
+  if (!hit) return 0;
+  let sc = 7;
+  if (item.condition === "New" || item.condition === "Good") sc += 1;
+  if (item.condition === "Needs-repair") sc -= 3;
+  return Math.max(sc, 0.5);
 }
 
 // Automatic prices stop at the firearm, suppressor, ammunition, lower-receiver,
@@ -724,7 +916,7 @@ export function stampManualPrices(item, before, touch) {
 // A market lookup fills empty and auto-filled numbers. A retail or insured value the user typed stays.
 export function applyMarketPrices(item, result, day) {
   const out = { ...(item && typeof item === "object" ? item : {}) };
-  if (magShelfPending(out)) return out;
+  if (magShelfPending(out) || saleRestricted(out)) return out;
   const res = result && typeof result === "object" ? result : {};
   const n = v => (v == null || v === "" || !isFinite(+v)) ? null : Math.round(+v);
   const retailManual = out.priceSource === "manual" && +out.retailNew > 0;
@@ -1000,7 +1192,9 @@ const GearLogic = {
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
   LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, MAGAZINES_CATEGORY, LEGACY_MAGAZINES_CATEGORY, BELTS_CATEGORY, LEGACY_BELTS_CATEGORY, ARMOR_CATEGORY, GEAR_CATEGORIES, CATEGORY_HINTS, PRICE_BACKSTOP,
-  migrateCategoryName, migrateRecordCategories, magShelfPending, answerMagShelf, beltRigPending, answerBeltRig, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, photoIdBlockReason,
+  migrateCategoryName, migrateRecordCategories, magShelfPending, answerMagShelf, beltRigPending, answerBeltRig,
+  magazinesBeltPending, answerMagazinesBelt, magazineCategory, clearMagazineAutoPrices, slotAllowsCategory, starterSlotScore,
+  keepMovedCategory, mergeCategoryAnswers, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, photoIdBlockReason,
   timerShotAccepted, radioService, radioTxLabel, mergeFieldConflict,
 };
 globalThis.GearLogic = GearLogic;

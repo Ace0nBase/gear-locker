@@ -7,15 +7,10 @@ Object.keys(kits).forEach(id=>{const p=kits[id]?.picks;if(p&&p.pistolmags){if(!p
 // gear only fills a slot in its own category (no more suppressors as magazines)
 var NEVER_SLOT=new Set(["Firearms","Suppressors"]);
 score=function(kit,slotId,i){
-  const def=S[slotId];if(!def)return 0;const [, cats, kws, , ex]=def;const t=itemText(i);
-  const category=GearLogic.migrateCategoryName(i.category);
-  if(NEVER_SLOT.has(category))return 0;
-  if(!cats.includes(category))return 0;
-  if(ex.some(k=>t.includes(k)))return 0;
-  if(!kws.some(k=>hasKw(t,k)))return 0;
-  let sc=7+colorFit(kit,i,slotId)*2;
-  if(i.condition==="New"||i.condition==="Good")sc+=1;if(i.condition==="Needs-repair")sc-=3;
-  return Math.max(sc,0.5);
+  if(i&&NEVER_SLOT.has(GearLogic.migrateCategoryName(i.category)))return 0;
+  const base=GearLogic.starterSlotScore(S[slotId],i);
+  if(!base)return 0;
+  return Math.max(base+colorFit(kit,i,slotId)*2,0.5);
 };
 
 /* split a stack: move some of a quantity somewhere else */

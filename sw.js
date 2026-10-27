@@ -1,5 +1,5 @@
 // Offline cache: keeps the app itself available with no signal. Your gear data syncs separately through Firebase.
-const CACHE = "war-box-v31";
+const CACHE = "war-box-v32";
 const SHELL = [
   "./",
   "./index.html",
@@ -30,6 +30,7 @@ const SHELL = [
   "./favicon-16.png",
 ];
 self.addEventListener("install", e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).catch(() => {})); });
+self.addEventListener("message", e => { if (e.data && e.data.type === "skip-waiting") self.skipWaiting(); });
 self.addEventListener("activate", e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));
 self.addEventListener("fetch", e => {
   const r = e.request; if (r.method !== "GET") return;

@@ -6,13 +6,13 @@ War Box is operated by Six Ridge Labs LLC. The site is [getwarbox.com](https://g
 
 ## Gear categories
 
-Magazines holds magazines only, such as a PMAG, a Glock mag, or a Lancer. That shelf is weight-only. War Box never fills a price or a store link for it. There is no linked-ammo category. An ammunition belt is not a magazine and is not its own shelf.
+Magazines holds magazines only, such as a PMAG, a Glock mag, or a Lancer. That shelf is weight-only. War Box never fills a price or a store link for it. Belted ammunition stays on Ammunition, which is not priced.
 
 Belts holds battle belts, duty belts, and rigger's belts. Those keep normal prices.
 
 Armor & Carriers holds plate carriers, chest rigs, and armor plates.
 
-Older lockers used the ids Magazines & Belts and Belts & Rigs. Those ids still map to Magazines and Belts, including when another device syncs the old id. War Box does not move a chest rig or a plate carrier by reading its name. A one-time prompt lists the Belts rows that came from Belts & Rigs. Move a chest rig or a plate carrier to Armor & Carriers, or dismiss the prompt and leave the belt where it is.
+Older lockers used the ids Magazines & Belts and Belts & Rigs. Those ids still map to Magazines and Belts, including when another device syncs the old id. War Box does not move a chest rig or a plate carrier by reading its name. A one-time prompt lists the Belts rows that came from Belts & Rigs, and the Magazines rows that came from Magazines & Belts. Move a chest rig or a plate carrier to Armor & Carriers, move a non-magazine to Belts or Ammo Storage & Loaders, or dismiss the prompt and leave the row where it is. That answer is saved on the account.
 
 ## Later iPhone wrap
 

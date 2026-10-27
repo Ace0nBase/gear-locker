@@ -47,17 +47,17 @@ function classify(i){
     else if(RX.wlight.test(nm)&&!/headlamp|head lamp/.test(nm)){out.add("wlight");out.add(RX.pistolLight.test(nm)?"light_pistol":"light_rifle")}
   }
   if(c==="Helmet & Head"&&RX.helmet.test(nm)&&!/cover|mount|bag|shroud|pad/.test(nm))out.add("helmet");
-  if(c==="Armor & Carriers"||c==="Belts"){
+  if(c==="Armor & Carriers"||c==="Belts"||GearLogic.slotAllowsCategory(["Armor & Carriers","Belts"],i.category)){
     if(RX.chest.test(nm)&&!/belt\b/.test(nm))out.add("carrier_chest");
-    else if(c==="Armor & Carriers"&&RX.plates.test(nm)&&!/carrier|rig|bag/.test(nm))out.add("plates");
-    else if(c==="Armor & Carriers"&&RX.plateCarrier.test(nm))out.add("carrier_plate");
+    else if((c==="Armor & Carriers"||c==="Belts")&&RX.plates.test(nm)&&!/carrier|rig|bag/.test(nm))out.add("plates");
+    else if((c==="Armor & Carriers"||c==="Belts")&&RX.plateCarrier.test(nm))out.add("carrier_plate");
   }
   const magCat=c==="Ammo Storage & Loaders"||c==="Magazines";
   if((c==="Pouches"||magCat||c==="Belts"||c==="Armor & Carriers")&&(RX.pouch.test(nm)&&(RX.magword.test(nm)||/kywi|taco|placard|shingle/.test(nm)))&&!/dump|admin|radio|med|ifak|utility|gp\b/.test(nm))
     out.add(RX.pistolword.test(nm)?"magpouch_pistol":"magpouch_rifle");
   else if(magCat&&RX.magword.test(nm)&&!/loader|coupler|holster|can\b|box\b/.test(nm))out.add(RX.pistolword.test(nm)?"mag_pistol":"mag_rifle");
   // everything else: the slot library, gated by category
-  GENERIC_KINDS.forEach(k=>{const d=S[k];if(!d)return;const [,cats,kws,,ex]=d;if(!cats.includes(c))return;const t=nm+" "+(k==="ifak"||k==="traumabag"?nt:"");if(ex.some(x=>t.includes(x)))return;if(kws.some(x=>hasKw(t,x)))out.add(k)});
+  GENERIC_KINDS.forEach(k=>{const d=S[k];if(!d)return;const [,cats,kws,,ex]=d;if(!GearLogic.slotAllowsCategory(cats,i.category))return;const t=nm+" "+(k==="ifak"||k==="traumabag"?nt:"");if(ex.some(x=>t.includes(x)))return;if(kws.some(x=>hasKw(t,x)))out.add(k)});
   if(out.has("traumabag"))out.delete("ifak");
   if(out.has("magpouch_rifle")||out.has("magpouch_pistol")){out.delete("ifak")}
   return done();

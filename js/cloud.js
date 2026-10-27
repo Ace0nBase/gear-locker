@@ -85,6 +85,24 @@ function subscribeCloud(){
     if(JSON.stringify(kits)!==before)onCloudChange();
     if(first)maybeFirstPush();
   },e=>setSync("off","Sync error: "+(e.code||e.message))));
+  cloudUnsubs.push(userRef().collection("meta").doc("categoryAnswers").onSnapshot(d=>{
+    const remote=(d.exists&&d.data()&&d.data().answers)||{};
+    const merged=GearLogic.mergeCategoryAnswers(categoryAnswers,remote);
+    const same=JSON.stringify(merged)===JSON.stringify(categoryAnswers);
+    const wasReady=!!categoryAnswersReady;
+    categoryAnswersReady=true;
+    categoryAnswers=merged;
+    try{localStorage.setItem("gearLocker.categoryAnswers",JSON.stringify(categoryAnswers))}catch{}
+    if(!same&&typeof applyCategoryMigration==="function"){
+      const migrated=applyCategoryMigration();
+      if(migrated&&typeof persist==="function")persist();
+    }else if(!wasReady&&typeof showMagShelfPrompt==="function")showMagShelfPrompt();
+    if(JSON.stringify(categoryAnswers)!==JSON.stringify(remote)&&typeof pushCategoryAnswers==="function")pushCategoryAnswers();
+  },e=>setSync("off","Sync error: "+(e.code||e.message))));
+}
+function pushCategoryAnswers(){
+  if(!cloudUser||!fsdb||!categoryAnswers||!Object.keys(categoryAnswers).length)return;
+  userRef().collection("meta").doc("categoryAnswers").set({answers:categoryAnswers,updatedAt:now()},{merge:true}).catch(()=>{});
 }
 function maybeFirstPush(){if(cloudReady.size===CLOUD_COLS.length+1){pushCloud();if(firstLoad){firstLoad=false;render();if(window.LOOKUP_URL)setTimeout(()=>{const q=live().filter(i=>i.marketCheck==="requested").map(i=>i.id);if(q.length)runLookups(q,true)},800)}}}
 function gateErr(t){$("gErr").textContent=t||""}
@@ -225,7 +243,7 @@ async function qaStorageCheckRun(){
 var APP_VERSION="31";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 if("serviceWorker" in navigator&&GearLogic.serviceWorkerAllowed(location,window.GEAR_QA)){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
-  navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
+  navigator.serviceWorker.register("sw.js").then(reg=>{const poke=()=>{if(reg.waiting)reg.waiting.postMessage({type:"skip-waiting"});reg.update().catch(()=>{})};reg.addEventListener("updatefound",()=>{const worker=reg.installing;if(worker)worker.addEventListener("statechange",()=>{if(worker.state==="installed")poke()})});document.addEventListener("visibilitychange",()=>{if(!document.hidden)poke()});setInterval(poke,20*60e3);poke()}).catch(()=>{});
   navigator.serviceWorker.addEventListener("controllerchange",()=>{if(!hadSW||reloading)return;reloading=true;if(!anySheetOpen())location.reload();else toast("War Box updated. Close and reopen to finish.",6000)});
 }
 
@@ -303,6 +321,13 @@ function applyLookup(id,res){
   if(res.weightOz!=null&&isFinite(+res.weightOz)&&+res.weightOz>0&&it.weightSource!=="manual"){it.weight=Math.round(+res.weightOz*10)/10;it.weightSource="lookup";it.weightStatus="done";it.weightNote=restricted?GearLogic.publicWeightNote(res.weightNote||""):GearLogic.stripGunMarketText(res.weightNote||"").slice(0,80)}
   else if(it.weight==null||it.weight==="")it.weightStatus="notfound";
   it.marketCheck="done";delete it.lookupError;it.updatedAt=now();
+  if(GearLogic.magazineCategory(it)){
+    const cleared=GearLogic.clearMagazineAutoPrices({...it});
+    ["priceNote","usedLow","usedHigh","deal","target","marketCheck","marketCheckAt","dealSeen","priceSource","priceDate","valueSource","estPrice"].forEach(k=>{if(!(k in cleared))delete it[k]});
+    Object.assign(it,cleared);
+    delete it.marketCheck;delete it.marketCheckAt;delete it.deal;delete it.target;
+    if(it.link)it.link="";
+  }
   if(!$("form").hidden&&editing&&editing.id===it.id){editing=it;if(!retailDirty)$("fRetail").value=(restricted&&it.priceSource!=="manual")?"":(it.retailNew||"");if(!valueDirty)$("fVal").value=(restricted&&it.valueSource!=="manual")?"":(it.value||"");if(!$("fWt").value&&it.weight!=null)$("fWt").value=it.weight;showPrice(it)}
   return true;
 }
