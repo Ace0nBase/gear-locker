@@ -26,7 +26,7 @@ function withAppQuery(pairs){
 }
 var all=[], filter="All", editing=null, delArmed=false, dir=null, valueTouched=false;
 var live=()=>all.filter(i=>!i.deleted);
-$("fCat").innerHTML=CATS.map(c=>`<option>${c}</option>`).join("");
+$("fCat").innerHTML=`<option value="">Choose a category</option>`+CATS.map(c=>`<option>${esc(c)}</option>`).join("");
 function toast(t,ms){const el=$("toast");el.textContent=t;el.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>el.hidden=true,ms||2200)}
 
 /* ---------- storage: gear.json in the chosen folder, plus a local mirror ---------- */
@@ -203,6 +203,7 @@ function readForm(){
 async function saveCurrent(extra){
   const data={...readForm(),...(extra||{}),updatedAt:now()};
   if(!data.name){$("fName").focus();return null}
+  if(!data.category){$("fCat").focus();toast("Choose a category");return null}
   let rec;
   if(editing){
     const cur=all.find(i=>i.id===editing.id)||editing;

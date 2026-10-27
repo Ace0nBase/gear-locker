@@ -155,22 +155,25 @@ async function startCloud(){
   const P=firebase.auth.Auth.Persistence;
   let keep=true;try{keep=localStorage.getItem("gearLocker.keep")!=="0"}catch{}
   $("gKeep").checked=keep;
+  syncKeepNote();
   auth.setPersistence(keep?P.LOCAL:P.SESSION).catch(()=>{});
   auth.onAuthStateChanged(async u=>{
     if(!u){
       cloudUser=null;cloudUnsubs.forEach(x=>x());cloudUnsubs=[];
-      $("gate").hidden=false;$("acct").hidden=true;$("gateFields").hidden=false;$("gateMsg").textContent="Sign in to open your locker.";refreshVerify();
+      $("gate").hidden=false;$("acct").hidden=true;$("gateFields").hidden=false;$("gateMsg").textContent="Sign in to open your locker.";refreshVerify();syncKeepNote();
       return;
     }
     const switched=localStorage.getItem("gearLocker.uid")&&localStorage.getItem("gearLocker.uid")!==u.uid;
     if(switched){try{GearLogic.clearUserLocal(localStorage)}catch{};cloudUnsubs.forEach(x=>x());cloudUnsubs=[];fsdb=await openFirestore(true)}
     try{localStorage.setItem("gearLocker.uid",u.uid)}catch{}
-    cloudUser=u;$("gate").hidden=true;$("acct").hidden=false;$("acctTxt").textContent=u.email;refreshVerify();setSync("","Connecting…");
+    cloudUser=u;$("gate").hidden=true;$("acct").hidden=false;$("acctTxt").textContent=u.email;refreshVerify();syncKeepNote();setSync("","Connecting…");
     pushed={};firstLoad=true;
     await boot();
     subscribeCloud();
   });
-  const applyKeep=async()=>{const k=$("gKeep").checked;try{localStorage.setItem("gearLocker.keep",k?"1":"0")}catch{};try{await auth.setPersistence(k?P.LOCAL:P.SESSION)}catch{};const memory=GearLogic.firestoreMemoryOnly(k);if(memory!==fsdbMemory){cloudUnsubs.forEach(x=>x());cloudUnsubs=[];fsdb=await openFirestore(true)}};
+  function syncKeepNote(){const on=!!$("gKeep").checked;const note=$("gKeepNote");if(note)note.hidden=on;const live=$("keepLive");if(live)live.hidden=on||$("acct").hidden}
+  $("gKeep").addEventListener("change",syncKeepNote);
+  const applyKeep=async()=>{const k=$("gKeep").checked;try{localStorage.setItem("gearLocker.keep",k?"1":"0")}catch{};try{await auth.setPersistence(k?P.LOCAL:P.SESSION)}catch{};syncKeepNote();const memory=GearLogic.firestoreMemoryOnly(k);if(memory!==fsdbMemory){cloudUnsubs.forEach(x=>x());cloudUnsubs=[];fsdb=await openFirestore(true)}};
   $("gateForm").onsubmit=async e=>{e.preventDefault();gateErr("");$("gIn").disabled=true;await applyKeep();try{await auth.signInWithEmailAndPassword($("gEmail").value.trim(),$("gPass").value)}catch(err){gateErr(authMsg(err))}finally{$("gIn").disabled=false}};
   $("gNew").onclick=async()=>{gateErr("");if(!$("gateForm").reportValidity())return;if(!GearLogic.newPasswordOk($("gPass").value)){gateErr("Use at least 12 characters.");return}$("gNew").disabled=true;await applyKeep();try{await auth.createUserWithEmailAndPassword($("gEmail").value.trim(),$("gPass").value);try{await auth.currentUser.sendEmailVerification({url:verifyContinueUrl(),handleCodeInApp:false})}catch(e){}}catch(err){gateErr(authMsg(err))}finally{$("gNew").disabled=false}};
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};

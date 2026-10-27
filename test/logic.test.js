@@ -5,7 +5,7 @@ import {
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
   saleRestricted, countedValue, csvExportField, publicWeightNote,
-  keepSignedIn, firestoreMemoryOnly, settleOrTimeout, signOutConfirmNeeded, SIGN_OUT_WAIT_MS, armoryLookupBlocked,
+  keepSignedIn, firestoreMemoryOnly, settleOrTimeout, signOutConfirmNeeded, SIGN_OUT_WAIT_MS, armorySubject, armoryLookupBlocked, photoIdBlocked,
 } from "../js/logic.js";
 
 function memStorage(seed) {
@@ -347,15 +347,18 @@ test("keep-signed-in off uses a memory cache and sign-out confirms only when a s
   assert.equal(await settleOrTimeout(Promise.reject(new Error("failed")), 50), false);
 });
 
-test("never send arms room items blocks photo and battery lookups for those items", () => {
+test("never send arms room items blocks records and weapon-mounted gear, and photo ID waits for a category", () => {
   assert.equal(armoryLookupBlocked(false, { category: "Firearms", name: "Rifle" }), false);
   assert.equal(armoryLookupBlocked(true, { category: "Firearms", name: "Rifle" }), true);
   assert.equal(armoryLookupBlocked(true, { category: "Firearms", arm: "no", name: "Rifle" }), true);
   assert.equal(armoryLookupBlocked(true, { category: "Suppressors", name: "Can" }), true);
-  assert.equal(armoryLookupBlocked(true, { category: "NVG & Optics", name: "Red dot" }), true);
-  assert.equal(armoryLookupBlocked(true, { category: "NVG & Optics", name: "NOD" }), true);
-  assert.equal(armoryLookupBlocked(true, { category: "Lights & Lasers", name: "Weapon light" }), true);
-  assert.equal(armoryLookupBlocked(true, { arm: "OP", name: "Scope" }), true);
+  assert.equal(armoryLookupBlocked(true, { category: "NVG & Optics", name: "Red dot" }), false);
+  assert.equal(armoryLookupBlocked(true, { category: "NVG & Optics", name: "NOD" }), false);
+  assert.equal(armoryLookupBlocked(true, { category: "NVG & Optics", name: "Binoculars" }), false);
+  assert.equal(armoryLookupBlocked(true, { category: "Lights & Lasers", name: "Weapon light" }), false);
+  assert.equal(armoryLookupBlocked(true, { category: "Lights & Lasers", name: "Flashlight" }), false);
+  assert.equal(armoryLookupBlocked(true, { category: "Helmet & Head", name: "Headlamp" }), false);
+  assert.equal(armoryLookupBlocked(true, { arm: "OP", category: "NVG & Optics", name: "Red dot" }), true);
   assert.equal(armoryLookupBlocked(true, { arm: "WL", name: "Light" }), true);
   assert.equal(armoryLookupBlocked(true, { arm: "LA", name: "PEQ" }), true);
   assert.equal(armoryLookupBlocked(true, { arm: "KN", category: "Knives & Tools", name: "Fixed blade" }), true);
@@ -365,6 +368,27 @@ test("never send arms room items blocks photo and battery lookups for those item
   assert.equal(armoryLookupBlocked(true, { category: "Comms & Radios", name: "Handheld radio" }), false);
   assert.equal(armoryLookupBlocked(true, { category: "Helmet & Head", name: "Headset" }), false);
   assert.equal(armoryLookupBlocked(true, null), false);
+  const onRifle = armorySubject(
+    { category: "Helmet & Head", name: "Headlamp", mountedOn: "rifle1" },
+    { category: "Firearms", arm: "FA" },
+  );
+  assert.equal(onRifle.hostCategory, "Firearms");
+  assert.equal(armoryLookupBlocked(true, onRifle), true);
+  const onHelmet = armorySubject(
+    { category: "Lights & Lasers", name: "Headlamp", mountedOn: "helm1" },
+    { category: "Helmet & Head", arm: "no" },
+  );
+  assert.equal(armoryLookupBlocked(true, onHelmet), false);
+  assert.equal(photoIdBlocked(false, { category: "" }), false);
+  assert.equal(photoIdBlocked(true, { category: "" }), true);
+  assert.equal(photoIdBlocked(true, {}), true);
+  assert.equal(photoIdBlocked(true, null), true);
+  assert.equal(photoIdBlocked(true, { category: "Pouches", name: "Admin pouch" }), false);
+  assert.equal(photoIdBlocked(true, { category: "Helmet & Head", name: "Headlamp" }), false);
+  assert.equal(photoIdBlocked(true, { category: "Lights & Lasers", name: "Flashlight" }), false);
+  assert.equal(photoIdBlocked(true, { category: "NVG & Optics", name: "Binoculars" }), false);
+  assert.equal(photoIdBlocked(true, { category: "Firearms", name: "Rifle" }), true);
+  assert.equal(photoIdBlocked(true, onRifle), true);
 });
 
 test("kit merge uses the server stamp and keeps a pending local edit", () => {

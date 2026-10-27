@@ -464,19 +464,40 @@ export function signOutConfirmNeeded(settled) {
 const ARMORY_ARMS = new Set(["FA", "SU", "OP", "WL", "LA", "KN"]);
 const TOOLISH = /multi.?tool|leatherman|gerber|\bsaw\b|shovel|plier|wrench|screwdriver|sharpener|machete|e-?tool/i;
 
-// Guns, suppressors, optics, lights, lasers, NODs, and knives. A multi-tool is not one of these.
+// Attach the item this one is mounted on, so a headlamp on a helmet stays a lookup and a light on a rifle does not.
+export function armorySubject(item, host) {
+  if (!item || typeof item !== "object") return item;
+  if (!host) return item;
+  return { ...item, hostCategory: host.category || "", hostArm: host.arm || "" };
+}
+
+function onWeapon(item) {
+  if (!item || !item.mountedOn) return false;
+  const hostCat = String(item.hostCategory || "").trim().toLowerCase();
+  const hostArm = String(item.hostArm || "").trim().toUpperCase();
+  return hostCat === "firearms" || hostCat === "suppressors" || hostArm === "FA" || hostArm === "SU";
+}
+
+// Arms Room records, and gear mounted on a weapon. A headlamp, flashlight, or binoculars on their own still look up.
 export function armoryLookupBlocked(privateArms, item) {
   if (!privateArms || !item || typeof item !== "object") return false;
   const arm = String(item.arm || "").trim().toUpperCase();
   if (ARMORY_ARMS.has(arm)) return true;
+  if (onWeapon(item)) return true;
   const category = String(item.category || "").trim().toLowerCase();
   if (category === "firearms" || category === "suppressors") return true;
-  if (category === "nvg & optics" || category === "lights & lasers") return true;
   if (category === "knives & tools") {
     const blob = [item.name, item.brand].map(v => String(v || "")).join(" ");
     return !TOOLISH.test(blob);
   }
   return false;
+}
+
+// With the opt-out on, a new item has to have a category before Photo ID can run.
+export function photoIdBlocked(privateArms, item) {
+  if (!privateArms) return false;
+  if (!item || !String(item.category || "").trim()) return true;
+  return armoryLookupBlocked(true, item);
 }
 
 const GearLogic = {
@@ -485,6 +506,6 @@ const GearLogic = {
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, publicWeightNote,
-  keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armoryLookupBlocked,
+  keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
 };
 globalThis.GearLogic = GearLogic;
