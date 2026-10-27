@@ -10,7 +10,7 @@
   var host = location.hostname;
   var local = (host === "localhost" || host === "127.0.0.1") && (location.protocol === "http:" || location.protocol === "https:");
   if (!local) {
-    window.GEAR_QA_REASON = "Emulator mode only runs on this computer. This page will not open the live locker.";
+    window.GEAR_QA_REASON = "Emulator mode only runs on this computer. This page will not open the live War Box.";
     return;
   }
   var text = "";

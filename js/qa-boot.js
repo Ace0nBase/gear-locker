@@ -59,7 +59,7 @@ if (window.GEAR_QA_BLOCKED) {
     const fields = document.getElementById("gateFields");
     if (gate) gate.hidden = false;
     if (fields) fields.hidden = true;
-    if (msg) msg.textContent = window.GEAR_QA_REASON || "Emulator mode will not open the live locker.";
+    if (msg) msg.textContent = window.GEAR_QA_REASON || "Emulator mode will not open the live War Box.";
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", show);
   else show();

@@ -32,7 +32,7 @@ function renderArms(){
   <section class="stats armsStats"><div class="stat"><b>${noSer}</b><span>Missing serial</span></div><div class="stat"><b>${n}</b><span>On record</span></div><div class="stat"><b>${money(val)}</b><span>Value</span></div><div class="stat"><b>${(()=>{const pd=secs.reduce((a,s)=>a+s.rows.reduce((b,i)=>b+(+i.paid||0)*(+i.qty||1),0),0);return pd?money(pd):"—"})()}</b><span>What I paid</span></div></section>
   ${n?secs.filter(s=>s.rows.length).map(s=>{const sv=s.rows.reduce((b,i)=>b+GearLogic.countedValue(i)*(+i.qty||1),0);
     return `<section class="group"><div class="ghead"><h3>${esc(ARM[s.k].label)}</h3><span>${s.rows.length}${sv?` · ${money(sv)}`:""}</span></div>
-    ${s.rows.map(i=>{const on=itemById(i.mountedOn);const sub=[i.brand,i.armType,i.caliber,on?"on "+on.name:i.setupOn].filter(Boolean).join(" · ");
+    ${s.rows.map(i=>{const on=itemById(i.mountedOn);const sub=[i.brand,i.armType,i.caliber,on?"on "+on.name:""].filter(Boolean).join(" · ");
       return `<button type="button" class="row armRow" data-id="${esc(i.id)}"><span class="qty armId">${esc(i.armId||"—")}</span>
       <span class="nm">${esc(i.name)}${i.nick?` <span class="tag">${esc(i.nick)}</span>`:""}<small>${esc(sub)}</small></span>
       <span class="ser">${s.k==="KN"?esc(i.markings||""):i.serial?`<span class="mono">${esc(maskSer(i.serial))}</span>`:`<span class="tag">no serial</span>`}</span>
@@ -239,7 +239,7 @@ readForm=function(){
 /* printable record */
 function buildArmsPrint(){
   const m2=n=>"$"+(+n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-  const on=i=>{const g=itemById(i.mountedOn);return g?(g.armId||g.name):(i.setupOn||"")};
+  const on=i=>{const g=itemById(i.mountedOn);return g?(g.armId||g.name):""};
   const COLS={
     FA:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Type / Action","armType"],["Caliber","caliber"],["Serial Number","serial"],["Bbl. Len.","bbl"],["Date Acquired",i=>fmtD(i.acquired)],["Acquired From","acquiredFrom"],["Value",i=>{const n=GearLogic.countedValue(i);return n?m2(n):""}],["Notes / Status","notes"]],
     SU:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Caliber","caliber"],["Serial Number","serial"],["Form","nfaForm"],["Stamp / Approval",i=>fmtD(i.stampDate)],["Dealer","acquiredFrom"],["Mount / Adapter","adapter"],["Value",i=>{const n=GearLogic.countedValue(i);return n?m2(n):""}],["Notes / Status","notes"]],
@@ -335,7 +335,7 @@ $("idFile").addEventListener("change",async e=>{
     $("fName").dispatchEvent(new Event("input"));
     const photoRestricted=GearLogic.saleRestricted(saleDraft());
     out.innerHTML=`<span class="tag">Photo ID · ${esc(g.confidence||"low")} confidence</span><br>${esc(g.summary||"")}${g.brand?"":photoRestricted?" Look up weight does not search stores.":" Brand unknown, so prices and weight will be estimated for a typical one."}`;
-  }catch(err){out.innerHTML=`<span class="tag">Photo ID</span><br>${esc(err.message||"Didn't work")}`}
+  }catch(err){out.innerHTML=`<span class="tag">Photo ID</span><br>${esc(lookupFailMessage(err&&err.message,"photo ID"))}`}
   finally{$("idBtn").disabled=false}
 });
 

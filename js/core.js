@@ -12,7 +12,7 @@ var now=()=>new Date().toISOString();
 function localISODate(d){const x=d instanceof Date?d:new Date();return x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0")}
 function localDateTime(d){const x=d instanceof Date?d:new Date();return localISODate(x)+"T"+String(x.getHours()).padStart(2,"0")+":"+String(x.getMinutes()).padStart(2,"0")}
 var today=()=>GearLogic.localDay();
-function lookupFailMessage(msg){const raw=String(msg||"");if(/^Couldn't reach the price check/.test(raw))return raw;const m=raw.replace(/^Market check:\s*/,"");if(!m||/failed to fetch|networkerror|load failed|network request failed|appears to be offline/i.test(m))return "Couldn't reach the price check. You can still save without a price.";return "Market check: "+m}
+function lookupFailMessage(msg,what){const raw=String(msg||"").replace(/^Market check:\s*/,"").trim();const reach=what?`Couldn't reach ${what}. You can try again.`:"Couldn't reach the price check. You can still save without a price.";const name=what?what.charAt(0).toUpperCase()+what.slice(1):"The lookup";const fail=`${name} didn't finish. Try again in a little while.`;if(/^Couldn't reach /.test(raw))return raw;if(!raw||/failed to fetch|networkerror|load failed|network request failed|appears to be offline|network error/i.test(raw))return reach;if(/claude api error|internal server error|^error \d|unexpected token|syntaxerror|typeerror|^bad |invalid token/i.test(raw))return fail;if(/daily lookup limit|confirm your email|sign in again|turned off|isn't set up|aren't switched on|lookups are paused|price alerts aren't|send a photo|skips |under 2 MB|set an alert price|couldn't read the|no items|missing name/i.test(raw)&&raw.length<180)return raw;return fail}
 function publicAppUrl(){
   var path=location.pathname.replace(/index\.html$/,"");
   var host=location.hostname;
@@ -62,21 +62,22 @@ async function persist(){
   try{await pushCloudSoon()}catch{}
   if(!dir){$("status").textContent=cloudUser?"":"Saved on this device only.";return}
   try{await writeFile();mirror();$("status").textContent=`Saved to ${dir.name}\\${FILE} · ${new Date().toLocaleTimeString()}`}
-  catch{$("status").textContent="Couldn't write to the save folder. Click Choose folder to reconnect.";showConnect(true)}
+  catch{$("status").textContent="Couldn't write to the save folder. Choose folder again to reconnect.";showConnect(true)}
 }
+function appleHandheld(){return /iphone|ipad|ipod/i.test(navigator.userAgent)||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1)}
 function showConnect(reconnect){if(window.FIREBASE_CONFIG)return;
-  if(!window.showDirectoryPicker)return;
+  if(!window.showDirectoryPicker||appleHandheld()){$("connect").hidden=true;return}
   try{if(!reconnect&&localStorage.getItem("gearLocker.noFolder")==="1")return}catch{}
   $("connect").hidden=false;
   $("connectBtn").textContent=reconnect?"Reconnect folder":"Choose folder";
-  $("connectMsg").innerHTML=reconnect?"War Box needs your OK to open its save file in the <b>War Box</b> folder again. Click Reconnect folder.":"Optional: keep a backup file of your gear in a folder on this computer. On the PC that runs the price and weight lookups, pick the <b>War Box</b> folder.";
+  $("connectMsg").innerHTML=reconnect?"War Box needs your OK to open its save file in the <b>War Box</b> folder again. Choose Reconnect folder.":"Optional: keep a backup file of your gear in a folder on this computer. On the computer that runs the price and weight lookups, pick the <b>War Box</b> folder.";
 }
 $("connectLater").onclick=()=>{try{localStorage.setItem("gearLocker.noFolder","1")}catch{};$("connect").hidden=true};
 $("connectBtn").onclick=async()=>{
   try{
     let h=await kv("get","dir").catch(()=>null);
     if(h&&(await h.requestPermission({mode:"readwrite"}))==="granted"){dir=h}
-    else{ if(!window.showDirectoryPicker){$("connectMsg").textContent="This browser can't save to a folder. Open War Box with the desktop shortcut (it uses Microsoft Edge).";return}
+    else{ if(!window.showDirectoryPicker){$("connectMsg").textContent="This browser can't save to a folder.";return}
       dir=await window.showDirectoryPicker({id:"gearlocker",mode:"readwrite"}); await kv("put","dir",dir); }
     $("connect").hidden=true;
     // A folder saved under the previous name still turns lookups on. The picker id above stays so the browser keeps that permission.
@@ -292,10 +293,10 @@ window.addEventListener("beforeprint",()=>{if(!printingKit)buildPrint()});
 window.addEventListener("afterprint",()=>{printingKit=false});
 $("csvBtn").onclick=()=>{
   const items=live();if(!items.length){toast("Add some gear first");return}
-  const cols=["category","qty","name","brand","color","condition","retailNew","value","paid","weight","setupOn","location","notes","priceSource","priceDate"];
+  const cols=["category","qty","name","brand","color","condition","retailNew","value","paid","weight","location","notes","priceSource","priceDate"];
   const q=v=>GearLogic.csvCell(v);
   const sorted=CATS.flatMap(c=>items.filter(i=>i.category===c).sort((a,b)=>(a.name||"").localeCompare(b.name||"")));
-  const csv="﻿"+[["Category","Qty","Item","Brand/Model","Color","Condition","New retail","Value each","Paid each","Weight (oz)","Set up on","Stored","Notes","Price source","Price date"].map(q).join(","),...sorted.map(i=>cols.map(k=>q(GearLogic.csvExportField(i,k))).join(","))].join("\r\n");
+  const csv="﻿"+[["Category","Qty","Item","Brand/Model","Color","Condition","New retail","Value each","Paid each","Weight (oz)","Stored","Notes","Price source","Price date"].map(q).join(","),...sorted.map(i=>cols.map(k=>q(GearLogic.csvExportField(i,k))).join(","))].join("\r\n");
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`war-box-inventory-${today()}.csv`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);
 };
 

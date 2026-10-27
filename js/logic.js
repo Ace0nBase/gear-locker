@@ -762,6 +762,37 @@ export function photoIdBlocked(privateArms, item) {
   return armoryLookupBlocked(true, item);
 }
 
+// Once a drill has its round count, later bangs are echoes, not another shot.
+export function timerShotAccepted(count, rounds) {
+  const need = +rounds || 0;
+  return !(need && count >= need);
+}
+
+// FCC Part 95: channels 1–22 are shared FRS and GMRS. Repeater inputs sit 5 MHz up from 15–22.
+const FRS_GMRS_MHZ = [
+  462.5625, 462.5875, 462.6125, 462.6375, 462.6625, 462.6875, 462.7125,
+  467.5625, 467.5875, 467.6125, 467.6375, 467.6625, 467.6875, 467.7125,
+  462.55, 462.575, 462.6, 462.625, 462.65, 462.675, 462.7, 462.725,
+];
+function mhzNear(a, b) { return Math.abs(a - b) < 0.0002; }
+function on25kHz(rx) {
+  const steps = rx / 0.025;
+  return Math.abs(steps - Math.round(steps)) < 0.02;
+}
+export function radioService(rx) {
+  const n = parseFloat(String(rx ?? "").replace(/[^\d.]/g, ""));
+  if (!isFinite(n) || n <= 0) return "Other";
+  if (FRS_GMRS_MHZ.some(f => mhzNear(n, f))) return "FRS/GMRS";
+  if (n >= 467.55 - 0.0004 && n <= 467.725 + 0.0004 && on25kHz(n)) return "GMRS";
+  if ((n >= 144 && n <= 148) || (n >= 420 && n <= 450) || (n >= 222 && n <= 225) || (n >= 50 && n <= 54)) return "Ham";
+  if (n >= 462.55 && n <= 467.725) return "GMRS";
+  if (n >= 151.82 && n <= 154.6) return "MURS";
+  if (n >= 156 && n <= 162.025) return "Marine";
+  if (n >= 162.4 && n <= 162.55) return "NOAA weather";
+  if (n >= 108 && n <= 137) return "Aviation";
+  return "Other";
+}
+
 const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
@@ -770,5 +801,6 @@ const GearLogic = {
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
+  timerShotAccepted, radioService,
 };
 globalThis.GearLogic = GearLogic;

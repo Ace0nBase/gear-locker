@@ -60,10 +60,9 @@ async function openSecurity(){const c=lockCfg();const bio=await canBio();const s
    <div class="secBlock"><h3>Privacy screen on this device</h3>
     <p class="hint">This hides your gear from someone looking over your shoulder. It is not a lock on your account. Your sign-in password and your phone's own passcode are what protect your data. The screen also blanks in the app switcher.</p>
     <div class="f"><label for="sLock">Privacy screen</label><select id="sLock"><option value="off">Off</option>${bio?`<option value="bio"${c.mode==="bio"?" selected":""}>Face ID / Touch ID (+ PIN backup)</option>`:""}<option value="pin"${c.mode==="pin"?" selected":""}>PIN</option></select></div>
-    <div class="f"><label for="sAfter">Lock when I leave the app for</label><select id="sAfter">${[[0,"Right away"],[60,"1 minute"],[300,"5 minutes"],[900,"15 minutes"]].map(([v,l])=>`<option value="${v}"${(+c.after||0)===v?" selected":""}>${l}</option>`).join("")}</select></div>
+    <div class="f"><label for="sAfter">Turn the privacy screen on when I leave the app for</label><select id="sAfter">${[[0,"Right away"],[60,"1 minute"],[300,"5 minutes"],[900,"15 minutes"]].map(([v,l])=>`<option value="${v}"${(+c.after||0)===v?" selected":""}>${l}</option>`).join("")}</select></div>
     <div class="f" id="sPinBox"><label for="sPin">${c.pinHash?"New PIN (leave blank to keep the current one)":"PIN (6–12 digits)"}</label><input id="sPin" type="password" inputmode="numeric" autocomplete="new-password" maxlength="12"></div>
-    <button class="btn" type="button" data-sec="lock">Save privacy screen</button>
-    <p class="hint">The app also blanks itself in the app switcher while locked mode is on.</p></div>
+    <button class="btn" type="button" data-sec="lock">Save privacy screen</button></div>
    <div class="secBlock"><h3>What you've shared</h3>
     ${sh.length?sh.map(([k,sid])=>{const [kind,id]=k.split(":");const nm=kind==="kit"?(KITS.find(x=>x.id===id)?.name+" kit"):(itemById(id)?.name||"(deleted item)");return `<div class="pk"><span class="pkn"><b>${esc(nm)}</b><small>share link · anyone with the link can see it</small></span><button class="btn ghost" type="button" data-sec="unshare" data-k="${esc(k)}">Turn off</button></div>`}).join("")+`<button class="btn ghost" type="button" data-sec="unshareall">Turn off all links</button>`:`<p class="hint">No share links are on. Nothing of yours is viewable without signing in as you.</p>`}
     ${lends.length?`<p class="hint">${lends.length} active loan${lends.length>1?"s are":" is"} visible to the borrower's War Box account (item name, brand, color and category, dates, your name and your email).</p>`:""}</div>
@@ -155,7 +154,7 @@ $("acct").insertAdjacentHTML("beforeend",`<button type="button" id="inviteBtn">I
   // the invite button now sends the join link
   const inv=$("inviteBtn");
   if(inv)inv.onclick=async()=>{const url=withAppQuery({join:"1"});
-    const text="I'm inviting you to War Box so we can each keep a locker and track loans. Tap the link to make an account, then confirm your email or loans won't show up. Price lookups only work for emails the owner has added. Then in Safari tap Share, then Add to Home Screen:";
+    const text="I'm inviting you to War Box so we can each track our gear and loans. Tap the link to make an account, then confirm your email or loans won't show up. Price lookups only work for emails the owner has added. Then in Safari tap Share, then Add to Home Screen:";
     try{if(navigator.share){await navigator.share({title:"War Box",text,url});return}}catch(e){if(e.name==="AbortError")return}
     try{await navigator.clipboard.writeText(text+" "+url);toast("Invite copied. Paste it in a text.")}catch{prompt("Copy this invite:",text+" "+url)}};
   if(!JOIN||SHARE_ID)return;
@@ -180,9 +179,9 @@ $("acct").insertAdjacentHTML("beforeend",`<button type="button" id="inviteBtn">I
   function showPreview(){
     const gate=$("gate");gate.hidden=false;gate.classList.add("previewing");$("gateFields").hidden=false;joinMode(true);
     form.querySelectorAll("input,button").forEach(x=>{if(x.id!=="gBack")x.disabled=true});
-    $("gateMsg").innerHTML=`<span class="pvNote">You're signed in as <b>${esc(cloudUser.email)}</b>, so this link normally opens your locker. This is what your friend sees:</span><br>You've been invited. Make an account and confirm your email. Price checks stay with the person who invited you unless they add your email.`;
-    form.insertAdjacentHTML("beforeend",`<button class="btn" type="button" id="gBack" style="margin-top:12px;width:100%">Back to my locker</button>`);
-    $("gBack").onclick=()=>{gate.hidden=true;gate.classList.remove("previewing");$("gBack").remove();form.querySelectorAll("input,button").forEach(x=>x.disabled=false);$("gateMsg").textContent="Sign in to open your locker."};
+    $("gateMsg").innerHTML=`<span class="pvNote">You're signed in as <b>${esc(cloudUser.email)}</b>, so this link normally opens War Box. This is what your friend sees:</span><br>You've been invited. Make an account and confirm your email. Price checks stay with the person who invited you unless they add your email.`;
+    form.insertAdjacentHTML("beforeend",`<button class="btn" type="button" id="gBack" style="margin-top:12px;width:100%">Back to War Box</button>`);
+    $("gBack").onclick=()=>{gate.hidden=true;gate.classList.remove("previewing");$("gBack").remove();form.querySelectorAll("input,button").forEach(x=>x.disabled=false);$("gateMsg").textContent="Sign in to open War Box."};
   }
 })();
 

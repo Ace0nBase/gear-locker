@@ -396,7 +396,7 @@ body.appCover::after{content:"";position:fixed;inset:0;z-index:600;background:va
   #printSheet tr{page-break-inside:avoid}
   #printSheet th,#printSheet td{border:1px solid #999;padding:3pt 5pt;text-align:left;vertical-align:top}
   #printSheet thead th{background:#e8e6da}
-  #printSheet .cat th{background:#4a572e;color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;font-size:10.5pt}
+  #printSheet .cat th{background:#A8865A;color:#1F1F1C;-webkit-print-color-adjust:exact;print-color-adjust:exact;font-size:10.5pt}
   #printSheet .box{display:inline-block;width:10pt;height:10pt;border:1px solid #000}
   #printSheet .r{text-align:right}
   #printSheet .sign{margin-top:18pt}

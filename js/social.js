@@ -39,7 +39,7 @@ function lendDoc(x){const it=itemById(x.itemId)||{};let from="";try{from=localSt
 async function mirrorLend(x,removed){
   if(!fsdb||!cloudUser||!x||!x.id)return;
   const plan=GearLogic.loanSharePlan(x,{removed:!!removed,verified:!!cloudUser.emailVerified});
-  if(plan.needsVerify)toast("Confirm your email first, then this loan can show up in your friend's locker.",5000);
+  if(plan.needsVerify)toast("Confirm your email first, then this loan can show up in your friend's War Box.",5000);
   const local=(db.loans||[]).find(y=>y.id===x.id);
   const row=local||x;
   if(plan.writeLend)row.lendShared=true;
@@ -93,7 +93,7 @@ function downloadIcs(x){
   const it=itemById(x.itemId);const when=(x.remindAt||(x.due?x.due+"T09:00":""))||localDateTime(new Date(Date.now()+7*864e5));
   const d=new Date(when);const f=t=>t.toISOString().replace(/[-:]/g,"").replace(/\.\d+/,"");
   const title=`${x.borrower} still has your ${it?.name||x.itemName||"gear"}`;
-  const ics=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//War Box//EN","BEGIN:VEVENT",`UID:${x.id}@gearlocker`,`DTSTAMP:${f(new Date())}`,`DTSTART:${f(d)}`,`DTEND:${f(new Date(+d+15*60e3))}`,
+  const ics=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//War Box//EN","BEGIN:VEVENT",`UID:${x.id}@warbox`,`DTSTAMP:${f(new Date())}`,`DTSTART:${f(d)}`,`DTEND:${f(new Date(+d+15*60e3))}`,
     `SUMMARY:${title.replace(/[,;]/g," ")}`,`DESCRIPTION:Lent ${fmtDate(x.out)}${x.due?" · due back "+fmtDate(x.due):""}. Mark it returned in War Box when you get it back.`.replace(/[,;]/g," "),
     "BEGIN:VALARM","ACTION:DISPLAY","TRIGGER:PT0M",`DESCRIPTION:${title.replace(/[,;]/g," ")}`,"END:VALARM","END:VEVENT","END:VCALENDAR"].join("\r\n");
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([ics],{type:"text/calendar"}));a.download="war-box-loan-reminder.ics";document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1500);
@@ -105,7 +105,7 @@ var loanDue=x=>!x.returned&&x.remindAt&&new Date(x.remindAt)<=new Date();
   return _bf(k)}}
 {const _rl=RENDER.loans;RENDER.loans=()=>{
   _rl();const v=$("loansView");
-  if(cloudUser){const head0=v.querySelector(".vhead");if(head0)head0.insertAdjacentHTML("afterend",cloudUser.emailVerified?`<p class="hint">Your sign-in email is <b>${esc(cloudUser.email||"")}</b>. Loans from friends match that address. If it is all lowercase, they can type it with any capitals.</p>`:`<div class="banner"><p>Confirm <b>${esc(cloudUser.email||"your email")}</b> before loans can move between accounts. Your own loan notes stay in your locker.</p></div>`)}
+  if(cloudUser){const head0=v.querySelector(".vhead");if(head0)head0.insertAdjacentHTML("afterend",cloudUser.emailVerified?`<p class="hint">Your sign-in email is <b>${esc(cloudUser.email||"")}</b>. Loans from friends match that address. If it is all lowercase, they can type it with any capitals.</p>`:`<div class="banner"><p>Confirm <b>${esc(cloudUser.email||"your email")}</b> before loans can move between accounts. Your own loan notes stay in War Box.</p></div>`)}
   // richer form fields
   const fe=v.querySelector('form[data-ed="loans"]');
   if(fe&&!fe.querySelector('[name="friendEmail"]')){const d=ED.loans?.draft||{};const anchor=fe.querySelector('[name="out"]')?.closest(".f");
@@ -137,7 +137,7 @@ async function apiPost(path,body){const tok=await firebase.auth().currentUser.ge
 var watchTimer=null;
 function syncWatches(){clearTimeout(watchTimer);watchTimer=setTimeout(async()=>{if(!window.LOOKUP_URL||!cloudUser)return;
   const list=L("wish").filter(w=>w.status!=="got"&&+w.target>0&&!GearLogic.saleRestricted(w)).map(w=>({id:w.id,name:w.name,brand:w.brand||"",category:w.category||"",target:+w.target}));
-  try{const j=await apiPost("/watch/sync",{watches:list});if(j.dropped)toast(`Price alerts are limited to ${j.max} items`,4000)}catch(e){if(list.length)toast("Price alerts: "+e.message,4000)}},800)}
+  try{const j=await apiPost("/watch/sync",{watches:list});if(j.dropped)toast(`Price alerts are limited to ${j.max} items`,4000)}catch(e){if(list.length)toast(lookupFailMessage(e&&e.message,"price alerts"),4000)}},800)}
 var vapidPublic="";
 function rememberPush(j){if(j&&j.vapidPublicKey)vapidPublic=j.vapidPublicKey}
 async function watchStatus(){if(!window.LOOKUP_URL||!cloudUser)return;try{const j=await apiPost("/watch/status",{});rememberPush(j);applyWatch(j.watches||[])}catch{}}

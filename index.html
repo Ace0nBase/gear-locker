@@ -18,21 +18,21 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="War Box">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#4a572e">
+<meta name="theme-color" content="#A8865A">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
 <div class="gate" id="gate" hidden>
   <form id="gateForm" autocomplete="on">
     <h1>War Box</h1>
-    <p id="gateMsg">Sign in to open your locker.</p>
+    <p id="gateMsg">Sign in to open War Box.</p>
     <div id="gateFields" hidden>
     <div class="f"><label for="gEmail">Email</label><input id="gEmail" type="email" autocomplete="username" required></div>
     <div class="f"><label for="gPass">Password</label><input id="gPass" type="password" autocomplete="current-password" required></div>
     <div class="err" id="gErr" role="alert"></div>
     <div class="row2"><button class="btn" type="submit" id="gIn">Sign in</button><button class="btn ghost" type="button" id="gNew">Create account</button></div>
     <label class="keep"><input type="checkbox" id="gKeep" checked> Keep me signed in on this device</label>
-    <p class="hint" id="gKeepNote" hidden>With this off, the locker on this device only works while you are online.</p>
+    <p class="hint" id="gKeepNote" hidden>With this off, War Box on this device only works while you are online.</p>
     <button class="link" type="button" id="gReset">Forgot password?</button>
     </div>
   </form>
@@ -56,7 +56,7 @@
   <nav class="tabs" id="tabs" role="tablist"></nav>
 
   <div class="banner" id="connect" hidden>
-    <p id="connectMsg">Choose where War Box saves your gear. Pick the <b>War Box</b> folder (Desktop › FOLDERS › War Box). Market checks read and update the file there.</p>
+    <p id="connectMsg">Choose where War Box saves a backup of your gear. Pick the <b>War Box</b> folder. Market checks read and update the file there.</p>
     <span class="vbtns"><button class="btn" id="connectBtn" type="button">Choose folder</button><button class="later" id="connectLater" type="button">Not now</button></span>
   </div>
 

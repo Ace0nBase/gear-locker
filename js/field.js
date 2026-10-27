@@ -112,7 +112,7 @@ $("battSheet").addEventListener("click",async e=>{const b=e.target.closest("[dat
   if(act==="battedit"&&i){battEdit=i.id;renderBattSheet();return}
   if(act==="battlook"&&i){if(GearLogic.armoryLookupBlocked(!!kits._settings?.privateArms,GearLogic.armorySubject(i,i.mountedOn&&itemById(i.mountedOn)))){toast("Battery lookup skips Armory items.");renderExtra();return}b.disabled=true;b.textContent="Looking…";try{const j=await apiPost("/battery",{name:i.name,brand:i.brand||"",category:i.category||"",type:i.armType||""});const r=j.result||{};
       if(r.none){i.battNone=true;toast(`${i.name} doesn't use batteries`)}else{if(r.battery)i.battType=r.battery;if(+r.count)i.battCount=+r.count;if(+r.swapMonths)i.battMonths=+r.swapMonths;if(r.life)i.battLife=r.life;toast(`${i.name}: ${r.count||1}× ${r.battery||"?"}, change every ${r.swapMonths||"?"} months`,5000)}
-      i.battLooked=true;i.updatedAt=now();await persist()}catch(err){toast("Battery lookup: "+err.message,5000)}renderExtra();return}
+      i.battLooked=true;i.updatedAt=now();await persist()}catch(err){toast(lookupFailMessage(err&&err.message,"the battery lookup"),5000)}renderExtra();return}
   return _am?_am(act,b):undefined}}
 // item screen: battery line
 {const _od=openDetail;openDetail=function(i,quiet){_od(i,quiet);const b=i&&battInfo(i);if(!b)return;const dl=$("detail").querySelector("dl");if(!dl)return;
@@ -202,8 +202,8 @@ function pushTm(m){const msg={th:dbToLin(TM.set.th),hold:TM.set.hold,...(m||{})}
 function beep(at,ms=220,hz=2600){const o=TM.ctx.createOscillator(),g=TM.ctx.createGain();o.type="square";o.frequency.value=hz;g.gain.setValueAtTime(0,at);g.gain.linearRampToValueAtTime(0.9,at+0.005);g.gain.setValueAtTime(0.9,at+ms/1000-0.01);g.gain.linearRampToValueAtTime(0,at+ms/1000);o.connect(g).connect(TM.ctx.destination);o.start(at);o.stop(at+ms/1000+0.02)}
 function onDet(m){
   if(m.peak!=null){TM.peak=m.peak;if(TM.cal)TM.calPeak=Math.max(TM.calPeak,m.peak);drawMeter();return}
-  if(m.shot!=null&&TM.running){const t=m.shot-TM.beepAt;if(t<0)return;TM.shots.push({t,lvl:m.lvl});clearTimeout(TM.autoStop);
-    const need=+tmDrill?.rounds||0;if(need&&TM.shots.length>=need)TM.autoStop=setTimeout(()=>stopTimer(),1500);renderTimerShots();navigator.vibrate?.(15)}
+  if(m.shot!=null&&TM.running){const need=+tmDrill?.rounds||0;if(!GearLogic.timerShotAccepted(TM.shots.length,need))return;const t=m.shot-TM.beepAt;if(t<0)return;TM.shots.push({t,lvl:m.lvl});
+    if(need&&TM.shots.length>=need){clearTimeout(TM.autoStop);TM.autoStop=setTimeout(()=>stopTimer(),1500)}renderTimerShots();navigator.vibrate?.(15)}
 }
 function drawMeter(){const bar=$("tmLvl");if(!bar)return;const db=Math.max(-60,linToDb(TM.peak));bar.style.width=`${Math.max(0,(db+60)/60*100)}%`;bar.classList.toggle("hot",db>=TM.set.th)}
 function openTimer(key){tmDrill=key?drillByKey(key):null;TM.shots=[];TM.running=false;renderTimer()}

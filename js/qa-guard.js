@@ -46,7 +46,7 @@ export function applyQaMode(win, loc, localOverride) {
   win.GEAR_QA_BLOCKED = true;
   const local = isLocalHost(loc.hostname) && (loc.protocol === "http:" || loc.protocol === "https:");
   if (!local) {
-    win.GEAR_QA_REASON = "Emulator mode only runs on this computer. This page will not open the live locker.";
+    win.GEAR_QA_REASON = "Emulator mode only runs on this computer. This page will not open the live War Box.";
     return { mode: "blocked", reason: win.GEAR_QA_REASON };
   }
   const cfg = localOverride && localOverride.firebase ? { ...QA_FIREBASE, ...localOverride.firebase } : { ...QA_FIREBASE };

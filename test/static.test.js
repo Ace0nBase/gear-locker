@@ -53,7 +53,8 @@ test("sign-out clears this device and the service worker is version 29", () => {
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /gear-locker-v29/);
+  assert.match(sw, /war-box-v30/);
+  assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
   assert.match(manifest, /maskable-512\.png/);
   assert.match(manifest, /"purpose": "maskable"/);
@@ -104,6 +105,17 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/security.js"), /Firearms, suppressors, frames, and ammunition get a weight-only lookup with no prices or stores/);
   assert.match(read("js/security.js"), /gear mounted on a weapon/);
   assert.match(read("js/comms.js"), /<span>I paid<\/span>/);
+  assert.match(read("js/comms.js"), /GearLogic\.csvCell/);
+  assert.match(read("js/comms.js"), /FRS 2 W, GMRS up to 5 W/);
+  assert.match(read("js/comms.js"), /0\.5 W for both FRS and GMRS/);
+  assert.match(read("js/comms.js"), /FRS 2 W, GMRS up to 50 W/);
+  assert.match(read("js/comms.js"), /Input is \+5 MHz/);
+  assert.doesNotMatch(read("js/comms.js"), /k<7\|\|k>=14\?"GMRS":"FRS"/);
+  assert.doesNotMatch(html, /open your locker/);
+  assert.match(html, /theme-color" content="#A8865A"/);
+  assert.match(manifest, /"theme_color": "#A8865A"/);
+  assert.doesNotMatch(read("js/records.js"), /Add kit gaps/);
+  assert.doesNotMatch(read("js/core.js"), /Set up on/);
   assert.match(read("css/app.css"), /\.apShot\[hidden\]\{display:none\}/);
   assert.match(read("api/worker.js"), /publicWeightNote/);
   assert.match(read("js/cloud.js"), /marketSourceText\(i\)/);
