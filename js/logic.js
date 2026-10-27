@@ -1385,20 +1385,6 @@ export function photoIdSuggestion(category, categories) {
 // The priced lookup tells the model to withhold a price for these, without the app guessing from the item name.
 export const PRICE_BACKSTOP = "If the item is a magazine over 30 rounds, an ammunition (linked) belt, or an auto-fire device (bump stocks, auto sears, or similar), return no price and no sources. Set retailNew, usedLow, usedHigh, and value to null. Set priceNote to \"\" and sources to []. Do not name a store or a seller.";
 
-// Whole words in a type cell that mean a firearm, suppressor, or receiver.
-const FIREARM_TYPE_WORDS = new Set([
-  "rifle", "rifles", "pistol", "pistols", "handgun", "handguns", "revolver", "revolvers",
-  "shotgun", "shotguns", "carbine", "carbines", "sbr", "sbrs", "firearm", "firearms",
-  "gun", "guns", "machinegun", "smg", "receiver", "receivers", "lower", "lowers",
-  "frame", "frames", "suppressor", "suppressors", "silencer", "silencers",
-]);
-
-export function typeHasFirearmTerm(value) {
-  const key = String(value || "").normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
-  if (!key) return false;
-  return key.split(" ").some(word => FIREARM_TYPE_WORDS.has(word));
-}
-
 // A row still waiting on a category is not priced and not looked up.
 function needsUncategorized(item) {
   if (!item || typeof item !== "object") return false;
@@ -1408,16 +1394,15 @@ function needsUncategorized(item) {
   return !!(item.importId && !category);
 }
 
-// Until the owner picks a category, an imported type that names a firearm stays off market checks.
-function importTypeHeld(item) {
-  if (!item || !item.importId || item.importCategoryPicked) return false;
-  if (item.importTypeHold) return true;
-  return typeHasFirearmTerm(item.armType) || typeHasFirearmTerm(item.importType);
-}
-
-// Imported rows use the same restricted shelves. A purchase price stays the owner's own "What I paid" number.
+// Every imported row stays off prices, links, and lookups until the type is an
+// allowlisted priced shelf or the owner picks a category. Restricted shelves stay restricted.
 export function importRestricted(item) {
-  return saleRestricted(item) || importTypeHeld(item);
+  if (!item || typeof item !== "object") return false;
+  if (saleRestricted(item)) return true;
+  if (!item.importId) return false;
+  if (item.importCategoryPicked) return false;
+  if (item.importPricedAllowlist) return false;
+  return true;
 }
 
 // Imported restricted rows, and anything still needing a category, are not sent to price or weight lookups.

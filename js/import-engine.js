@@ -1,7 +1,7 @@
 // On-device spreadsheet import. No network, no disk, no price lookups.
 // Column matching uses the header text only.
 
-import { GEAR_CATEGORIES, importRestricted, saleRestricted, typeHasFirearmTerm } from "./logic.js";
+import { GEAR_CATEGORIES, importRestricted, saleRestricted } from "./logic.js";
 
 export const LIMITS = {
   fileBytes: 15 * 1024 * 1024,
@@ -481,7 +481,44 @@ function mapCondition(raw) {
 }
 
 function normType(value) {
-  return String(value || "").normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  return normalizeType(value);
+}
+
+// Cyrillic and Greek letters that look like Latin. Applied after NFKC.
+const LOOKALIKE = new Map(Object.entries({
+  "\u0410": "A", "\u0430": "a", "\u0412": "B", "\u0432": "b", "\u0415": "E", "\u0435": "e",
+  "\u041a": "K", "\u043a": "k", "\u041c": "M", "\u043c": "m", "\u041d": "H", "\u043d": "h",
+  "\u041e": "O", "\u043e": "o", "\u0420": "P", "\u0440": "p", "\u0421": "C", "\u0441": "c",
+  "\u0422": "T", "\u0442": "t", "\u0423": "Y", "\u0443": "y", "\u0425": "X", "\u0445": "x",
+  "\u0405": "S", "\u0455": "s", "\u0406": "I", "\u0456": "i", "\u0408": "J", "\u0458": "j",
+  "\u0404": "E", "\u0454": "e", "\u0407": "I", "\u0457": "i", "\u04c0": "l", "\u04cf": "l",
+  "\u0474": "V", "\u0475": "v",
+  "\u0391": "A", "\u03b1": "a", "\u0392": "B", "\u03b2": "b", "\u0395": "E", "\u03b5": "e",
+  "\u0396": "Z", "\u03b6": "z", "\u0397": "H", "\u03b7": "h", "\u0399": "I", "\u03b9": "i",
+  "\u039a": "K", "\u03ba": "k", "\u039c": "M", "\u03bc": "m", "\u039d": "N", "\u03bd": "v",
+  "\u039f": "O", "\u03bf": "o", "\u03a1": "P", "\u03c1": "p", "\u03a4": "T", "\u03c4": "t",
+  "\u03a5": "Y", "\u03c5": "y", "\u03a7": "X", "\u03c7": "x", "\u0398": "O", "\u03b8": "o",
+}));
+
+// NFKC, drop zero-width characters and combining marks, fold look-alikes, then lowercase.
+function prepareType(value) {
+  let s = String(value || "").normalize("NFKC");
+  s = s.replace(/[\u0000-\u001F\u007F-\u009F\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g, "");
+  s = s.normalize("NFD").replace(/\p{M}/gu, "");
+  s = [...s].map(ch => LOOKALIKE.get(ch) || ch).join("");
+  return s.toLowerCase();
+}
+
+function normalizeType(value) {
+  return prepareType(value).replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// w/, with, +, &, and, slash, and comma join two descriptions. They are not one gear type.
+function comboMarked(value) {
+  const prepared = prepareType(value);
+  if (/[+/&,;]|\/|\bw\/|\bwith\b|\band\b/.test(prepared)) return true;
+  const tokens = prepared.replace(/[^a-z0-9]+/g, " ").split(" ").filter(Boolean);
+  return tokens.includes("w") || tokens.includes("with") || tokens.includes("and");
 }
 
 // Whole type-cell values. A word inside a longer accessory name is not a firearm.
@@ -495,36 +532,57 @@ const LOWER_TYPES = new Set([
   "ar lower", "ar15 lower", "ar 15 lower", "serialized lower", "frame", "receiver",
 ]);
 const AMMO_TYPES = new Set(["ammunition", "ammo", "cartridge", "cartridges", "shotshell", "shotshells"]);
-const FIREARM_WORDS = new Set([
-  "rifle", "rifles", "pistol", "pistols", "handgun", "handguns", "revolver", "revolvers",
-  "shotgun", "shotguns", "carbine", "carbines", "sbr", "sbrs", "firearm", "firearms", "gun", "guns",
-  "machinegun", "smg",
-]);
-const FIREARM_MODS = new Set([
-  "semi", "auto", "automatic", "bolt", "action", "pump", "lever", "break", "single", "double", "full",
-  "size", "compact", "subcompact", "duty", "hunting", "tactical", "short", "barreled", "ar", "ar15",
-  "ak", "ak47", "over", "under", "side", "by", "nfa", "registered", "long", "machine", "submachine", "sub",
+const FIREARM_EXACT = new Set([
+  "pistol", "pistols", "rifle", "rifles", "shotgun", "shotguns", "revolver", "revolvers",
+  "handgun", "handguns", "carbine", "carbines", "sbr", "sbrs", "firearm", "firearms", "gun", "guns",
+  "long gun", "machine gun", "submachine gun", "sub machine gun", "machinegun", "smg",
+  "bolt action rifle", "semi auto pistol", "semi automatic pistol", "pump action shotgun", "lever action rifle",
 ]);
 const SOURCE_FIREARM_TYPES = {
-  myarmory: ["pistol", "rifle", "shotgun", "revolver", "handgun", "carbine", "sbr", "firearm", "long gun", "bolt action rifle"],
-  armscache: ["handgun", "rifle", "shotgun", "pistol", "revolver", "firearm", "long gun"],
+  myarmory: ["pistol", "rifle", "shotgun", "revolver", "handgun", "carbine", "sbr", "firearm", "long gun", "bolt action rifle", "gun"],
+  armscache: ["handgun", "rifle", "shotgun", "pistol", "revolver", "firearm", "long gun", "carbine"],
   guntrack: ["handgun", "handguns", "rifle", "rifles", "shotgun", "shotguns", "pistol", "revolver", "long gun"],
+  generic: ["pistol", "rifle", "shotgun", "revolver", "handgun", "carbine", "sbr", "firearm", "long gun", "bolt action rifle", "gun"],
 };
 
-const ACCESSORY_RULES = [
-  [/\b(scopes?|optics?|lpvo|sights?|holographic|red dots?)\b/, { target: "gear", arm: "OP", category: "NVG & Optics" }],
-  [/\b(lasers?|nvgs?|night vision|thermal)\b/, { target: "gear", arm: "LA", category: "Lights & Lasers" }],
-  [/\b(lights?|flashlights?|wml|weapon lights?)\b/, { target: "gear", arm: "WL", category: "Lights & Lasers" }],
-  [/\b(slings?|holsters?)\b/, { target: "gear", arm: "", category: "Holsters & Slings" }],
-  [/\b(safes?|cases?)\b/, { target: "gear", arm: "", category: "Cases & Bags" }],
-  [/\bbipods?\b/, { target: "gear", arm: "", category: "Misc" }],
-  [/\b(magazines?|mags?)\b/, { target: "gear", arm: "", category: "Magazines & Belts" }],
-  [/\bgrips?\b/, { target: "gear", arm: "", category: "Triggers & Parts" }],
-  [/\bcleaning\b/, { target: "gear", arm: "", category: "Cleaning & Maintenance" }],
-  [/\b(shells?|shotshells?)\b/, { target: "ammo", arm: "", category: "Ammunition" }],
-  [/\b(knives|knife|blades?|daggers?)\b/, { target: "gear", arm: "KN", category: "Knives & Tools" }],
-  [/\btriggers?\b/, { target: "gear", arm: "", category: "Triggers & Parts" }],
-];
+// Whole-value accessory and gear types. A word inside a longer cell is not a match.
+const OPTIC = { target: "gear", arm: "OP", category: "NVG & Optics" };
+const LASER = { target: "gear", arm: "LA", category: "Lights & Lasers" };
+const LIGHT = { target: "gear", arm: "WL", category: "Lights & Lasers" };
+const HOLSTER = { target: "gear", arm: "", category: "Holsters & Slings" };
+const CASE = { target: "gear", arm: "", category: "Cases & Bags" };
+const MISC = { target: "gear", arm: "", category: "Misc" };
+const MAG = { target: "gear", arm: "", category: "Magazines & Belts" };
+const PART = { target: "gear", arm: "", category: "Triggers & Parts" };
+const CLEAN = { target: "gear", arm: "", category: "Cleaning & Maintenance" };
+const AMMO_ROUTE = { target: "ammo", arm: "", category: "Ammunition" };
+const KNIFE = { target: "gear", arm: "KN", category: "Knives & Tools" };
+const ACCESSORY_TERMS = {
+  scope: OPTIC, scopes: OPTIC, optic: OPTIC, optics: OPTIC, lpvo: OPTIC, sight: OPTIC, sights: OPTIC, holographic: OPTIC,
+  laser: LASER, lasers: LASER, nvg: LASER, nvgs: LASER, thermal: LASER,
+  light: LIGHT, lights: LIGHT, flashlight: LIGHT, flashlights: LIGHT, wml: LIGHT,
+  sling: HOLSTER, slings: HOLSTER, holster: HOLSTER, holsters: HOLSTER,
+  safe: CASE, safes: CASE, case: CASE, cases: CASE,
+  bipod: MISC, bipods: MISC,
+  magazine: MAG, magazines: MAG, mag: MAG, mags: MAG,
+  grip: PART, grips: PART, trigger: PART, triggers: PART,
+  cleaning: CLEAN,
+  shell: AMMO_ROUTE, shells: AMMO_ROUTE, shotshell: AMMO_ROUTE, shotshells: AMMO_ROUTE,
+  knife: KNIFE, knives: KNIFE, blade: KNIFE, blades: KNIFE, dagger: KNIFE, daggers: KNIFE,
+};
+const GEAR_PHRASES = {
+  "red dot": OPTIC, "red dots": OPTIC, "red dot sight": OPTIC, "red dot sights": OPTIC,
+  "holographic sight": OPTIC, "holographic sights": OPTIC,
+  "night vision": LASER,
+  "weapon light": LIGHT, "weapon lights": LIGHT,
+  "cleaning kit": CLEAN, "cleaning kits": CLEAN,
+};
+const SOURCE_GEAR_PHRASES = {
+  myarmory: GEAR_PHRASES,
+  armscache: GEAR_PHRASES,
+  guntrack: GEAR_PHRASES,
+  generic: GEAR_PHRASES,
+};
 
 function armoryFromTokens(tokens) {
   let armType = "";
@@ -534,27 +592,20 @@ function armoryFromTokens(tokens) {
   return { target: "armory", arm: "FA", category: "Firearms", armType };
 }
 
-function accessoryRoute(key) {
-  for (const [re, route] of ACCESSORY_RULES) if (re.test(key)) return { ...route };
-  return null;
+function pricedShelf(route) {
+  if (!route || route.target !== "gear" || route.migratedFromMagShelf) return route;
+  if (route.category && !saleRestricted({ category: route.category, arm: route.arm || "" })) {
+    return { ...route, pricedAllowlist: true };
+  }
+  return route;
 }
 
-// "w/", "with", "+", "&", and "and" join a firearm to something else.
-function hasComboMarker(raw) {
-  return /\bw\/|\bwith\b|\band\b|[+&]/i.test(String(raw || ""));
-}
-
-// A firearm word plus an accessory, or a combo marker, is not a priced shelf.
-function mixedFirearmAccessory(raw, key) {
-  return typeHasFirearmTerm(raw) && (hasComboMarker(raw) || !!accessoryRoute(key));
-}
-
-function firearmPhrase(key) {
+function exactFirearm(key, source) {
+  const listed = SOURCE_FIREARM_TYPES[source] || SOURCE_FIREARM_TYPES.generic || [];
+  const known = listed.some(name => normType(name) === key) || FIREARM_EXACT.has(key);
+  if (!known) return null;
   if (key === "long gun" || key === "machine gun" || key === "submachine gun" || key === "sub machine gun") return armoryFromTokens(key.split(" "));
-  const tokens = key.split(" ").filter(Boolean);
-  const ok = tokens.every(tok => FIREARM_WORDS.has(tok) || FIREARM_MODS.has(tok) || /^\d+[a-z]?$/.test(tok));
-  if (!ok || !tokens.some(tok => FIREARM_WORDS.has(tok))) return null;
-  return armoryFromTokens(tokens);
+  return armoryFromTokens(key.split(" "));
 }
 
 function classifyType(typeText, categories, source) {
@@ -564,18 +615,21 @@ function classifyType(typeText, categories, source) {
   if (key === "mags ammo storage" || key === "mags and ammo storage") {
     return { target: "gear", arm: "", category: storageCategory(list), storage: true, migratedFromMagShelf: true };
   }
-  if (STORAGE_TYPES.has(key)) return { target: "gear", arm: "", category: storageCategory(list), storage: true };
-  const named = routeNamedCategory(typeText);
-  if (named) return named;
-  if (mixedFirearmAccessory(typeText, key)) return null;
-  const accessory = accessoryRoute(key);
-  if (accessory) return accessory;
+  if (STORAGE_TYPES.has(key)) return pricedShelf({ target: "gear", arm: "", category: storageCategory(list), storage: true });
+  const named = routeNamedCategory(key);
+  if (named) return pricedShelf(named);
   if (SUPPRESSOR_TYPES.has(key)) return { target: "armory", arm: "SU", category: "Suppressors", armType: "Suppressor" };
   if (LOWER_TYPES.has(key)) return { target: "armory", arm: "FA", category: "Lower receiver", armType: "Lower receiver" };
   if (AMMO_TYPES.has(key)) return { target: "ammo", arm: "", category: "Ammunition" };
-  const listed = SOURCE_FIREARM_TYPES[source] || [];
-  if (listed.some(name => normType(name) === key)) return firearmPhrase(key) || armoryFromTokens(key.split(" "));
-  return firearmPhrase(key);
+  const firearm = exactFirearm(key, source);
+  if (firearm) return firearm;
+  // A combo marker or any word that is not the whole allowlisted value stays uncategorized.
+  if (comboMarked(typeText)) return null;
+  const tokens = key.split(" ").filter(Boolean);
+  if (tokens.length === 1 && ACCESSORY_TERMS[tokens[0]]) return pricedShelf({ ...ACCESSORY_TERMS[tokens[0]] });
+  const phrases = SOURCE_GEAR_PHRASES[source] || SOURCE_GEAR_PHRASES.generic;
+  if (phrases[key]) return pricedShelf({ ...phrases[key] });
+  return null;
 }
 
 function routeNamedCategory(name) {
@@ -674,11 +728,10 @@ function routeOne(fields, fileTarget, categories, source) {
   const typed = raw ? classifyType(raw, categories, source) : null;
   if (typed) return finishRoute(typed, fields);
   if (raw) return { target: "needs", arm: "", category: "", needsCategory: true, gearArmory: false };
-  // An empty type is not ammunition just because the file is an ammo list or a caliber is filled in.
-  // A lot or a load on the row is the ammunition signal. fileTarget is not.
+  // An empty type stays uncategorized. A bullet or grain note is not a type, and neither is the file default.
+  // A lot number is the ammunition signal. fileTarget is not.
   void fileTarget;
-  const structuralAmmo = !fields.serial && (!!fields.load || !!fields.lot);
-  if (structuralAmmo) return { target: "ammo", arm: "", category: "Ammunition", gearArmory: false };
+  if (!fields.serial && fields.lot) return { target: "ammo", arm: "", category: "Ammunition", gearArmory: false };
   return { target: "needs", arm: "", category: "", needsCategory: true, gearArmory: false };
 }
 
@@ -980,7 +1033,7 @@ export function planImport(tables, opts = {}) {
         };
         if (paid != null) { doc.paid = paid; doc.paidSource = "manual"; }
         if (picked) doc.importCategoryPicked = true;
-        else if (typeHasFirearmTerm(fields.armType)) doc.importTypeHold = true;
+        else if (routed.pricedAllowlist) doc.importPricedAllowlist = true;
         if (decision === "add" && duplicate) doc.tags = ["possible duplicate"];
         ammo.push(doc);
         ammoKeys.set(ammoKey(doc), { row: doc, where: "file" });
@@ -1000,7 +1053,7 @@ export function planImport(tables, opts = {}) {
       };
       if (paid != null) { doc.paid = paid; doc.paidSource = "manual"; }
       if (picked) doc.importCategoryPicked = true;
-      else if (typeHasFirearmTerm(fields.armType)) doc.importTypeHold = true;
+      else if (routed.pricedAllowlist) doc.importPricedAllowlist = true;
       if (routed.migratedFromMagShelf) doc.migratedFromMagShelf = true;
       const tags = [];
       if (!doc.serial && routed.target === "armory") tags.push("no serial");

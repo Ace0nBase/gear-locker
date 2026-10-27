@@ -848,9 +848,15 @@ async function saveImport() {
     S.saving = false;
     S.saveProgress = null;
     S.cancelSave = false;
+    if (typeof all !== "undefined" && typeof db !== "undefined") {
+      const next = undoImportState(all, db.ammo || [], id, new Date().toISOString());
+      all = next.items;
+      db.ammo = next.ammo;
+    }
     paint();
     if (typeof toast === "function") toast(report);
     await undoImport(id, { skipConfirm: true, quiet: true });
+    paint();
     return;
   }
   S.tables.forEach((table, ti) => {
