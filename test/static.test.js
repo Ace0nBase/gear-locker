@@ -69,6 +69,9 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/core.js"), /GearLogic\.saleRestricted\(item\)/);
   assert.match(read("js/core.js"), /GearLogic\.csvExportField/);
   assert.match(read("js/core.js"), /GearLogic\.countedValue/);
+  assert.match(read("js/kits.js"), /GearLogic\.countedValue/);
+  assert.match(read("js/cloud.js"), /lookupAnswerRestricted/);
+  assert.match(read("api/worker.js"), /lookupAnswerRestricted/);
   assert.match(read("js/social.js"), /!GearLogic\.saleRestricted\(w\)&&w\.deal/);
   assert.match(read("js/security.js"), /caliber, load, and Arms Room type/);
   assert.match(read("js/security.js"), /Headlamps, flashlights, and binoculars still look up/);

@@ -294,7 +294,7 @@ var lookupBody=i=>{const restricted=GearLogic.saleRestricted(i);return {id:i.id,
 function applyLookup(id,res){
   const it=all.find(x=>x.id===id);if(!it||it.deleted||!res||!res.ok)return false;
   const n=v=>v==null||v===""||!isFinite(+v)?null:Math.round(+v);
-  const restricted=GearLogic.saleRestricted(it);
+  const restricted=GearLogic.saleRestricted(it)||GearLogic.lookupAnswerRestricted(res);
   if(restricted){it.retailNew=0;delete it.usedLow;delete it.usedHigh;delete it.priceNote;it.marketSources=[];if(it.valueSource!=="manual"){it.value=0;delete it.priceSource;delete it.priceDate}}
   else{
     if(n(res.retailNew)!=null)it.retailNew=n(res.retailNew);

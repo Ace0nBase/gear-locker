@@ -4,7 +4,7 @@ import {
   clearUserLocal, shareItemFields, decideAccess, chargeDecision, quotaKey, alertQuotaKey,
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
-  saleRestricted, countedValue, csvExportField, publicWeightNote,
+  saleRestricted, countedValue, csvExportField, publicWeightNote, lookupAnswerRestricted,
   keepSignedIn, firestoreMemoryOnly, settleOrTimeout, signOutConfirmNeeded, SIGN_OUT_WAIT_MS, armorySubject, armoryLookupBlocked, photoIdBlocked,
 } from "../js/logic.js";
 
@@ -309,6 +309,24 @@ test("price search and sale links skip firearms, ammunition, and the parts that 
     ["Mags & Ammo Storage", "Glock 19 magazine"],
     ["Misc", "Jerry can"],
     ["Misc", "can opener"],
+    ["Misc", "pistol grip"],
+    ["Misc", "rifle bipod"],
+    ["Misc", "10mm wrench"],
+    ["NVG & Optics", "30mm scope rings"],
+    ["Cleaning & Maintenance", "bore brush .308"],
+    ["Belts & Rigs", "7.62 chest rig"],
+    ["Misc", "soup can"],
+    ["Misc", "Can-Am ATV"],
+    ["Misc", "8mm socket"],
+    ["Misc", "3mm hex key"],
+    ["Misc", "1.5mm paracord"],
+    ["Misc", "Carbine length gas tube"],
+    ["Cleaning & Maintenance", "pistol cleaning mat"],
+    ["Belts & Rigs", "shotgun shell holder"],
+    ["Misc", "bear spray can"],
+    ["Comms & Radios", "SDR receiver"],
+    ["Misc", "Glock 78 field knife"],
+    ["Misc", "barrel 16in 5.56"],
   ];
   allowed.forEach(([category, name]) => assert.equal(saleRestricted({ category, name }), false, name + " in " + category));
 });
@@ -326,11 +344,17 @@ test("a looked-up price on a restricted item is not an insured value", () => {
   assert.equal(csvExportField({ category: "Pouches", name: "Admin pouch", retailNew: 50, priceSource: "market", priceDate: "2026-02-02" }, "retailNew"), 50);
 });
 
-test("a restricted weight note drops store names and links", () => {
+test("a restricted weight note drops store names, links, and prices", () => {
   assert.equal(publicWeightNote("Maker spec https://www.amazon.com/dp/1 via Amazon"), "Maker spec via");
   assert.equal(publicWeightNote("Brownells listing, www.brownells.com"), "listing");
   assert.equal(publicWeightNote("Local test weight"), "Local test weight");
   assert.equal(publicWeightNote("Primary Arms page"), "page");
+  assert.equal(publicWeightNote("Sold at State Armory for $899. MSRP $1,299 at Academy Sports"), "");
+  assert.equal(publicWeightNote("lists 30 oz, $1,299 at Academy Sports MSRP $1,350"), "");
+  assert.equal(publicWeightNote("Sold at State Armory"), "");
+  assert.equal(lookupAnswerRestricted({ restricted: true, priceNote: "" }), true);
+  assert.equal(lookupAnswerRestricted({ priceNote: "GunBroker AR-15 $450", sources: [{ label: "GunBroker", url: "https://gunbroker.com/x" }] }), true);
+  assert.equal(lookupAnswerRestricted({ priceNote: "Typical pouch", sources: [{ label: "Local test shop", url: "https://example.com/gear" }] }), false);
 });
 
 test("keep-signed-in off uses a memory cache and sign-out confirms only when a save is still pending", async () => {

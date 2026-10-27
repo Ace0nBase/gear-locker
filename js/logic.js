@@ -300,108 +300,160 @@ function normCat(category) {
   return String(category || "").trim().toLowerCase();
 }
 
-function itemBlob(item) {
-  return [item.name, item.brand, item.load, item.caliber, item.armType].map(v => String(v || "").toLowerCase()).join(" ");
+// Letters that look like Latin in a name. Cyrillic у is mapped to u so a lookalike "suppressor" still matches.
+const CONFUSABLES = {
+  "\u0405": "s", "\u0455": "s", "\u0443": "u", "\u0423": "u",
+  "\u0430": "a", "\u0410": "a", "\u0435": "e", "\u0415": "e", "\u043e": "o", "\u041e": "o",
+  "\u0440": "p", "\u0420": "p", "\u0441": "c", "\u0421": "c", "\u0445": "x", "\u0425": "x",
+  "\u0456": "i", "\u0406": "i", "\u0458": "j", "\u04bb": "h", "\u04ba": "h", "\u0501": "d",
+};
+
+function foldText(value) {
+  let t = String(value || "");
+  t = t.replace(/[\u200B-\u200D\uFEFF\u00AD]/g, "");
+  t = t.normalize("NFD").replace(/\p{M}/gu, "");
+  t = t.normalize("NFKC");
+  t = [...t].map(ch => CONFUSABLES[ch] || ch).join("").toLowerCase();
+  t = t.replace(/m\s*&\s*p/g, "mp");
+  t = t.replace(/s\s*&\s*w/g, "sw");
+  t = t.replace(/(\d),(?=\d)/g, "$1.");
+  t = t.replace(/[_/\\|]+/g, " ");
+  t = t.replace(/-+/g, " ");
+  return t;
 }
 
-function ammoContainer(blob) {
-  return /\bammo\s+(can|box|bag|crate|pouch)\b/.test(blob);
-}
-
-function namedCan(blob) {
-  const t = String(blob || "").trim();
-  if (/\b(ammo|fuel|gas|jerry|water|trash|garbage|oil|food|coffee|paint|tin|milk|soda|beer|watering)\s+cans?\b/.test(t)) return false;
-  if (/\bcans?\s+(opener|light|holder|stove)\b/.test(t)) return false;
-  return /^(the\s+|my\s+)?can$/.test(t) || /\bcan\b/.test(t);
-}
-
-function suppressorIdentity(blob) {
-  if (ammoContainer(blob)) return false;
-  if (/suppress|supress|suppres|silenc|solvent\s*trap|\bsico\b|dead\s*air/.test(blob)) return true;
-  return namedCan(blob);
-}
-
-function accessoryNotFirearm(blob) {
-  return /\b(holster|pouch|sling|scabbard|case|bag|carrier)\b/.test(blob)
-    && !/\blower\b/.test(blob)
-    && !/\bframe\b/.test(blob)
-    && !suppressorIdentity(blob);
-}
-
-function lightOrScope(blob) {
-  return /\b(lights?|lamps?|scopes?|sights?)\b/.test(blob) && !/\blower\b/.test(blob) && !suppressorIdentity(blob);
+function saleText(item) {
+  const raw = [item.name, item.brand, item.load, item.caliber, item.armType].map(v => String(v || "")).join(" ");
+  const folded = foldText(raw);
+  const spaced = folded.replace(/[^a-z0-9.]+/g, " ").replace(/\s+/g, " ").trim();
+  const compact = spaced.replace(/[^a-z0-9]/g, "");
+  const parts = folded.split(/[^a-z0-9]+/).filter(Boolean);
+  const glued = parts.length >= 6 && parts.every(p => p.length === 1) ? parts.join("") : "";
+  return { t: glued ? `${spaced} ${glued}` : spaced, c: compact + glued };
 }
 
 // Magazines are not priced like firearms or ammunition. A caliber in the name does not change that.
-function isMagazine(blob) {
-  if (/\b(pouch|holster|sling|case|bag|carrier|well)\b/.test(blob)) return false;
-  return /\b(pmags?|magazines?|mags?)\b/.test(blob);
+function isMagazine(t) {
+  if (/\b(pouch(?:es)?|holsters?|slings?|cases?|bags?|carriers?|wells?|holders?)\b/.test(t)) return false;
+  return /\b(pmags?|magazines?|mags?)\b/.test(t);
 }
 
-function cleaningNotAmmo(blob) {
-  return /\bcleaning\s+kit\b|\bbore\s+snake\b/.test(blob) && !/solvent\s*trap/.test(blob);
+function isAmmoContainer(t) {
+  return /\bammo\s+(cans?|box(?:es)?|bags?|crates?|pouch(?:es)?)\b/.test(t);
 }
 
-function clearCartridge(blob) {
-  if (ammoContainer(blob) || accessoryNotFirearm(blob) || isMagazine(blob) || cleaningNotAmmo(blob)) return false;
-  return /\d+(?:\.\d+)?\s*mm\b/.test(blob)
-    || /\.\d{2,3}\b/.test(blob)
-    || /\d+\s*gauges?\b/.test(blob)
-    || /\d+\s*ga\b/.test(blob)
-    || /\b22\s*lr\b/.test(blob)
-    || /\b5\.56\b/.test(blob)
-    || /\b7\.62\b/.test(blob)
-    || /\d+\s*gr(?:ain)?s?\b/.test(blob)
-    || /\bcreedmoor\b/.test(blob)
-    || /\b\d+\s*acp\b/.test(blob)
-    || /\bblazer\s+brass\b/.test(blob)
-    || /\b(ammunition|cartridges?)\b/.test(blob)
-    || /\bammo\b/.test(blob);
+// Gear that can name a gun or a caliber and still be ordinary equipment.
+function isAccessory(t) {
+  return /\b(holsters?|pouch(?:es)?|slings?|scabbards?|cases?|bags?|carriers?|grips?|bipods?|buttstocks?|handguards?|gas\s+tubes?|parts\s+kits?|wrench(?:es)?|sockets?|hex\s+keys?|paracords?|knives|knife|mats?|brush(?:es)?|chest\s+rigs?|rigs?|shell\s+holders?|lights?|lamps?|scopes?|sights?|optics?|binoculars?|headlamps?|multitools?|hats?|cameras?|tarps?|blankets?|flags?|snacks?|jugs?|batter(?:y|ies)|rangefinders?|ear\s+pro|glasses|tourniquets?|splints?|barrels?|stocks?|cords?)\b/.test(t);
 }
 
-const LOWER_PLATFORM = "(?:ar[\\s-]?15|ar15|ar[\\s-]?10|ar10|\\bar\\b|\\bm4|\\b308\\b)";
-const LOWER_NEAR = new RegExp(LOWER_PLATFORM + ".{0,40}lower|lower.{0,40}" + LOWER_PLATFORM);
-
-function namedFirearm(blob) {
-  return /\bglock\s*\d{2}\w*\b/.test(blob)
-    || /\bp365\w*\b/.test(blob)
-    || /\bremington\s*870\b/.test(blob)
-    || /\bm\s*&\s*p\s*15\b|\bm&p\s*15\b/.test(blob);
+function isCleaning(t) {
+  return /\b(cleaning\s+(kits?|rods?|mats?)|bore\s+(snakes?|brush(?:es)?)|gun\s+oils?)\b/.test(t) && !/\bsolvent\s*traps?\b/.test(t);
 }
 
-function firearmIdentity(blob) {
-  if (ammoContainer(blob) || accessoryNotFirearm(blob) || lightOrScope(blob) || isMagazine(blob)) return false;
-  if (suppressorIdentity(blob)) return true;
-  if (/\bpolymer\s*80\b|\bpf-?\s*940/.test(blob)) return true;
-  if (/\b(window|internal|door|bed|picture|photo|pack|tent|bike)\s+frame\b/.test(blob) || /\bframe\s+pack\b/.test(blob)) return false;
-  if (/\b(pistol|rifle|handgun|firearm)\s+frame\b/.test(blob)) return true;
-  if (/\b(?!pack\b|photo\b|tent\b|bike\b|picture\b|window\b|internal\b|door\b|bed\b)[a-z0-9][\w.+-]*\s+frame\b/.test(blob)) return true;
-  if (/\b(stripped|serialized|complete)\s+(lower|receiver)\b/.test(blob)) return true;
-  if (/\blower\s+receiver\b/.test(blob)) return true;
-  if (/\b80\s*(%|percent)?\s*(frame|lower|receiver)\b/.test(blob)) return true;
-  if (LOWER_NEAR.test(blob)) return true;
-  if (/\bfcu\b|\bfire\s*control\s*unit\b/.test(blob)) return true;
-  if (/\breceiver\b/.test(blob) && !/\b(handheld|upper|radio|satellite|weather|gps|noaa)\b/.test(blob)) return true;
-  if (namedFirearm(blob)) return true;
-  if (/\b(pistols?|rifles?|shotguns?|handguns?|revolvers?|carbines?)\b/.test(blob)) return true;
+function isBareCan(t) {
+  if (/\b(ammo|fuel|gas|jerry|water|trash|garbage|oil|food|coffee|paint|tin|milk|soda|beer|watering|soup|spray|bear)\s+cans?\b/.test(t)) return false;
+  if (/\bcans?\s+(openers?|lights?|holders?|stoves?)\b/.test(t)) return false;
+  if (/\bcan\s+am\b|\batvs?\b/.test(t)) return false;
+  return /\bcans?\b/.test(t);
+}
+
+function isSuppressor(t, c) {
+  if (/\b(suppress\w*|supress\w*|suppres\w*|surpress\w*|syppress\w*|silenc\w*|sillenc\w*|solvent\s*traps?|moderators?)\b/.test(t)) return true;
+  if (/suppress|silenc|syppress/.test(c)) return true;
+  if (/\b(sico|silencerco|dead\s+air|thunder\s+beast|huxwrx|rugged\s+obsidian|silencer\s+central)\b/.test(t)) return true;
+  if (/\boil\s+filter\s+adapters?\b|\bfuel\s+filter\s+kits?\b|\bmuzzle\s+cans?\b/.test(t)) return true;
+  return isBareCan(t);
+}
+
+function isAmmo(t, c) {
+  if (/\b(fmj|jhp|buckshot|birdshot|primers?|gunpowder|smokeless|green\s+tips?|m855|m193|hollow\s+points?|hst|brass\s+casings?|casings?|shells?|slugs?|ammunition|cartridges?|ammo|rds|rounds?)\b/.test(t)) return true;
+  if (/\b(hodgdon|h4350|luger|creedmoor|blazer\s+brass)\b/.test(t)) return true;
+  if (/\d+(?:\.\d+)?\s*mm\b/.test(t)) return true;
+  if (/\d+(?:\.\d+)?\s*x\s*\d+/.test(t)) return true;
+  if (/\b(5\.56|7\.62|6\.5|9\.3|4\.6|5\.7)\b/.test(t)) return true;
+  if (/\.(22|223|300|308|45|40|357|38|277|243|270|30|25|17|204|338|375|458|50)\b/.test(t)) return true;
+  if (/(^|[^\d])\.?22\s*lr\b/.test(t) || /22lr/.test(c)) return true;
+  if (/\b\d{2,3}\s*(win|rem|remington|blk|blackout|special|magnum|sw|acp|auto|lr)\b/.test(t)) return true;
+  if (/\b30\s+06\b/.test(t) || /\b300\s+(blackout|blk)\b/.test(t)) return true;
+  if (/\b\d+\s*gauges?\b/.test(t) || /\b\d+\s*ga\b/.test(t)) return true;
+  if (/\d+\s*gr(?:ain)?s?\b/.test(t)) return true;
+  if (/556|762x39|9x19|300blk|300blackout|308win/.test(c)) return true;
   return false;
 }
 
+function isFrameOrLower(t) {
+  if (/\b(window|internal|door|bed|picture|photo|pack|tent|bike)\s+frames?\b/.test(t) || /\bframes?\s+packs?\b/.test(t)) return false;
+  if (/\buppers?\b/.test(t) && !/\blowers?\b/.test(t)) return false;
+  if (/\b(pistol|rifle|handgun|firearm)\s+frames?\b/.test(t)) return true;
+  if (/\bpolymer\s*80\b|\bpf\s*940/.test(t)) return true;
+  if (/\b(stripped|serialized|complete)\s+(lowers?|receivers?)\b/.test(t)) return true;
+  if (/\blowers?\s+receivers?\b/.test(t) || /\blowers?\b/.test(t)) return true;
+  if (/\b80\s+(frames?|lowers?|receivers?)\b/.test(t)) return true;
+  if (/\bfcus?\b|\bfire\s+control\s+units?\b/.test(t)) return true;
+  if (/\bframes?\b/.test(t)) return true;
+  if (/\breceivers?\b/.test(t) && !/\b(handheld|upper|radio|satellite|weather|gps|noaa|sdr|gmrs|baofeng)\b/.test(t)) return true;
+  return false;
+}
+
+function knownModel(t, c) {
+  if (/\bglocks?\s*\d{2}/.test(t) || (/\bglocks?\b/.test(t) && /\b\d{2}\b/.test(t))) return true;
+  if (/\bg\s*\d{2}\w*\b/.test(t)) return true;
+  if (/\bp\s*\d{3}\w*\b/.test(t) || /p365/.test(c)) return true;
+  if (/\b(mcx|mpx|hellcat|g2c|ddm4|hk\s*416)\b/.test(t) || /hk416|ddm4/.test(c)) return true;
+  if (/\bar\s*15\b/.test(t) || /\bak\s*47\b/.test(t) || /ar15|ak47/.test(c)) return true;
+  if (/\b1911\b/.test(t)) return true;
+  if (/\bmp\s*\d{2}\b/.test(t) || /\bmp\s+shield\b/.test(t)) return true;
+  if (/\bruger\b/.test(t) && /\b10\s*22\b/.test(t)) return true;
+  if (/\bmossberg\b/.test(t) && /\b590\b/.test(t)) return true;
+  if (/\bremington\b/.test(t) && /\b870\b/.test(t)) return true;
+  if (/\bcolt\b/.test(t) && /\b6920\b/.test(t)) return true;
+  if (/\bcz\b/.test(t) && /\bscorpion\b/.test(t)) return true;
+  if (/\bberetta\b/.test(t) && /\b92/.test(t)) return true;
+  if (/\bspringfield\b/.test(t) && /\bhellcat\b/.test(t)) return true;
+  if (/\btaurus\b/.test(t) && /\bg2c\b/.test(t)) return true;
+  if (/\bkimber\b/.test(t) && /\bmicro\b/.test(t)) return true;
+  if (/\bhenry\b/.test(t) && /\blever\b/.test(t)) return true;
+  if (/\bsavage\b/.test(t) && /\b110\b/.test(t)) return true;
+  if (/\btikka\b/.test(t) && /\bt3x?\b/.test(t)) return true;
+  if (/\bsigs?\b/.test(t) && /\b(p\s*\d{3}|mcx|mpx)\b/.test(t)) return true;
+  return false;
+}
+
+function isFirearmWord(t) {
+  return /\b(pistols?|rifles?|shotguns?|handguns?|revolvers?|carbines?|lever\s+actions?)\b/.test(t);
+}
+
 // The app must not shop for firearms, firearm parts that are the firearm, or ammunition.
-// The name is checked in every category. Magazines are not restricted.
+// The name, brand, caliber, and load are checked in every category. Magazines are not restricted.
 export function saleRestricted(item) {
   if (!item || typeof item !== "object") return false;
   const arm = String(item.arm || "").trim().toUpperCase();
   if (arm === "FA" || arm === "SU") return true;
   const category = normCat(item.category);
   if (category === "firearms" || category === "suppressors" || category === "ammo" || category === "ammunition") return true;
-  const blob = itemBlob(item);
   if (!category && item.caliber && (item.load || item.cpr != null || item.rounds != null)) return true;
-  if (isMagazine(blob)) return false;
-  if (suppressorIdentity(blob)) return true;
-  if (cleaningNotAmmo(blob)) return false;
-  if (clearCartridge(blob)) return true;
-  return firearmIdentity(blob);
+  const { t, c } = saleText(item);
+  if (!t) return false;
+  if (isMagazine(t)) return false;
+  if (isAmmoContainer(t)) return false;
+  if (isAccessory(t)) return false;
+  if (isCleaning(t)) return false;
+  if (isSuppressor(t, c)) return true;
+  if (isAmmo(t, c)) return true;
+  if (isFrameOrLower(t)) return true;
+  if (knownModel(t, c)) return true;
+  return isFirearmWord(t);
+}
+
+// A price answer that itself describes a firearm, suppressor, or ammunition is not shown.
+export function lookupAnswerRestricted(parsed) {
+  if (!parsed || typeof parsed !== "object") return false;
+  if (parsed.restricted === true) return true;
+  const sources = Array.isArray(parsed.sources) ? parsed.sources : [];
+  const name = [parsed.priceNote, parsed.weightNote, parsed.where, parsed.note, ...sources.flatMap(s => [s && s.label, s && s.url])].filter(Boolean).join(" ");
+  if (!String(name).trim()) return false;
+  return saleRestricted({ category: "Misc", name });
 }
 
 // A looked-up price on a restricted item is not an insured value.
@@ -425,11 +477,13 @@ export function csvExportField(item, key) {
 }
 
 export function publicWeightNote(note) {
-  const store = /\b(amazon|ebay|tacswap|brownells|palmetto|\bpsa\b|midway|opticsplanet|primary\s*arms|gunbroker|cheaper\s*than\s*dirt|cabela'?s|bass\s*pro|sportsman'?s|grabagun|bud'?s?\s*gun\s*shop|aim\s*surplus|eurooptic|armslist|ammoseek|wikiarms|guns\.com|impact\s*guns|kygunco|classic\s*firearms|gun\.deals)\b/gi;
   let s = String(note || "");
-  s = s.replace(/https?:\/\/\S+/gi, "");
-  s = s.replace(/\bwww\.\S+/gi, "");
-  s = s.replace(store, "");
+  if (/\$\s*\d|\bUSD\b|\bMSRP\b/i.test(s)) return "";
+  const known = /\b(amazon|ebay|tacswap|brownells|palmetto|\bpsa\b|midway|opticsplanet|primary\s*arms|gunbroker|cheaper\s*than\s*dirt|cabela'?s|bass\s*pro|sportsman'?s|grabagun|bud'?s?\s*gun\s*shop|aim\s*surplus|eurooptic|armslist|ammoseek|wikiarms|guns\.com|impact\s*guns|kygunco|classic\s*firearms|gun\.deals)\b/gi;
+  s = s.replace(/https?:\/\/\S+/gi, " ");
+  s = s.replace(/\bwww\.\S+/gi, " ");
+  s = s.replace(known, " ");
+  if (/\b(armory|academy|sports|sporting|outdoor|surplus|warehouse|retailer|dealer|gun\s*shop|firearms)\b/i.test(s)) return "";
   s = s.replace(/\s{2,}/g, " ").replace(/^[\s,;:.\-|]+|[\s,;:.\-|]+$/g, "");
   return s.slice(0, 80);
 }
@@ -505,7 +559,7 @@ const GearLogic = {
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
-  countedValue, csvExportField, publicWeightNote,
+  countedValue, csvExportField, publicWeightNote, lookupAnswerRestricted,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
 };
 globalThis.GearLogic = GearLogic;

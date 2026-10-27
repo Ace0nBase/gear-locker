@@ -189,7 +189,7 @@ renderKits=function(){
   const extras=(st.extras||[]).map(itemById).filter(Boolean);
   const allItems=[...ids].map(itemById).filter(Boolean);
   const qOf=id=>{let q=0;Object.values(st.slots).forEach(arr=>arr.forEach(p=>{if(p.id===id)q+=+p.qty||1}));return q||1};
-  const val=[...allItems.map(i=>({i,q:qOf(i.id)})),...riders.map(i=>({i,q:+i.qty||1}))].reduce((s,x)=>s+(+x.i.value||0)*x.q,0);
+  const val=[...allItems.map(i=>({i,q:qOf(i.id)})),...riders.map(i=>({i,q:+i.qty||1}))].reduce((s,x)=>s+GearLogic.countedValue(x.i)*x.q,0);
   const wt=[...allItems.map(i=>({i,q:qOf(i.id)})),...riders.map(i=>({i,q:+i.qty||1}))].reduce((s,x)=>s+(x.i.weight!=null&&x.i.weight!==""?(+x.i.weight)*x.q:0),0);
   const boxOpts=`<option value="">${!box&&autoContainer(kit)?`Choose a bag (suggest: ${esc(autoContainer(kit).name)})`:"No bag chosen"}</option>`+containers().map(i=>`<option value="${esc(i.id)}"${st.container===i.id?" selected":""}>${esc(i.name)}${i.color?` (${esc(i.color)})`:""}</option>`).join("");
   const row=(sid,ess)=>{

@@ -6,7 +6,7 @@
 // Vars (dashboard, kept across deploys): FIREBASE_PROJECT, ALLOWED_ORIGINS, MODEL, FALLBACK_MODEL, ALLOWED_EMAILS (required), DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS
 // An empty ALLOWED_EMAILS list turns lookups off for everyone, including the owner.
 
-import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, parseAllowlist, saleRestricted, publicWeightNote } from "../js/logic.js";
+import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, parseAllowlist, saleRestricted, publicWeightNote, lookupAnswerRestricted } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -73,13 +73,13 @@ Brand / model: ${it.brand || "unknown"}
 Category: ${it.category || "unknown"}
 
 Use web search only for the maker's listed weight (at most 2 searches). Do not price firearms, suppressors, frames, lower receivers, or ammunition.
-Set retailNew, usedLow, usedHigh, and value to null. Set priceNote to "" and sources to [].
-weightOz = the weight of ONE unit in ounces (1 lb = 16 oz, 1 g = 0.035274 oz), rounded to 0.1. If sizes differ and none is given, use size Medium and say so in weightNote.
+Set retailNew, usedLow, usedHigh, and value to null. Set priceNote to "" and sources to []. Set "restricted" to true.
+weightOz = the weight of ONE unit in ounces (1 lb = 16 oz, 1 g = 0.035274 oz), rounded to 0.1. If sizes differ and none is given, use size Medium and say so in weightNote. The weight note must not include a price or a store name.
 
 When done, reply with ONLY this JSON object:
-{"retailNew": null, "usedLow": null, "usedHigh": null, "value": null, "weightOz": number|null, "priceNote": "", "weightNote": "short source, e.g. maker spec", "sources": []}`;
+{"restricted": true, "retailNew": null, "usedLow": null, "usedHigh": null, "value": null, "weightOz": number|null, "priceNote": "", "weightNote": "short source, e.g. maker spec", "sources": []}`;
   }
-  return `You look up real, current US market data for one piece of tactical / outdoor gear for a personal inventory app. Do not price firearms, suppressors, frames, lower receivers, or ammunition. If this item is one of those, set retailNew, usedLow, usedHigh, and value to null, priceNote to "", and sources to []. You may still return weightOz.
+  return `You look up real, current US market data for one piece of tactical / outdoor gear for a personal inventory app. Do not price firearms, suppressors, frames, lower receivers, or ammunition. If this item is one of those, set "restricted" to true, retailNew, usedLow, usedHigh, and value to null, priceNote to "", and sources to []. You may still return weightOz.
 
 Item: ${it.name}
 Brand / model: ${it.brand || "unknown"}
@@ -99,7 +99,7 @@ weightOz = the weight of ONE unit in ounces (1 lb = 16 oz, 1 g = 0.035274 oz), r
 Use null only for things you truly could not find. Never invent numbers.
 
 When done searching, your final message must be ONLY this JSON object, no other words before or after it:
-{"retailNew": number|null, "usedLow": number|null, "usedHigh": number|null, "value": number|null, "weightOz": number|null, "priceNote": "one short sentence with the comps you found, e.g. 'Amazon $129, eBay sold $85-120, TacSwap ~$110'", "weightNote": "short source, e.g. 'Crye spec, size M'", "sources": [{"label": "Amazon", "url": "https://..."}]}`;
+{"restricted": false, "retailNew": number|null, "usedLow": number|null, "usedHigh": number|null, "value": number|null, "weightOz": number|null, "priceNote": "one short sentence with the comps you found, e.g. 'Amazon $129, eBay sold $85-120, TacSwap ~$110'", "weightNote": "short source, e.g. 'Crye spec, size M'", "sources": [{"label": "Amazon", "url": "https://..."}]}`;
 }
 
 const textOf = blocks => (blocks || []).filter(b => b.type === "text").map(b => b.text).join("");
@@ -171,6 +171,7 @@ function parseResult(data) {
     retailNew: num(j.retailNew), usedLow: num(j.usedLow), usedHigh: num(j.usedHigh), value: num(j.value), weightOz: num(j.weightOz),
     priceNote: String(j.priceNote || "").slice(0, 240), weightNote: String(j.weightNote || "").slice(0, 80),
     sources: sources.slice(0, 4).map(s => ({ label: String(s.label || "source").slice(0, 40), url: String(s.url) })),
+    restricted: j.restricted === true,
   };
 }
 
@@ -208,8 +209,10 @@ The buyer's target price is $${w.target}.
 
 Use web search (at most 2 searches). Check TacSwap listings, eBay Buy It Now listings, Amazon, the maker's site and big retailers or sales. New or used in good condition both count; skip parts-only, wrong item or out-of-stock listings. Include shipping if it's clearly listed.
 
+If this item is a firearm, suppressor, frame, lower receiver, or ammunition, set "restricted" to true and price to null, and leave where, url, and note empty.
+
 When done, reply with ONLY this JSON object:
-{"price": number|null, "where": "site or seller, e.g. 'TacSwap' or 'Amazon'", "url": "https link to the listing", "condition": "new|used|like new", "note": "one short sentence, e.g. 'Used, good condition, ships free'"}`;
+{"restricted": false, "price": number|null, "where": "site or seller, e.g. 'TacSwap' or 'Amazon'", "url": "https link to the listing", "condition": "new|used|like new", "note": "one short sentence, e.g. 'Used, good condition, ships free'"}`;
 }
 async function dealCheck(env, w) {
   if (saleRestricted(w)) return { price: null, where: "", url: "", condition: "", note: "", date: new Date().toISOString().slice(0, 10), hit: false };
@@ -230,9 +233,13 @@ async function dealCheck(env, w) {
   let j = null; const ms = t.match(/\{[\s\S]*\}/g) || [];
   for (const c of ms.reverse()) { try { const o = JSON.parse(c); if ("price" in o) { j = o; break } } catch {} }
   const price = j && isFinite(+j.price) && +j.price > 0 ? Math.round(+j.price * 100) / 100 : null;
-  return { price, where: String(j?.where || "").slice(0, 40), url: /^https:\/\//.test(j?.url || "") ? String(j.url).slice(0, 400) : "",
+  const deal = { price, where: String(j?.where || "").slice(0, 40), url: /^https:\/\//.test(j?.url || "") ? String(j.url).slice(0, 400) : "",
     condition: String(j?.condition || "").slice(0, 20), note: String(j?.note || "").slice(0, 160), date: new Date().toISOString().slice(0, 10),
     hit: price != null && price <= +w.target };
+  if (lookupAnswerRestricted({ restricted: !!(j && j.restricted), priceNote: [deal.where, deal.note, deal.url].join(" "), sources: deal.url ? [{ label: deal.where, url: deal.url }] : [] })) {
+    return { price: null, where: "", url: "", condition: "", note: "", date: deal.date, hit: false };
+  }
+  return deal;
 }
 const WKEY = uid => "w:" + uid;
 async function readCount(env, key) { return +(await env.WATCH.get(key)) || 0; }
@@ -414,7 +421,7 @@ async function lookupOne(env, it) {
     else throw e;
   }
   const parsed = parseResult(data);
-  if (saleRestricted(clean) || clean.weightOnly) {
+  if (saleRestricted(clean) || clean.weightOnly || lookupAnswerRestricted(parsed)) {
     return { id: clean.id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: parsed.weightOz, priceNote: "", weightNote: publicWeightNote(parsed.weightNote), sources: [] };
   }
   return { id: clean.id, ok: true, ...parsed };

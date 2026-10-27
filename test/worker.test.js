@@ -37,4 +37,6 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.ok(dealAt > 0 && guardAt > dealAt && guardAt < fetchAt);
   assert.match(src, /!saleRestricted\(w\)/);
   assert.match(src, /publicWeightNote\(parsed\.weightNote\)/);
+  assert.match(src, /lookupAnswerRestricted\(parsed\)/);
+  assert.match(src, /"restricted": true/);
 });
