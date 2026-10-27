@@ -151,7 +151,7 @@ function applyWatch(ws){let ch=false,news=[];ws.forEach(r=>{const w=db.wish.find
 {const _dw=DEL.wish;DEL.wish=async d=>{await _dw(d);syncWatches()}}
 {const _aw=ACT.wish;ACT.wish=async(act,b)=>{
   if(act==="watchnow"){const w=db.wish.find(x=>x.id===b.dataset.id);if(!w)return;b.disabled=true;b.textContent="Searching…";
-    if(GearLogic.saleRestricted(w)){toast("Price search skips firearms and ammunition.");renderExtra();return}
+    if(GearLogic.saleRestricted(w)){toast("Price alerts stay off for this category.");renderExtra();return}
     try{await apiPost("/watch/sync",{watches:L("wish").filter(x=>x.status!=="got"&&+x.target>0&&!GearLogic.saleRestricted(x)).map(x=>({id:x.id,name:x.name,brand:x.brand||"",category:x.category||"",target:+x.target}))});
       const j=await apiPost("/watch/check",{id:w.id});applyWatch(j.watches||[]);const d=db.wish.find(x=>x.id===w.id)?.deal;toast(d?.price?`Lowest found: ${money(d.price)} at ${d.where}`:"No listings found right now",5000)}
     catch(e){toast(lookupFailMessage(e.message),5000)}renderExtra();return}
