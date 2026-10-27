@@ -66,6 +66,11 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.ok(delBody.indexOf("signInIsRecent(accountUser.auth_time") < delBody.indexOf("deleteUserKv"));
   assert.ok(delBody.indexOf("deleteUserFirestore") < delBody.indexOf("deleteAuthUser"));
   assert.ok(delBody.indexOf("deleteAuthUser(env, idToken)") < delBody.indexOf("deleteUserKv"));
+  const authFn = src.slice(src.indexOf("async function deleteAuthUser"), src.indexOf("async function listWatchUsers"));
+  assert.match(authFn, /env\.FIREBASE_SERVER_API_KEY/);
+  assert.ok(authFn.indexOf("if (!key)") < authFn.indexOf("accounts:delete"));
+  assert.match(authFn, /sign-in is still here/);
+  assert.doesNotMatch(authFn, /referer/i);
   const bill = src.indexOf("const lookBill = await reserveCall");
   const call = src.indexOf("lookupOne(env, it)", bill);
   assert.ok(bill > 0 && call > bill);

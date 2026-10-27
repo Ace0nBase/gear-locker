@@ -8,13 +8,6 @@ compatibility_date = "2026-10-15"
 workers_dev = true
 keep_vars = true
 
-# Public web API key, the same value already published in config.js. Not a secret.
-# Identity Toolkit rejects this key from the worker (no Referer): API_KEY_HTTP_REFERRER_BLOCKED.
-# Account deletion can remove the sign-in only after Ace replaces it with a server key.
-# See README. A dashboard-only value is overwritten on deploy because this var is in the file.
-[vars]
-FIREBASE_API_KEY = "AIzaSyBexXFiQtDEnmlL2z0x4FXD7YCbeAHTGC4"
-
 # Price-alert storage. Watch lists stay here. Spend and quotas live in UsageLedger.
 [[kv_namespaces]]
 binding = "WATCH"
@@ -33,5 +26,7 @@ new_sqlite_classes = ["UsageLedger"]
 [triggers]
 crons = ["17 * * * *"]
 
-# The Claude API key is a secret set in the Cloudflare dashboard
-# (Worker -> Settings -> Variables and Secrets -> ANTHROPIC_API_KEY). Deploys keep it.
+# Dashboard secrets, never in this file. Deploys keep them.
+# ANTHROPIC_API_KEY — the Claude API key.
+# FIREBASE_SERVER_API_KEY — a second Google API key, Identity Toolkit API only, no application restriction.
+# It deletes the Auth user. The public web key stays in the browser and is not used here.

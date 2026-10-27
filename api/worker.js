@@ -2,9 +2,9 @@
 // POST /lookup  { items: [{ id, name, brand, category, condition, color, notes, kind? }] }
 // Header: Authorization: Bearer <Firebase ID token from the signed-in app user>
 // Returns { results: [{ id, ok, retailNew, usedLow, usedHigh, value, weightOz, priceNote, weightNote, sources }] }
-// Secrets (set in the Cloudflare dashboard, never in code): ANTHROPIC_API_KEY
-// FIREBASE_API_KEY is a plain var in wrangler.toml (the public web API key, not a secret).
-// Other vars use the defaults below unless the dashboard sets them. BETA_ONLY stays unset.
+// Secrets (set in the Cloudflare dashboard, never in code): ANTHROPIC_API_KEY, FIREBASE_SERVER_API_KEY.
+// FIREBASE_SERVER_API_KEY is a second Google key restricted to the Identity Toolkit API, with no app restriction.
+// The public web key is not used here. Other vars use the defaults below unless the dashboard sets them. BETA_ONLY stays unset.
 // Vars (dashboard, kept across deploys): FIREBASE_PROJECT, ALLOWED_ORIGINS, MODEL, FALLBACK_MODEL,
 // ALLOWED_EMAILS (used only when BETA_ONLY=true), BETA_ONLY, REVIEW_EMAILS, REVIEW_DAILY_LIMIT,
 // DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS, FREE_SPEND_CAP_USD,
@@ -344,7 +344,7 @@ async function deleteUserKv(env, uid) {
   }
 }
 async function deleteAuthUser(env, idToken) {
-  const key = env.FIREBASE_API_KEY;
+  const key = env.FIREBASE_SERVER_API_KEY;
   if (!key) return { ok: false, error: "Your gear was removed, but the sign-in is still here. Try again after account deletion is switched on." };
   let data = {};
   try {
