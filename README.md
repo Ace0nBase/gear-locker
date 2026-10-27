@@ -70,6 +70,7 @@ The lookup worker reads these from the Cloudflare dashboard. Leave a setting bla
 - `REVIEW_EMAILS` — comma-separated emails that skip the free spend cap and the monthly lookup quota. They still have a small daily limit.
 - `REVIEW_DAILY_LIMIT` — daily lookups for those review emails. Default 8.
 - `FREE_SPEND_CAP_USD` — estimated free-tier spend that pauses free lookups. Default 25.
+- `SPEND_RESERVE_USD` — amount held before a free lookup runs, then replaced with the real cost. Leave it unset to use the built-in estimate (a large web-search prompt). Overlapping lookups have to fit in the cap together with this hold. One lookup can still finish a little over the cap when its real cost is higher than the hold.
 - `PLAN_LIMIT_FREE`, `PLAN_LIMIT_PRO`, `PLAN_LIMIT_ARMORY` — lookups per UTC month. Defaults 40, 400, and 2000. Paid plans are placeholders until billing is connected. Every account is on the free plan today.
 - `SPEND_INPUT_PER_MILLION`, `SPEND_OUTPUT_PER_MILLION`, `SPEND_SEARCH_EACH` — estimates used for the free spend counter. Defaults 1, 5, and 0.01.
 - `FIREBASE_API_KEY` — the same web API key already published with the site. The worker uses it only to delete a signed-in account. Set it in Cloudflare. Do not paste the key here.

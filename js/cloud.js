@@ -1,5 +1,5 @@
 /* ---------- cloud sync (Firebase) ---------- */
-var cloudUser=null,fsdb=null,cloudUnsubs=[],pushed={},pushTimer=null,kitsPushed="",cloudReady=new Set(),firstLoad=true,accountDeleting=false;
+var cloudUser=null,fsdb=null,cloudUnsubs=[],pushed={},pushTimer=null,kitsPushed="",cloudReady=new Set(),firstLoad=true,accountDeleting=false,accountDeleteError="",tombUnsub=null;
 var CLOUD_COLS=["items",...COLS];
 var clean=o=>JSON.parse(JSON.stringify(o));
 var inflightWrites={}, kitsServerAt="";
@@ -9,7 +9,7 @@ function mergeCloudRows(local,remote){var m=new Map();(local||[]).forEach(i=>{if
 var arrOf=c=>c==="items"?all:db[c];
 function setArr(c,a){if(c==="items")all=a;else db[c]=a}
 function userRef(){return fsdb.collection("users").doc(cloudUser.uid)}
-function setSync(state,txt){const d=$("syncDot");d.className="sync "+state;d.title=txt||"";}
+function setSync(state,txt){if(accountDeleteError){state="off";txt=accountDeleteError}const d=$("syncDot");if(!d)return;d.className="sync "+state;d.title=txt||"";}
 function pushCloudSoon(){if(accountDeleting||!cloudUser||!fsdb)return Promise.resolve();clearTimeout(pushTimer);var delay=GearLogic.cloudWriteDelay(typeof navigator!=="undefined"?navigator.onLine:true);if(delay===0)return pushCloud();pushTimer=setTimeout(pushCloud,delay);return Promise.resolve()}
 function offlineNow(){return typeof navigator!=="undefined"&&navigator.onLine===false}
 function seenLocal(pairs){
@@ -153,19 +153,89 @@ async function openFirestore(clearDisk){
   return db;
 }
 var signingOut=false;
-async function beginSignOut(){
+async function beginSignOut(forced){
   if(signingOut)return;
-  try{await pushCloud()}catch{}
-  var settled=true;
-  if(fsdb&&typeof fsdb.waitForPendingWrites==="function")settled=await GearLogic.settleOrTimeout(fsdb.waitForPendingWrites(),GearLogic.SIGN_OUT_WAIT_MS);
-  if(GearLogic.signOutConfirmNeeded(settled)&&!confirm("Some changes are still saving on this device. Sign out anyway? Those changes can be lost."))return;
+  if(!forced){
+    try{await pushCloud()}catch{}
+    var settled=true;
+    if(fsdb&&typeof fsdb.waitForPendingWrites==="function")settled=await GearLogic.settleOrTimeout(fsdb.waitForPendingWrites(),GearLogic.SIGN_OUT_WAIT_MS);
+    if(GearLogic.signOutConfirmNeeded(settled)&&!confirm("Some changes are still saving on this device. Sign out anyway? Those changes can be lost."))return;
+  }
   signingOut=true;
+  if(tombUnsub){try{tombUnsub()}catch(e){}tombUnsub=null}
   cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();
   try{GearLogic.clearUserLocal(localStorage)}catch{}
   try{render()}catch{}
   try{await firebase.auth().signOut()}catch{}
   try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch{}
   location.reload();
+}
+function watchTombstone(){
+  if(tombUnsub){try{tombUnsub()}catch(e){}}
+  tombUnsub=null;
+  if(!cloudUser||!fsdb)return;
+  tombUnsub=fsdb.collection("deletedUsers").doc(cloudUser.uid).onSnapshot(function(snap){
+    if(snap.exists&&!accountDeleting)beginSignOut(true);
+  },function(){});
+}
+function blockIfDeleteFailed(){
+  if(!accountDeleteError)return false;
+  if(typeof toast==="function")toast(accountDeleteError,5000);
+  return true;
+}
+function showDeleteFailure(msg){
+  accountDeleteError=msg||"Your gear was removed, but the sign-in is still here. Try again.";
+  accountDeleting=true;
+  all=[];kits={};db=emptyDb();
+  try{mirror()}catch(e){}
+  try{render()}catch(e){}
+  setSync("off",accountDeleteError);
+  var banner=$("deleteBanner");
+  if(!banner){
+    banner=document.createElement("div");
+    banner.id="deleteBanner";
+    banner.setAttribute("role","alert");
+    var acct=$("acct");
+    if(acct&&acct.parentNode)acct.parentNode.insertBefore(banner,acct.nextSibling);
+    else document.body.appendChild(banner);
+  }
+  banner.hidden=false;
+  banner.textContent=accountDeleteError;
+}
+async function updateDocRefs(pairs){
+  const list=(pairs||[]).filter(function(p){return p&&p[0]});
+  for(let i=0;i<list.length;i+=400){
+    const b=fsdb.batch();
+    list.slice(i,i+400).forEach(function(p){b.update(p[0],p[1])});
+    await b.commit();
+  }
+}
+function emailPatch(data,email,fields){
+  const next=GearLogic.loanEmailRedaction(data,email);
+  if(!next)return null;
+  const want=String(email||"").trim().toLowerCase();
+  const patch={};
+  fields.forEach(function(f){if(String(data[f]||"").trim().toLowerCase()===want)patch[f]=""});
+  if(!Object.keys(patch).length)return null;
+  patch.updatedAt=now();
+  patch.serverUpdatedAt=firebase.firestore.FieldValue.serverTimestamp();
+  return patch;
+}
+function lendRedactPatch(data,email){
+  const next=GearLogic.loanEmailRedaction(data,email);
+  if(!next)return null;
+  const want=String(email||"").trim().toLowerCase();
+  const borrower=String(data.borrowerEmail||"").trim().toLowerCase()===want||String(data.borrowerEmailLower||"").trim().toLowerCase()===want;
+  if(!borrower)return null;
+  return {borrowerEmail:"",borrowerEmailLower:"",updatedAt:now(),serverUpdatedAt:firebase.firestore.FieldValue.serverTimestamp()};
+}
+async function queryDocs(make){
+  try{return await make().get()}
+  catch(e){
+    const code=e&&e.code||"";
+    if(code==="permission-denied"||code==="failed-precondition")return {docs:[]};
+    throw e;
+  }
 }
 async function deleteDocRefs(refs){
   const list=(refs||[]).filter(Boolean);
@@ -175,7 +245,7 @@ async function deleteDocRefs(refs){
     await b.commit();
   }
 }
-async function deleteMyAccount(password){
+async function deleteMyAccount(password,signal){
   const u=firebase.auth().currentUser;
   if(!u||!fsdb||!cloudUser)throw new Error("Sign in again, then delete the account.");
   if(!window.LOOKUP_URL)throw new Error("Account deletion needs a connection. Try again when you're online.");
@@ -190,25 +260,77 @@ async function deleteMyAccount(password){
   clearTimeout(pushTimer);pushTimer=null;
   cloudUnsubs.forEach(x=>{try{x()}catch(err){}});cloudUnsubs=[];
   if(typeof lendUnsubs!=="undefined"&&lendUnsubs){lendUnsubs.forEach(x=>{try{x()}catch(err){}});lendUnsubs.length=0}
+  const gearMsg="Couldn't finish removing your gear. Your sign-in is still here. Try again.";
+  const signInMsg="Your gear was removed, but the sign-in is still here. Try again.";
+  let removedAny=false;
   try{
     for(const c of GearLogic.USER_COLLECTIONS){
       const snap=await userRef().collection(c).get();
+      if(snap.docs.length)removedAny=true;
       await deleteDocRefs(snap.docs.map(d=>d.ref));
     }
-    const shareIds=Object.values((kits&&kits._shares)||{}).map(sid=>sid&&fsdb.collection("shares").doc(String(sid)));
-    await deleteDocRefs(shareIds);
+    const shareSnap=await fsdb.collection("shares").where("owner","==",u.uid).get();
+    const shareRefs=shareSnap.docs.map(d=>d.ref);
+    const seen=new Set(shareSnap.docs.map(d=>d.id));
+    Object.values((kits&&kits._shares)||{}).forEach(function(sid){
+      const id=String(sid||"");
+      if(id&&!seen.has(id))shareRefs.push(fsdb.collection("shares").doc(id));
+    });
+    if(shareRefs.length)removedAny=true;
+    await deleteDocRefs(shareRefs);
+    const email=String(u.email||"");
+    const loanSnaps=[];
+    if(email){
+      loanSnaps.push(await queryDocs(function(){return fsdb.collectionGroup("loans").where("friendEmail","==",email)}));
+      const lower=email.toLowerCase();
+      if(lower!==email)loanSnaps.push(await queryDocs(function(){return fsdb.collectionGroup("loans").where("friendEmail","==",lower)}));
+    }
+    const loanPatches=[];
+    const loanSeen=new Set();
+    loanSnaps.forEach(function(snap){(snap.docs||[]).forEach(function(d){
+      if(loanSeen.has(d.ref.path))return;
+      loanSeen.add(d.ref.path);
+      const patch=emailPatch(d.data(),email,["friendEmail"]);
+      if(patch)loanPatches.push([d.ref,patch]);
+    })});
+    if(loanPatches.length)removedAny=true;
+    await updateDocRefs(loanPatches);
+    const lendSnaps=[];
+    if(email){
+      lendSnaps.push(await queryDocs(function(){return fsdb.collection("lends").where("borrowerEmail","==",email)}));
+      lendSnaps.push(await queryDocs(function(){return fsdb.collection("lends").where("borrowerEmailLower","==",email.toLowerCase())}));
+    }
+    const lendPatches=[];
+    const lendSeen=new Set();
+    lendSnaps.forEach(function(snap){(snap.docs||[]).forEach(function(d){
+      if(lendSeen.has(d.id))return;
+      lendSeen.add(d.id);
+      const patch=lendRedactPatch(d.data(),email);
+      if(patch)lendPatches.push([d.ref,patch]);
+    })});
+    if(lendPatches.length)removedAny=true;
+    await updateDocRefs(lendPatches);
     const lends=await fsdb.collection("lends").where(GearLogic.accountDeletePlan(u.uid).lendField,"==",u.uid).get();
+    if(lends.docs.length)removedAny=true;
     await deleteDocRefs(lends.docs.map(d=>d.ref));
+    const tomb=fsdb.collection("deletedUsers").doc(u.uid);
+    const tombSnap=await tomb.get();
+    if(!tombSnap.exists)await tomb.set({uid:u.uid,at:now()});
+    removedAny=true;
   }catch(e){
-    accountDeleting=false;
-    throw new Error("Couldn't finish removing your gear. Your sign-in is still here. Try again.");
+    if(!removedAny){accountDeleting=false;throw new Error(gearMsg)}
+    showDeleteFailure(gearMsg);
+    throw new Error(gearMsg);
   }
   let tok;
-  try{tok=await u.getIdToken(true)}catch(e){throw new Error("Your gear was removed, but the sign-in is still here. Try again.")}
+  try{tok=await u.getIdToken(true)}catch(e){showDeleteFailure(signInMsg);throw new Error(signInMsg)}
   let res;
-  try{res=await fetch(window.LOOKUP_URL.replace(/\/$/,"")+"/account/delete",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+tok},body:"{}"})}
-  catch(e){throw new Error("Your gear was removed, but the sign-in is still here. Try again.")}
-  if(!res.ok){const j=await res.json().catch(()=>({}));throw new Error(j.error||"Your gear was removed, but the sign-in is still here. Try again.")}
+  try{res=await fetch(window.LOOKUP_URL.replace(/\/$/,"")+"/account/delete",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+tok},body:"{}",signal:signal||undefined})}
+  catch(e){
+    const msg=e&&e.name==="AbortError"?"That took too long. Try deleting the account again.":signInMsg;
+    showDeleteFailure(msg);throw new Error(msg);
+  }
+  if(!res.ok){const j=await res.json().catch(()=>({}));const msg=j.error||signInMsg;showDeleteFailure(msg);throw new Error(msg)}
   try{GearLogic.clearUserLocal(localStorage)}catch(e){}
   try{await firebase.auth().signOut()}catch(e){}
   try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch(e){}
@@ -226,7 +348,7 @@ async function startCloud(){
   auth.setPersistence(keep?P.LOCAL:P.SESSION).catch(()=>{});
   auth.onAuthStateChanged(async u=>{
     if(!u){
-      cloudUser=null;cloudUnsubs.forEach(x=>x());cloudUnsubs=[];
+      cloudUser=null;if(tombUnsub){try{tombUnsub()}catch(e){}tombUnsub=null}cloudUnsubs.forEach(x=>x());cloudUnsubs=[];
       $("gate").hidden=false;$("acct").hidden=true;$("gateFields").hidden=false;$("gateMsg").textContent="Sign in to open War Box.";refreshVerify();syncKeepNote();
       return;
     }
@@ -236,7 +358,15 @@ async function startCloud(){
     cloudUser=u;$("gate").hidden=true;$("acct").hidden=false;$("acctTxt").textContent=u.email;refreshVerify();syncKeepNote();setSync("","Connecting…");
     pushed={};firstLoad=true;
     await boot();
+    var tombSnap=null;
+    try{tombSnap=await fsdb.collection("deletedUsers").doc(u.uid).get()}catch(e){}
+    if(tombSnap&&tombSnap.exists){
+      showDeleteFailure("Your gear was removed, but the sign-in is still here. Try again.");
+      watchTombstone();
+      return;
+    }
     subscribeCloud();
+    watchTombstone();
   });
   function syncKeepNote(){const on=!!$("gKeep").checked;const note=$("gKeepNote");if(note)note.hidden=on;const live=$("keepLive");if(live)live.hidden=on||$("acct").hidden}
   $("gKeep").addEventListener("change",syncKeepNote);
@@ -453,7 +583,7 @@ document.addEventListener("keydown",e=>{
   if(curTab==="arms"&&armImport){armImport=null;renderArms();return}
   if(COLOF[curTab]&&ED[curTab]){ED[curTab]=null;renderExtra()}
 });
-$("fab").onclick=()=>{if(curTab==="arms")openArmForm();else if(curTab==="inv")openForm();else if(COLOF[curTab])openEd(curTab,NEWREC[curTab]?NEWREC[curTab]():{})};
+$("fab").onclick=()=>{if(blockIfDeleteFailed())return;if(curTab==="arms")openArmForm();else if(curTab==="inv")openForm();else if(COLOF[curTab])openEd(curTab,NEWREC[curTab]?NEWREC[curTab]():{})};
 var _showTab=showTab;
 showTab=function(k){
   if(!$("form").hidden)closeForm();if(!$("detail").hidden)closeDetail();

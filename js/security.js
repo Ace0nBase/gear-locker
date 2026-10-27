@@ -87,7 +87,7 @@ $("secSheet").addEventListener("click",async e=>{const b=e.target.closest("[data
     setLockCfg(n);toast(mode==="bio"?"Privacy screen uses Face ID / fingerprint, with the PIN as backup":"Privacy screen uses a PIN");openSecurity();return}
   if(a==="del1"){delStep=1;openSecurity();return}
   if(a==="delback"){delStep=0;openSecurity();return}
-  if(a==="del2"){const pass=$("delPass")&&$("delPass").value||"";const btn=$("delGo");const err=$("delErr");if(!pass){if(err)err.textContent="Re-enter your password.";return}if(btn){btn.disabled=true;btn.textContent="Deleting…"}try{await deleteMyAccount(pass)}catch(e){if(err)err.textContent=e&&e.message||"Couldn't delete the account. Try again.";if(btn){btn.disabled=false;btn.textContent="Delete my account"}}return}
+  if(a==="del2"){const pass=$("delPass")&&$("delPass").value||"";const btn=$("delGo");const err=$("delErr");if(!pass){if(err)err.textContent="Re-enter your password.";return}if(err)err.textContent="";if(btn){btn.disabled=true;btn.textContent="Deleting…"}const ms=GearLogic.ACCOUNT_DELETE_TIMEOUT_MS||45000;const ctrl=typeof AbortController!=="undefined"?new AbortController():null;const timer=setTimeout(function(){if(ctrl)ctrl.abort()},ms);try{await Promise.race([deleteMyAccount(pass,ctrl&&ctrl.signal),new Promise(function(_,rej){setTimeout(function(){rej(new Error("That took too long. Try deleting the account again."))},ms)})])}catch(e){if(err)err.textContent=e&&e.message||"Couldn't delete the account. Try again.";if(btn){btn.disabled=false;btn.textContent="Delete my account"}}finally{clearTimeout(timer)}return}
   if(a==="unshare"||a==="unshareall"){const keys=a==="unshare"?[b.dataset.k]:Object.keys(kits._shares||{});const m={...(kits._shares||{})};
     for(const k of keys){try{await fsdb.collection("shares").doc(m[k]).delete()}catch{}delete m[k]}kits={...kits,_shares:m};await persist();toast(keys.length>1?"All share links are off":"Link turned off");openSecurity();return}
   if(a==="pw"){const o=$("sOld").value,nw=$("sNew").value;$("sErr").textContent="";if(nw.length<12){$("sErr").textContent="Use at least 12 characters.";return}
@@ -99,6 +99,10 @@ $("secSheet").querySelector(".sheetBg").addEventListener("click",()=>{delStep=0;
 $("acct").insertAdjacentHTML("beforeend",`<button type="button" id="secBtn">Settings</button>`);$("secBtn").onclick=openSecurity;
 var delStep=0;
 function accountBlock(){if(delStep===1)return `<div class="secBlock" id="acctDel"><h3>Account</h3><p>Re-enter your password to permanently delete this account, your gear, your share links, and loans you created. This can't be undone.</p><div class="f"><label for="delPass">Re-enter your password</label><input id="delPass" type="password" autocomplete="current-password"></div><div class="err" id="delErr"></div><div class="actions"><button class="btn ghost" type="button" data-sec="delback">Cancel</button><button class="btn" type="button" data-sec="del2" id="delGo">Delete my account</button></div></div>`;return `<div class="secBlock" id="acctDel"><h3>Account</h3><p class="hint">Delete account removes your gear, your share links, and loans you created. Your sign-in is removed too. This can't be undone.</p><button class="btn ghost" type="button" data-sec="del1">Delete account</button></div>`}
+var _openFormAccount=openForm;
+openForm=function(item){if(blockIfDeleteFailed())return;return _openFormAccount(item)};
+var _openEdAccount=openEd;
+openEd=function(view,rec){if(blockIfDeleteFailed())return;return _openEdAccount(view,rec)};
 // honor "never send Armory items" in every lookup path
 {const _rl=runLookups;runLookups=function(ids,quiet){if(kits._settings?.privateArms){const skip=ids.filter(id=>{const i=itemById(id);return i&&GearLogic.armoryLookupBlocked(true,GearLogic.armorySubject(i,i.mountedOn&&itemById(i.mountedOn)))});ids=ids.filter(id=>!skip.includes(id));if(skip.length&&!quiet)toast(`Skipped ${skip.length} Armory item${skip.length>1?"s":""} (private)`)}return _rl(ids,quiet)}}
 

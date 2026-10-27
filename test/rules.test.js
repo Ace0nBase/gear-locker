@@ -103,7 +103,37 @@ test("share links can be opened by id and cannot be listed or carry serials", as
   await assertSucceeds(getDoc(doc(open, "shares/share1")));
   await assertFails(getDocs(collection(open, "shares")));
   await assertFails(getDocs(collection(owner, "shares")));
+  await assertSucceeds(getDocs(query(collection(owner, "shares"), where("owner", "==", "owner"))));
+  const stranger = as("stranger", "stranger@example.com", true);
+  await assertFails(getDocs(query(collection(stranger, "shares"), where("owner", "==", "owner"))));
   const snap = await getDoc(doc(open, "shares/share1"));
   assert.equal(snap.data().items[0].serial, undefined);
   assert.equal(snap.data().items[0].notes, undefined);
+});
+
+test("a tombstone blocks later writes and the named person can clear their email", async () => {
+  await env.clearFirestore();
+  const owner = as("owner", "owner@example.com", true);
+  await assertSucceeds(setDoc(doc(owner, "users/owner/loans/loan1"), {
+    id: "loan1", borrower: "Friend", friendEmail: "friend@example.com", itemId: "i1", updatedAt: "2026-10-26T00:00:00.000Z",
+  }));
+  await assertSucceeds(setDoc(doc(owner, "lends/loan1"), loan()));
+  await assertSucceeds(setDoc(doc(owner, "users/owner/items/i1"), { name: "Pouch" }));
+  const borrower = as("friend", "friend@example.com", true);
+  await assertSucceeds(updateDoc(doc(borrower, "users/owner/loans/loan1"), {
+    friendEmail: "", updatedAt: "2026-10-27T00:00:00.000Z",
+  }));
+  await assertFails(updateDoc(doc(borrower, "users/owner/loans/loan1"), { borrower: "Nope" }));
+  await assertSucceeds(updateDoc(doc(borrower, "lends/loan1"), {
+    borrowerEmail: "", borrowerEmailLower: "", updatedAt: "2026-10-27T00:00:00.000Z",
+  }));
+  await assertSucceeds(setDoc(doc(owner, "deletedUsers/owner"), { uid: "owner", at: "2026-10-27T00:00:00.000Z" }));
+  await assertFails(setDoc(doc(owner, "users/owner/items/i2"), { name: "Belt" }));
+  await assertFails(deleteDoc(doc(owner, "lends/loan1")));
+  await assertSucceeds(getDoc(doc(owner, "users/owner/items/i1")));
+  await assertSucceeds(getDoc(doc(owner, "deletedUsers/owner")));
+  await assertFails(updateDoc(doc(owner, "deletedUsers/owner"), { at: "later" }));
+  await assertFails(deleteDoc(doc(owner, "deletedUsers/owner")));
+  const other = as("friend", "friend@example.com", true);
+  await assertSucceeds(setDoc(doc(other, "users/friend/items/i1"), { name: "Pouch" }));
 });

@@ -1,6 +1,6 @@
 // Local lookup stub for npm run qa. It never calls Claude and it refuses
 // the live Firebase project. Run it only on 127.0.0.1. It is not the production worker.
-import { decideAccess, chargeDecision, quotaKey, saleRestricted, publicWeightNote, accountDeletePlan } from "../js/logic.js";
+import { decideAccess, chargeDecision, quotaKey, saleRestricted, publicWeightNote, accountDeletePlan, signInIsRecent } from "../js/logic.js";
 
 const memory = new Map();
 const memKv = {
@@ -58,10 +58,8 @@ export default {
     catch { return json({ error: "Please sign in again." }, 401, h); }
     if (url.pathname === "/account/delete") {
       if (req.method !== "POST") return json({ error: "Not found" }, 404, h);
-      const plan = accountDeletePlan(user.sub);
-      for (const key of plan.kvExact) await memKv.delete(key);
-      for (const prefix of plan.kvPrefixes) {
-        for (const key of [...memory.keys()]) if (String(key).startsWith(prefix)) memory.delete(key);
+      if (user.auth_time && !signInIsRecent(user.auth_time)) {
+        return json({ error: "Enter your password again, then delete the account." }, 401, h);
       }
       const idToken = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
       try {
@@ -76,6 +74,11 @@ export default {
         }
       } catch {
         return json({ error: "Your gear was removed, but the sign-in is still here. Try again." }, 502, h);
+      }
+      const plan = accountDeletePlan(user.sub);
+      for (const key of plan.kvExact) await memKv.delete(key);
+      for (const prefix of plan.kvPrefixes) {
+        for (const key of [...memory.keys()]) if (String(key).startsWith(prefix)) memory.delete(key);
       }
       return json({ ok: true }, 200, h);
     }

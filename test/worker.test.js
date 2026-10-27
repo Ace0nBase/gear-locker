@@ -60,4 +60,15 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   const delAt = src.indexOf('url.pathname === "/account/delete"');
   const keyAt = src.indexOf("if (!env.ANTHROPIC_API_KEY)");
   assert.ok(delAt > 0 && keyAt > delAt);
+  const delEnd = src.indexOf("if (!ROUTES.includes", delAt);
+  const delBody = src.slice(delAt, delEnd);
+  assert.ok(delBody.indexOf("signInIsRecent(accountUser.auth_time") > -1);
+  assert.ok(delBody.indexOf("signInIsRecent(accountUser.auth_time") < delBody.indexOf("deleteUserKv"));
+  assert.ok(delBody.indexOf("deleteAuthUser(env, idToken)") < delBody.indexOf("deleteUserKv"));
+  const bill = src.indexOf("const lookBill = await chargeAi");
+  const hold = src.indexOf("holdFreeSpend", bill);
+  const call = src.indexOf("lookupOne(env, it)", hold);
+  assert.ok(bill > 0 && hold > bill && call > hold);
+  assert.match(src, /finishFreeSpend/);
+  assert.doesNotMatch(src, /noteFreeSpend/);
 });

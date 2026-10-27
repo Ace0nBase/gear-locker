@@ -171,7 +171,7 @@ function printPace(p){const ids=PSTEP.map(([k])=>p[k]?.freq).filter(Boolean);con
 // a radio's item screen shows how many channels are saved for it
 {const _od=openDetail;openDetail=function(i,quiet){_od(i,quiet);if(!i||!radios().some(r=>r.id===i.id))return;const n=L("freqs").filter(f=>(f.radios||{})[i.id]).length;const dl=$("detail").querySelector("dl");dl?.insertAdjacentHTML("beforeend",`<div><dt>Channels</dt><dd>${n} saved in Comms</dd></div>`)}}
 
-{const _f=$("fab").onclick;$("fab").onclick=()=>{if(curTab==="comms"&&commsTab==="pace"){paceEd={};renderExtra();return}_f()}}
+{const _f=$("fab").onclick;$("fab").onclick=()=>{if(blockIfDeleteFailed())return;if(curTab==="comms"&&commsTab==="pace"){paceEd={};renderExtra();return}_f()}}
 
 /* ---------- v28: build a PACE plan from location + situation, using your frequencies ---------- */
 var PG_SCEN=["Family at home (storm / power out)","Around town / neighborhood","Road trip / convoy","Day hike / backcountry","Hunting / camping trip","On the water","Range day / training","Team field exercise","Big event / crowd"];

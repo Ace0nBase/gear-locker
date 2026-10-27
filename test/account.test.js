@@ -4,6 +4,7 @@ import {
   decideAccess, isReviewEmail, monthQuotaKey, planMonthlyLimit, reviewDailyLimit, spendCapMicro,
   estimateSpendMicro, usageFromResponse, freeSpendBlocked, usageDecision, lookupPlan,
   deleteRevenueCatCustomer, accountDeletePlan, USER_COLLECTIONS,
+  signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
 } from "../js/logic.js";
 
 const day = new Date("2026-10-26T23:30:00Z");
@@ -86,4 +87,45 @@ test("plan lookup is a free stub and account deletion names the exact keys", () 
   assert.equal(plan.lendField, "lender");
   assert.ok(plan.kvPrefixes.every(p => p.endsWith(":")));
   assert.deepEqual(USER_COLLECTIONS, ["items", "ammo", "sessions", "dope", "maint", "wish", "loans", "freqs", "pace", "meta"]);
+});
+
+test("account deletion accepts a sign-in from the last five minutes", () => {
+  const now = 1_700_000_000;
+  assert.equal(signInIsRecent(now, now), true);
+  assert.equal(signInIsRecent(now - 4 * 60, now), true);
+  assert.equal(signInIsRecent(now - 6 * 60, now), false);
+  assert.equal(signInIsRecent(undefined, now), false);
+  assert.equal(signInIsRecent(0, now), false);
+  assert.equal(signInIsRecent(now + 30, now), true);
+  assert.equal(signInIsRecent(now + 2 * 60, now), false);
+});
+
+test("a free spend hold blocks the next lookup that would pass the cap", () => {
+  assert.equal(reserveFits(8e6, 2e6, 10e6), true);
+  assert.equal(reserveFits(9e6, 2e6, 10e6), false);
+  assert.equal(reconcileSpendMicro(10e6, 2e6, 1.5e6), 9.5e6);
+  assert.equal(reconcileSpendMicro(10e6, 2e6, 0), 8e6);
+  assert.equal(lookupReserveMicro({}), 1.7e6);
+  assert.equal(lookupReserveMicro({ SPEND_RESERVE_USD: "3" }), 3e6);
+});
+
+test("loan redaction clears only a matching email and ignores the item name", () => {
+  const loan = {
+    friendEmail: "Friend@Example.com",
+    lenderEmail: "owner@example.com",
+    borrowerEmail: "Friend@Example.com",
+    borrowerEmailLower: "friend@example.com",
+    item: { name: "gone@example.com pouch" },
+    note: "keep",
+  };
+  const cleared = loanEmailRedaction(loan, "friend@example.com");
+  assert.equal(cleared.friendEmail, "");
+  assert.equal(cleared.borrowerEmail, "");
+  assert.equal(cleared.borrowerEmailLower, "");
+  assert.equal(cleared.lenderEmail, "owner@example.com");
+  assert.equal(cleared.note, "keep");
+  assert.equal(cleared.item.name, "gone@example.com pouch");
+  assert.equal(loan.friendEmail, "Friend@Example.com");
+  assert.equal(loanEmailRedaction({ friendEmail: "other@example.com", item: { name: "gone@example.com" } }, "gone@example.com"), null);
+  assert.equal(loanEmailRedaction({ lenderEmail: "Owner@Example.com" }, "owner@example.com").lenderEmail, "");
 });

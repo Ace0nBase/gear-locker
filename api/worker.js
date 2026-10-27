@@ -7,10 +7,11 @@
 // ALLOWED_EMAILS (used only when BETA_ONLY=true), BETA_ONLY, REVIEW_EMAILS, REVIEW_DAILY_LIMIT,
 // DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS, FREE_SPEND_CAP_USD,
 // PLAN_LIMIT_FREE, PLAN_LIMIT_PRO, PLAN_LIMIT_ARMORY, SPEND_INPUT_PER_MILLION, SPEND_OUTPUT_PER_MILLION, SPEND_SEARCH_EACH,
+// SPEND_RESERVE_USD (optional hold before a free lookup; unset uses a built-in estimate),
 // FIREBASE_API_KEY (web API key, used only to delete the signed-in account)
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, usageDecision, accountDeletePlan, deleteRevenueCatCustomer } from "../js/logic.js";
+import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, usageDecision, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, reserveFits, lookupReserveMicro, reconcileSpendMicro } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -279,15 +280,37 @@ async function chargeAi(env, user, add) {
   if (d.month) await env.WATCH.put(mk, String(d.month.next), { expirationTtl: 40 * 24 * 3600 });
   return d;
 }
-async function noteFreeSpend(env, user, usage) {
+function freeSpendSkipped(env, user) {
+  const email = String((user && user.email) || "");
+  return isReviewEmail(email, env) || lookupPlan(user, env) !== "free";
+}
+async function reserveBlocked(env, user, count) {
+  if (!env.WATCH || freeSpendSkipped(env, user)) return false;
   try {
-    if (!env.WATCH || !usage) return;
-    const email = String((user && user.email) || "");
-    if (isReviewEmail(email, env) || lookupPlan(user, env) !== "free") return;
-    const add = estimateSpendMicro(usage, spendRates(env));
-    if (add <= 0) return;
+    const n = Math.max(1, +count || 1);
     const cur = +(await env.WATCH.get(SPEND_KEY)) || 0;
-    await env.WATCH.put(SPEND_KEY, String(cur + add));
+    return !reserveFits(cur, lookupReserveMicro(env) * n, spendCapMicro(env));
+  } catch { return true; }
+}
+async function holdFreeSpend(env, user, count) {
+  const n = Math.max(1, +count || 1);
+  if (freeSpendSkipped(env, user)) return { blocked: false, reserved: 0 };
+  if (!env.WATCH) return { blocked: true, reserved: 0, error: LOOKUPS_PAUSED };
+  try {
+    const reserve = lookupReserveMicro(env) * n;
+    const cap = spendCapMicro(env);
+    const cur = +(await env.WATCH.get(SPEND_KEY)) || 0;
+    if (!reserveFits(cur, reserve, cap)) return { blocked: true, reserved: 0, error: LOOKUPS_PAUSED };
+    await env.WATCH.put(SPEND_KEY, String(cur + reserve));
+    return { blocked: false, reserved: reserve };
+  } catch { return { blocked: true, reserved: 0, error: LOOKUPS_PAUSED }; }
+}
+async function finishFreeSpend(env, user, reserved, usage) {
+  try {
+    if (!env.WATCH || !reserved || freeSpendSkipped(env, user)) return;
+    const actual = estimateSpendMicro(usage, spendRates(env));
+    const current = +(await env.WATCH.get(SPEND_KEY)) || 0;
+    await env.WATCH.put(SPEND_KEY, String(reconcileSpendMicro(current, reserved, actual)));
   } catch { /* the answer is already in hand */ }
 }
 async function chargeScheduledAlert(env, user) {
@@ -379,20 +402,24 @@ async function runDueWatches(env, budget) {
     const u = eligible.find(x => x.uid === p.uid);
     const w = u && u.rec.list.find(x => x.id === p.watch.id);
     if (!w || saleRestricted(w)) continue;
-    const billed = await chargeScheduledAlert(env, { sub: u.uid, email: u.rec.email });
+    const who = { sub: u.uid, email: u.rec.email };
+    if (await reserveBlocked(env, who, 1)) continue;
+    const billed = await chargeScheduledAlert(env, who);
     if (!billed.ok) continue;
+    const hold = await holdFreeSpend(env, who, 1);
+    if (hold.blocked) continue;
     const wasHit = !!(w.best && w.best.hit);
     try {
       const b = await dealCheck(env, w);
       const spentUsage = b.usage;
       delete b.usage;
       w.best = b; w.lastErr = "";
-      await noteFreeSpend(env, { sub: u.uid, email: u.rec.email }, spentUsage);
+      await finishFreeSpend(env, who, hold.reserved, spentUsage);
       if (!wasHit && b.hit && u.rec.push) {
         const sent = await sendWebPush(u.rec.push, JSON.stringify({ title: "Price alert", body: `${w.name} is at or under your target`, url: "./?tab=wish" }), env);
         if (sent && sent.gone) delete u.rec.push;
       }
-    } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await noteFreeSpend(env, { sub: u.uid, email: u.rec.email }, e.usage); }
+    } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await finishFreeSpend(env, who, hold.reserved, e.usage); }
     w.lastCheck = new Date().toISOString();
     dirty.set(u.key, u.rec);
     done++;
@@ -533,11 +560,12 @@ export default {
       let accountUser;
       try { accountUser = await verifyFirebaseToken(idToken, env.FIREBASE_PROJECT); }
       catch { return json({ error: "Please sign in again." }, 401, h); }
+      if (!signInIsRecent(accountUser.auth_time)) return json({ error: "Enter your password again, then delete the account." }, 401, h);
       try {
-        await deleteUserKv(env, accountUser.sub);
-        deleteRevenueCatCustomer(env, accountUser.sub);
         const removed = await deleteAuthUser(env, idToken);
         if (!removed.ok) return json({ error: removed.error }, 502, h);
+        await deleteUserKv(env, accountUser.sub);
+        deleteRevenueCatCustomer(env, accountUser.sub);
         return json({ ok: true }, 200, h);
       } catch { return json({ error: "Couldn't finish deleting the account. Try again." }, 502, h); }
     }
@@ -597,14 +625,17 @@ export default {
           return json(pub(), 200, h);
         }
         if (w.lastCheck && Date.now() - Date.parse(w.lastCheck) < 10 * 60e3) return json(pub(), 200, h);
+        if (await reserveBlocked(env, user, 1)) return json({ error: LOOKUPS_PAUSED }, 403, h);
         const bill = await chargeScheduledAlert(env, user);
         if (!bill.ok) return json({ error: bill.error || "Try again tomorrow." }, bill.status || 429, h);
+        const watchHold = await holdFreeSpend(env, user, 1);
+        if (watchHold.blocked) return json({ error: watchHold.error }, 403, h);
         try {
           const b = await dealCheck(env, w);
-          await noteFreeSpend(env, user, b.usage);
+          await finishFreeSpend(env, user, watchHold.reserved, b.usage);
           delete b.usage;
           w.best = b; w.lastErr = "";
-        } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await noteFreeSpend(env, user, e.usage); }
+        } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await finishFreeSpend(env, user, watchHold.reserved, e.usage); }
         w.lastCheck = new Date().toISOString();
         await saveRec();
         return json(pub(), 200, h);
@@ -616,25 +647,31 @@ export default {
       const b = { location: S(body.location, 80), scenario: S(body.scenario, 60), distance: S(body.distance, 60), terrain: S(body.terrain, 60), cell: S(body.cell, 40), grid: S(body.grid, 40), people: S(body.people, 80), licensed: S(body.licensed, 80), duration: S(body.duration, 40), notes: S(body.notes, 300),
         devices: (Array.isArray(body.devices) ? body.devices : []).slice(0, 12).map(d => S(d, 40)),
         freqs: (Array.isArray(body.freqs) ? body.freqs : []).slice(0, 150).map((f, i) => ({ i, name: S(f.name, 30), rx: S(f.rx, 12), duplex: S(f.duplex, 6), offset: S(f.offset, 8), tx: S(f.tx, 12), tone: S(f.tone, 16), mode: S(f.mode, 4), service: S(f.service, 24), group: S(f.group, 30), notes: S(f.notes, 80), onRadio: !!f.onRadio })) };
+      if (await reserveBlocked(env, user, 1)) return json({ error: LOOKUPS_PAUSED }, 403, h);
       const paceBill = await chargeAi(env, user, 1);
       if (!paceBill.ok) return json({ error: paceBill.error }, paceBill.status, h);
+      const paceHold = await holdFreeSpend(env, user, 1);
+      if (paceHold.blocked) return json({ error: paceHold.error }, 403, h);
       try {
         const built = await paceBuild(env, b);
-        await noteFreeSpend(env, user, built.usage);
+        await finishFreeSpend(env, user, paceHold.reserved, built.usage);
         return json({ result: built.result }, 200, h);
       }
-      catch (e) { await noteFreeSpend(env, user, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await finishFreeSpend(env, user, paceHold.reserved, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/ammo") return json({ error: "Ammo price search is turned off." }, 410, h);
     if (url.pathname === "/battery") {
+      if (await reserveBlocked(env, user, 1)) return json({ error: LOOKUPS_PAUSED }, 403, h);
       const battBill = await chargeAi(env, user, 1);
       if (!battBill.ok) return json({ error: battBill.error }, battBill.status, h);
+      const battHold = await holdFreeSpend(env, user, 1);
+      if (battHold.blocked) return json({ error: battHold.error }, 403, h);
       try {
         const found = await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) });
-        await noteFreeSpend(env, user, found.usage);
+        await finishFreeSpend(env, user, battHold.reserved, found.usage);
         return json({ result: found.result }, 200, h);
       }
-      catch (e) { await noteFreeSpend(env, user, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await finishFreeSpend(env, user, battHold.reserved, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/identify") {
       const subject = {
@@ -644,25 +681,31 @@ export default {
       if (photoIdHardBlocked(subject)) return json({ error: "Photo ID isn't available for this record." }, 403, h);
       const img = String(body.image || "");
       if (!img || img.length > 2_800_000 || !/^[A-Za-z0-9+/=]+$/.test(img.slice(0, 200))) return json({ error: "Send a photo (JPEG, under 2 MB)" }, 400, h);
+      if (await reserveBlocked(env, user, 1)) return json({ error: LOOKUPS_PAUSED }, 403, h);
       const idBill = await chargeAi(env, user, 1);
       if (!idBill.ok) return json({ error: idBill.error }, idBill.status, h);
+      const idHold = await holdFreeSpend(env, user, 1);
+      if (idHold.blocked) return json({ error: idHold.error }, 403, h);
       try {
         const found = await identify(env, img, String(body.hint || "").slice(0, 80));
-        await noteFreeSpend(env, user, found.usage);
+        await finishFreeSpend(env, user, idHold.reserved, found.usage);
         return json({ result: found.result }, 200, h);
       }
-      catch (e) { await noteFreeSpend(env, user, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await finishFreeSpend(env, user, idHold.reserved, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     const max = +(env.MAX_ITEMS || 4);
     const items = Array.isArray(body.items) ? body.items.slice(0, max) : [];
     if (!items.length) return json({ error: "No items" }, 400, h);
+    if (await reserveBlocked(env, user, items.length)) return json({ error: LOOKUPS_PAUSED }, 403, h);
     const lookBill = await chargeAi(env, user, items.length);
     if (!lookBill.ok) return json({ error: lookBill.error }, lookBill.status, h);
+    const lookHold = await holdFreeSpend(env, user, items.length);
+    if (lookHold.blocked) return json({ error: lookHold.error }, 403, h);
 
     const packed = await Promise.all(items.map(it => lookupOne(env, it).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160), usage: e.usage }))));
     let spentUsage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
     const results = packed.map(r => { spentUsage = addUsage(spentUsage, r.usage); const copy = { ...r }; delete copy.usage; return copy; });
-    await noteFreeSpend(env, user, spentUsage);
+    await finishFreeSpend(env, user, lookHold.reserved, spentUsage);
     const firstErr = results.find(r => !r.ok)?.error;
     if (results.every(r => !r.ok)) return json({ error: firstErr || "Lookup failed", results }, 502, h);
     return json({ results }, 200, h);

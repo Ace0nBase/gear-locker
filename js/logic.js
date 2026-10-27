@@ -281,7 +281,7 @@ export function freeSpendBlocked(spentMicro, capMicro, plan, review) {
   return Math.max(0, +spentMicro || 0) >= Math.max(0, +capMicro || 0);
 }
 
-const LOOKUPS_PAUSED = "Lookups are paused for now. You can keep using the rest of War Box.";
+export const LOOKUPS_PAUSED = "Lookups are paused for now. You can keep using the rest of War Box.";
 const MONTHLY_FULL = "You've used this month's lookups. They reset next month.";
 
 export function usageDecision(opts) {
@@ -311,6 +311,54 @@ export function accountDeletePlan(uid) {
     kvExact: [`w:${id}`],
     kvPrefixes: [`q:${id}:`, `a:${id}:`, `m:${id}:`],
   };
+}
+
+export const DELETE_AUTH_MAX_AGE_SEC = 300;
+export const ACCOUNT_DELETE_TIMEOUT_MS = 45000;
+
+// auth_time is seconds. A few seconds of clock skew still counts as a fresh sign-in.
+export function signInIsRecent(authTime, nowSec) {
+  const at = +authTime;
+  const now = nowSec == null ? Math.floor(Date.now() / 1000) : +nowSec;
+  if (!isFinite(at) || at <= 0 || !isFinite(now)) return false;
+  const age = now - at;
+  return age >= -60 && age <= DELETE_AUTH_MAX_AGE_SEC;
+}
+
+export function reserveFits(spent, reserve, cap) {
+  return Math.max(0, +spent || 0) + Math.max(0, +reserve || 0) <= Math.max(0, +cap || 0);
+}
+
+// One lookup can pull a large web-search prompt. Hold that much before the call.
+export function lookupReserveMicro(env) {
+  if (env && env.SPEND_RESERVE_USD != null && String(env.SPEND_RESERVE_USD).trim() !== "") {
+    return Math.round(configuredNumber(env.SPEND_RESERVE_USD, 0) * 1e6);
+  }
+  return estimateSpendMicro(
+    { input_tokens: 1500000, output_tokens: 16000, web_search_requests: 12 },
+    spendRates(env),
+  );
+}
+
+export function reconcileSpendMicro(current, reserved, actual) {
+  return Math.max(0, Math.round((+current || 0) - (+reserved || 0) + Math.max(0, +actual || 0)));
+}
+
+const LOAN_EMAIL_FIELDS = ["friendEmail", "lenderEmail", "borrowerEmail", "borrowerEmailLower"];
+
+// Clear this person's email on a loan or lend. Item names are never consulted.
+export function loanEmailRedaction(loan, email) {
+  const want = String(email || "").trim().toLowerCase();
+  if (!want || !loan || typeof loan !== "object") return null;
+  let hit = false;
+  const copy = { ...loan };
+  for (const field of LOAN_EMAIL_FIELDS) {
+    if (String(loan[field] || "").trim().toLowerCase() === want) {
+      copy[field] = "";
+      hit = true;
+    }
+  }
+  return hit ? copy : null;
 }
 
 // RevenueCat is not set up. This is the hook that will delete the customer later.
@@ -1425,6 +1473,8 @@ const GearLogic = {
   DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_SPEND_RATES,
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
+  DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, LOOKUPS_PAUSED,
+  reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, bulkLookupIds, singleLookupIds, applyMarketPrices,
