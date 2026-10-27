@@ -305,7 +305,7 @@ function paint() {
   if (!root) return;
   root.replaceChildren();
   const back = document.querySelector("#importSheet .importBack");
-  if (back) back.hidden = S.step === "pick" || S.step === "done" || S.step === "scan" || S.confirm;
+  if (back) back.hidden = S.step === "done" || S.confirm;
   if (S.confirm) { root.append(confirmView()); return; }
   const meta = STEP_META.find(row => row.steps.includes(S.step));
   if (meta) root.append(el("p", { className: "stepper", text: `IMPORT · STEP ${meta.n} OF 5 · ${meta.name}` }));
