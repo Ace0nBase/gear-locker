@@ -834,6 +834,17 @@ function ammoKey(row) {
   return [row.caliber, row.brand, row.load, row.lot].map(v => String(v || "").trim().toLowerCase()).join("|");
 }
 
+// A merge keeps the category and the price status already on the item.
+// Restricted shelves stay unpriced. Priced gear keeps its market value and links.
+function mergeKeepsMarket(current) {
+  if (!current || typeof current !== "object") return false;
+  if (saleRestricted(current)) return false;
+  const category = String(current.category || "").trim();
+  if (!category || /^needs a category$/i.test(category)) return false;
+  if (current.importId && importRestricted(current)) return false;
+  return true;
+}
+
 export function planImport(tables, opts = {}) {
   const categories = opts.categories || DEFAULT_CATEGORIES;
   const now = opts.now || new Date().toISOString();
@@ -994,6 +1005,7 @@ export function planImport(tables, opts = {}) {
           for (const [k, v] of Object.entries(incoming)) {
             if (v == null || v === "" || k === "name" && current.name) continue;
             if (k === "notes") continue;
+            if (k === "category" && String(current.category || "").trim()) continue;
             const prev = current[k];
             if (prev == null || prev === "") { patch[k] = v; undo[k] = ""; }
           }
@@ -1001,6 +1013,10 @@ export function planImport(tables, opts = {}) {
             undo.notes = current.notes || "";
             const line = `Imported ${now.slice(0, 10)}: ${incoming.notes}`;
             patch.notes = current.notes ? `${current.notes}\n${line}` : line;
+          }
+          if (mergeKeepsMarket(current)) {
+            if (!current.importPricedAllowlist) undo.importPricedAllowlist = "";
+            patch.importPricedAllowlist = true;
           }
           const prevIds = Array.isArray(current.importIds) ? current.importIds.slice() : (current.importId ? [current.importId] : []);
           const prevBy = current.importUndoBy && typeof current.importUndoBy === "object" ? current.importUndoBy : null;
@@ -1173,12 +1189,15 @@ export function loadHistory(storage) {
 
 export function saveHistory(storage, entry) {
   const list = loadHistory(storage).filter(row => row && row.id !== entry.id);
+  const status = entry.status || "saved";
+  const undone = !!entry.undone || status === "undone";
   list.unshift({
     id: entry.id,
     at: entry.at,
     counts: entry.counts || {},
-    status: entry.status || "saved",
-    undone: !!entry.undone,
+    status,
+    undone,
+    rollback: !undone && (status === "rollback" || !!entry.rollback),
     progress: entry.progress || null,
   });
   storage.setItem(HIST_KEY, JSON.stringify(list.slice(0, 20)));
@@ -1189,6 +1208,25 @@ export function undoOpen(entry, now) {
   const at = Date.parse(entry.at || "");
   if (!isFinite(at)) return false;
   return (now || Date.now()) - at < UNDO_MS;
+}
+
+// A rollback that has not been stored yet stays on this batch, even after 24 hours.
+export function activeUndoEntry(list, now) {
+  const rows = Array.isArray(list) ? list : [];
+  const pending = rows.find(row => row && !row.undone && row.status !== "undone" && (row.status === "rollback" || row.rollback));
+  if (pending) return pending;
+  return rows.find(row => row && !row.undone && row.status !== "undone" && (row.status === "saving" || undoOpen(row, now))) || null;
+}
+
+export function importHistoryLabel(row) {
+  if (!row || typeof row !== "object") return "File import";
+  if (row.undone || row.status === "undone") return "Undone";
+  if (row.rollback || row.status === "rollback" || row.status === "saving") return "Incomplete. Undo or finish";
+  return "File import";
+}
+
+export function importHistoryCanUndo(row) {
+  return !!(row && !row.undone && row.status !== "undone");
 }
 
 export function loadMaps(storage) {
@@ -1735,7 +1773,8 @@ const GearImport = {
   nrm, maskSerial, serialAriaLabel, chunk, newUlid, normalizeHeader, priceKind, confidenceOf, confidenceLabel,
   findHeaderRow, detectSource, mapColumns, headerHash, parsePaid, excelSerialToIso, parseDate,
   columnDateOrder, normalizeCaliber, buildTable, planImport, countPlan, summaryLine,
-  undoImportState, changedAfterImport, escapeSaveReport, loadHistory, saveHistory, undoOpen, loadMaps, rememberMap,
+  undoImportState, changedAfterImport, escapeSaveReport, loadHistory, saveHistory, undoOpen, activeUndoEntry,
+  importHistoryLabel, importHistoryCanUndo, loadMaps, rememberMap,
   decodeBytes, parseDelimited, readCsvText, readJsonText, readZip, readXlsx, readImportFile, looksBinary,
 };
 globalThis.GearImport = GearImport;

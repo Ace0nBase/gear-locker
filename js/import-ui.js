@@ -2,7 +2,7 @@
 import {
   FIELD_LABELS, LIMITS, confidenceLabel, headerHash, loadMaps, mapColumns,
   maskSerial, serialAriaLabel, planImport, readImportFile, rememberMap, summaryLine, undoImportState,
-  changedAfterImport, escapeSaveReport, loadHistory, saveHistory, undoOpen, countPlan, chunk, WRITE_BATCH,
+  changedAfterImport, escapeSaveReport, loadHistory, saveHistory, activeUndoEntry, countPlan, chunk, WRITE_BATCH,
 } from "./import-engine.js";
 
 const PRIVACY = "Your file is read on this phone. Nothing is uploaded until you save, and then only to your own account.";
@@ -41,6 +41,7 @@ function blank() {
     included: {},
     showMatched: {},
     showSerials: false,
+    showAllNeeds: false,
     filter: "all",
     previewFrom: 0,
     importId: "",
@@ -573,13 +574,22 @@ function previewView() {
     text: S.showSerials ? "Hide serials" : "Show serials",
     attrs: { type: "button", "data-import": "serials" },
   }));
-  if ((counts.needs || 0) > 0) box.append(categorySelect(null, true));
+  const needsTotal = counts.needs || 0;
+  if (needsTotal > 0) box.append(categorySelect(null, true));
+  if (needsTotal > 0 && !(S.showAllNeeds && S.filter === "needs")) {
+    box.append(el("button", {
+      className: "btn ghost",
+      text: `Show all ${needsTotal} rows that need a category`,
+      attrs: { type: "button", "data-import": "all-needs" },
+    }));
+  }
   let rows = plan.rows;
   if (S.filter === "look") rows = rows.filter(r => (r.problems && r.problems.length) || r.duplicate);
   else if (S.filter !== "all") rows = rows.filter(r => r.target === S.filter);
-  const slice = rows.slice(S.previewFrom, S.previewFrom + 60);
+  const showEveryNeeds = S.showAllNeeds && S.filter === "needs";
+  const slice = showEveryNeeds ? rows : rows.slice(S.previewFrom, S.previewFrom + 60);
   slice.forEach(row => box.append(previewCard(row)));
-  if (rows.length > S.previewFrom + 60) {
+  if (!showEveryNeeds && rows.length > S.previewFrom + 60) {
     box.append(el("button", { className: "btn ghost", text: "Show the next 60", attrs: { type: "button", "data-import": "more-rows" } }));
   }
   box.append(el("div", { className: "actions" }, [
@@ -805,6 +815,65 @@ async function openCamera() {
   }
 }
 
+function carriesImport(row, id) {
+  if (!row || !id) return false;
+  if (row.importId === id) return true;
+  return Array.isArray(row.importIds) && row.importIds.includes(id);
+}
+
+function liveImportRows(id) {
+  const items = typeof all !== "undefined" && all ? all : [];
+  const ammo = typeof db !== "undefined" && db && db.ammo ? db.ammo : [];
+  return [...items, ...ammo].filter(row => row && !row.deleted && carriesImport(row, id));
+}
+
+function importsLoaded() {
+  if (!window.__warboxBooted) return false;
+  if (typeof all === "undefined" || typeof db === "undefined") return false;
+  if (window.cloudUser && !window.__warboxCloudSeen) return false;
+  return true;
+}
+
+async function commitUndo(id) {
+  try {
+    if (typeof render === "function") render();
+    if (typeof persist === "function") await persist();
+    if (typeof window.__warboxFlushCloud === "function") await window.__warboxFlushCloud();
+  } catch {
+    return false;
+  }
+  return liveImportRows(id).length === 0;
+}
+
+let rollbackJob = null;
+
+function resumePendingRollbacks() {
+  if (!importsLoaded() || rollbackJob) return;
+  const pending = loadHistory(localStorage).filter(row => row && !row.undone && (row.rollback || row.status === "rollback"));
+  if (!pending.length) return;
+  rollbackJob = finishPendingRollbacks(pending).finally(() => {
+    rollbackJob = null;
+    paintUndoBar();
+  });
+}
+
+async function finishPendingRollbacks(pending) {
+  for (const row of pending) {
+    if (!importsLoaded() || !row || !row.id) return;
+    const id = row.id;
+    if (liveImportRows(id).length) {
+      const next = undoImportState(all, db.ammo || [], id, new Date().toISOString());
+      all = next.items;
+      db.ammo = next.ammo;
+    }
+    if (liveImportRows(id).length) return;
+    const durable = await commitUndo(id);
+    if (!durable) return;
+    const prev = loadHistory(localStorage).find(item => item.id === id) || row;
+    saveHistory(localStorage, { ...prev, id, status: "undone", undone: true, rollback: false });
+  }
+}
+
 async function saveImport() {
   if (S.saving) return;
   const plan = currentPlan();
@@ -848,14 +917,29 @@ async function saveImport() {
     S.saving = false;
     S.saveProgress = null;
     S.cancelSave = false;
-    if (typeof all !== "undefined" && typeof db !== "undefined") {
+    if (saved > 0 && typeof all !== "undefined" && typeof db !== "undefined") {
       const next = undoImportState(all, db.ammo || [], id, new Date().toISOString());
       all = next.items;
       db.ammo = next.ammo;
     }
     paint();
+    if (!(saved > 0)) {
+      saveHistory(localStorage, { id, at, counts: plan.counts, status: "undone", undone: true, rollback: false, progress: { done: 0, total } });
+      paintUndoBar();
+      if (typeof toast === "function") toast(report);
+      return;
+    }
+    saveHistory(localStorage, { id, at, counts: plan.counts, status: "rollback", rollback: true, undone: false, progress: { done: saved, total } });
+    paintUndoBar();
+    const durable = await commitUndo(id);
+    if (!durable) {
+      paintUndoBar();
+      if (typeof toast === "function") toast("Stopped. The rollback is still finishing.");
+      return;
+    }
+    saveHistory(localStorage, { id, at, counts: plan.counts, status: "undone", undone: true, rollback: false, progress: { done: saved, total } });
+    paintUndoBar();
     if (typeof toast === "function") toast(report);
-    await undoImport(id, { skipConfirm: true, quiet: true });
     paint();
     return;
   }
@@ -887,15 +971,21 @@ async function undoImport(id, opts) {
       : `${changed.length} items were changed after import. Remove them anyway?`;
     if (!window.confirm(msg)) return;
   }
-  const removed = [...(all || []), ...(db.ammo || [])].filter(row => row && row.importId === id && !row.deleted).length;
+  const removed = liveImportRows(id).length;
   const nowIso = new Date().toISOString();
+  const prev = loadHistory(localStorage).find(row => row.id === id) || { id, at: nowIso, counts: { total: removed } };
+  saveHistory(localStorage, { ...prev, id, status: "rollback", rollback: true, undone: false });
   const next = undoImportState(all, db.ammo, id, nowIso);
   all = next.items;
   db.ammo = next.ammo;
-  const prev = loadHistory(localStorage).find(row => row.id === id) || { id, at: nowIso, counts: { total: removed } };
-  saveHistory(localStorage, { ...prev, id, status: "undone", undone: true });
-  if (typeof render === "function") render();
-  if (typeof persist === "function") await persist();
+  paintUndoBar();
+  const durable = await commitUndo(id);
+  if (!durable) {
+    paintUndoBar();
+    if (typeof toast === "function" && !(opts && opts.quiet)) toast("Stopped. The rollback is still finishing.");
+    return;
+  }
+  saveHistory(localStorage, { ...prev, id, status: "undone", undone: true, rollback: false });
   paintUndoBar();
   const n = prev.counts && prev.counts.total ? prev.counts.total : removed;
   if (typeof toast === "function" && !(opts && opts.quiet)) toast(`Undone: ${n} item${n === 1 ? "" : "s"} removed`);
@@ -913,16 +1003,18 @@ function finishImport(id) {
 function paintUndoBar() {
   const bar = document.getElementById("importUndo");
   if (!bar) return;
-  const open = loadHistory(localStorage).find(row => row && !row.undone && row.status !== "undone" && (row.status === "saving" || undoOpen(row)));
+  const open = activeUndoEntry(loadHistory(localStorage));
   bar.replaceChildren();
   if (!open) { bar.hidden = true; return; }
   bar.hidden = false;
   const total = open.counts && open.counts.total ? open.counts.total : 0;
   const progress = open.progress;
+  const rolling = open.status === "rollback" || open.rollback;
   const savingText = progress && progress.total
     ? `Saving ${progress.done} of ${progress.total}. Incomplete. Undo or finish`
     : "Incomplete. Undo or finish";
-  bar.append(el("span", { text: open.status === "saving" ? savingText : `${total} item${total === 1 ? "" : "s"} imported` }));
+  const text = open.status === "saving" ? savingText : rolling ? "Stopping this import." : `${total} item${total === 1 ? "" : "s"} imported`;
+  bar.append(el("span", { text }));
   if (open.status === "saving") {
     bar.append(el("button", { className: "btn ghost", text: "Finish", attrs: { type: "button", "data-import": "finish", "data-id": open.id } }));
   }
@@ -976,6 +1068,7 @@ function onClick(event) {
     return;
   }
   if (act === "filter") { S.filter = node.getAttribute("data-filter") || "all"; S.previewFrom = 0; paint(); return; }
+  if (act === "all-needs") { S.showAllNeeds = true; S.filter = "needs"; S.previewFrom = 0; paint(); return; }
   if (act === "serials") { S.showSerials = !S.showSerials; paint(); return; }
   if (act === "more-rows") { S.previewFrom += 60; paint(); return; }
   if (act === "decision") {
@@ -1084,10 +1177,13 @@ const prevAfter = window.afterRender;
 window.afterRender = function () {
   if (typeof prevAfter === "function") prevAfter();
   paintUndoBar();
+  resumePendingRollbacks();
 };
+window.__warboxResumeRollback = resumePendingRollbacks;
 
 window.__warboxOpenImport = openPick;
 window.__warboxDiscardImport = discard;
 window.__warboxUndoImport = undoImport;
 window.__warboxImportEscape = onEscape;
 paintUndoBar();
+resumePendingRollbacks();

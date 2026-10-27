@@ -30,7 +30,7 @@ function seenLocal(pairs){
   return {promise:promise,cancel:()=>unsubs.splice(0).forEach(u=>{try{u()}catch(e){}})};
 }
 function commitDurable(commit,pairs){if(!offlineNow())return commit;var watch=seenLocal(pairs);return Promise.race([commit,watch.promise]).finally(()=>watch.cancel())}
-async function pushCloud(){
+async function pushCloudBody(){
   if(accountDeleting||!cloudUser||cloudReady.size<CLOUD_COLS.length+1)return;
   const ops=[];
   CLOUD_COLS.forEach(c=>arrOf(c).forEach(r=>{const k=c+"/"+r.id;if(r.id&&pushed[k]!==r.updatedAt){ops.push([c,r]);pushed[k]=r.updatedAt}}));
@@ -54,6 +54,18 @@ async function pushCloud(){
     if(!offlineNow())setSync("on","Synced");
   }catch(e){reportFail(e)}
 }
+var pushTail=Promise.resolve();
+function pushCloud(){
+  var run=pushTail.then(function(){return pushCloudBody()});
+  pushTail=run.then(function(){},function(){});
+  return run;
+}
+function flushCloudWrites(){
+  clearTimeout(pushTimer);
+  pushTimer=null;
+  return pushCloud();
+}
+window.__warboxFlushCloud=flushCloudWrites;
 function onCloudChange(){
   mirror();render();
   if(viewing&&!$("detail").hidden){const v=all.find(x=>x.id===viewing.id);if(v&&!v.deleted)openDetail(v,true)}
@@ -62,6 +74,7 @@ function onCloudChange(){
   if(typeof showDealBanner==="function")showDealBanner();
 }
 function subscribeCloud(){
+  window.__warboxCloudSeen=false;
   cloudUnsubs.forEach(u=>u());cloudUnsubs=[];cloudReady=new Set();
   CLOUD_COLS.forEach(c=>{
     cloudUnsubs.push(userRef().collection(c).onSnapshot(snap=>{
@@ -104,7 +117,7 @@ function pushCategoryAnswers(){
   if(!cloudUser||!fsdb||!categoryAnswers||!Object.keys(categoryAnswers).length)return;
   userRef().collection("meta").doc("categoryAnswers").set({answers:categoryAnswers,updatedAt:now()},{merge:true}).catch(()=>{});
 }
-function maybeFirstPush(){if(cloudReady.size===CLOUD_COLS.length+1){pushCloud();if(firstLoad){firstLoad=false;render();if(window.LOOKUP_URL)setTimeout(()=>{const q=live().filter(i=>i.marketCheck==="requested"&&!GearLogic.importSkipsLookup(i)).map(i=>i.id);if(q.length)runLookups(q,true)},800)}}}
+function maybeFirstPush(){if(cloudReady.size===CLOUD_COLS.length+1){window.__warboxCloudSeen=true;if(typeof window.__warboxResumeRollback==="function")window.__warboxResumeRollback();pushCloud();if(firstLoad){firstLoad=false;render();if(window.LOOKUP_URL)setTimeout(()=>{const q=live().filter(i=>i.marketCheck==="requested"&&!GearLogic.importSkipsLookup(i)).map(i=>i.id);if(q.length)runLookups(q,true)},800)}}}
 function gateErr(t){$("gErr").textContent=t||""}
 var AUTH_MSG={"auth/invalid-credential":"Email or password is wrong.","auth/wrong-password":"Email or password is wrong.","auth/user-not-found":"No account with that email.","auth/email-already-in-use":"That email already has an account. Sign in instead.","auth/weak-password":"Use at least 12 characters.","auth/invalid-email":"That email doesn't look right.","auth/too-many-requests":"Too many tries. Wait a few minutes.","auth/network-request-failed":"No connection. Check your signal and try again.","auth/operation-not-allowed":"New accounts are turned off.","auth/admin-restricted-operation":"New accounts are turned off."};
 var authMsg=e=>AUTH_MSG[e?.code]||"Something went wrong. Try again.";

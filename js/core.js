@@ -220,6 +220,7 @@ async function boot(){
   try{all=JSON.parse(localStorage.getItem(LS)||"[]")}catch{all=[]}
   try{kits=JSON.parse(localStorage.getItem(LSK)||"{}")||{}}catch{kits={}}
   try{const d=JSON.parse(localStorage.getItem(LSD)||"{}")||{};COLS.forEach(c=>db[c]=Array.isArray(d[c])?d[c]:[])}catch{db=emptyDb()}
+  window.__warboxBooted=true;
   if(applyCategoryMigration())await persist();
   render();
   if(!window.showDirectoryPicker)return;
