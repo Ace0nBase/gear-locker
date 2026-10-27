@@ -39,6 +39,9 @@
 #importSheet .confirmBox{border:1px solid var(--line);border-radius:8px;padding:16px;background:var(--warn-bg)}
 .importUndo{position:fixed;z-index:70;left:50%;transform:translateX(-50%);bottom:calc(12px + env(safe-area-inset-bottom,0px));display:flex;flex-wrap:wrap;gap:8px;align-items:center;max-width:calc(100% - 24px);background:var(--ink);color:var(--bg);padding:8px 10px 8px 14px;border-radius:8px}
 .importUndo .btn{min-height:44px}
+.importUndo .btn.ghost{color:var(--bg);border-color:currentColor;background:transparent}
+body:has(#importSheet:not([hidden])) #importUndo{visibility:hidden;pointer-events:none}
+#importSheet.sheetWrap{z-index:80}
 #importSheet .scanVideo{width:100%;max-height:46dvh;background:#000;border-radius:8px;object-fit:cover}
 #importSheet .sheetSel{display:flex;gap:6px;flex-wrap:wrap}
 @media (max-width:700px){

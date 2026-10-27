@@ -32,7 +32,13 @@ var categoryAnswers={};
 var categoryAnswersReady=typeof window==="undefined"||!window.FIREBASE_CONFIG;
 var live=()=>all.filter(i=>!i.deleted);
 function catsInUse(items){const extra=[];(items||[]).forEach(i=>{const c=i&&i.category;if(c&&!CATS.includes(c)&&!extra.includes(c))extra.push(c)});return CATS.concat(extra)}
-$("fCat").innerHTML=`<option value="">Choose a category</option>`+CATS.map(c=>`<option>${esc(c)}</option>`).join("");
+var EXTRA_CATS=["Magazines & Belts","Triggers & Parts","Lower receiver","Ammo Storage & Loaders"];
+function ensureCategoryOption(name){
+  const sel=$("fCat");if(!sel||!name)return;
+  if([...sel.options].some(o=>o.value===name||o.textContent===name))return;
+  const opt=document.createElement("option");opt.value=name;opt.textContent=name;sel.append(opt);
+}
+$("fCat").innerHTML=`<option value="">Choose a category</option>`+CATS.concat(EXTRA_CATS.filter(c=>!CATS.includes(c))).map(c=>`<option>${esc(c)}</option>`).join("");
 function toast(t,ms){
   if(typeof swReloadPending!=="undefined"&&swReloadPending){toast.q=t;if(typeof showUpdateToast==="function")showUpdateToast();return}
   const el=$("toast");el.textContent=t;el.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>el.hidden=true,ms||2200);
@@ -333,7 +339,9 @@ function openForm(item){
   const blocked=!!(item&&GearLogic.saleRestricted(item));
   editing=item||null;delArmed=false;retailDirty=false;valueDirty=false;
   $("formTitle").textContent=item?"Edit item":"Add item";
-  $("fName").value=item?.name||"";$("fBrand").value=item?.brand||"";$("fCat").value=item? (GearLogic.migrateCategoryName(item.category)||item.category||"") : (filter!=="All"?filter:"Pouches");
+  $("fName").value=item?.name||"";$("fBrand").value=item?.brand||"";
+  const cat=item? (GearLogic.migrateCategoryName(item.category)||item.category||"") : (filter!=="All"?filter:"Pouches");
+  ensureCategoryOption(cat);$("fCat").value=cat;
   $("fQty").value=item?.qty??1;$("fColor").value=item?.color||"";$("fCond").value=item?.condition||"Good";
   $("fRetail").value=!item?"":(blocked&&!restrictedRetailShown(item)?"":(item.retailNew||""));$("fVal").value=!item?"":(blocked&&!restrictedValueShown(item)?"":(item.value||""));$("fLoc").value=item?.location||"";$("fNotes").value=item?.notes||"";
   $("delBtn").hidden=!item;$("delBtn").className="btn ghost";$("delBtn").textContent="Delete";
@@ -357,6 +365,7 @@ function readForm(){
 }
 async function saveCurrent(extra){
   const data={...readForm(),...(extra||{}),updatedAt:now()};
+  if(editing&&(editing.importId||(Array.isArray(editing.importIds)&&editing.importIds.length))) data.importEdited=true;
   if(!data.name){$("fName").focus();return null}
   if(!data.category){$("fCat").focus();toast("Choose a category");return null}
   let rec;

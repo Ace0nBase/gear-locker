@@ -2,11 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { deflateRawSync } from "node:zlib";
-import { applyMarketPrices, settleDeal, importRestricted, importSkipsLookup } from "../js/logic.js";
+import { applyMarketPrices, settleDeal, importRestricted, importSkipsLookup, photoIdHardBlocked, photoIdSuggestion, saleRestricted } from "../js/logic.js";
 import {
   readImportFile, readCsvText, planImport, undoImportState, changedAfterImport, mapColumns,
   normalizeHeader, maskSerial, parseDate, excelSerialToIso, columnDateOrder, headerHash,
-  rememberMap, loadMaps, chunk, WRITE_BATCH, decodeBytes, nrm, summaryLine,
+  rememberMap, loadMaps, chunk, WRITE_BATCH, decodeBytes, nrm, summaryLine, normalizeCaliber, serialAriaLabel,
 } from "../js/import-engine.js";
 
 const enc = s => new TextEncoder().encode(s);
@@ -197,6 +197,45 @@ test("restricted shelves keep What I paid and drop market value columns", () => 
   assert.equal(byName["Ferrowind Can"].paid, 650);
   assert.equal(byName["Ferrowind Can"].category, "Suppressors");
   assert.equal(plan.items.find(i => i.armType === "Lower receiver" || i.category === "Lower receiver").paid, 149.99);
+  const mag = plan.items.find(i => i.category === "Magazines & Belts");
+  const trig = plan.items.find(i => i.category === "Triggers & Parts");
+  const lower = plan.items.find(i => i.category === "Lower receiver");
+  const rifle = plan.items.find(i => i.category === "Firearms");
+  assert.equal(saleRestricted(mag), true);
+  assert.equal(saleRestricted(trig), true);
+  assert.equal(importSkipsLookup(mag), true);
+  assert.equal(importSkipsLookup(trig), true);
+  assert.equal(photoIdHardBlocked(mag), false);
+  assert.equal(photoIdHardBlocked(trig), false);
+  assert.equal(photoIdHardBlocked(lower), true);
+  assert.equal(photoIdHardBlocked(rifle), true);
+  assert.equal(photoIdSuggestion("Magazines & Belts"), "");
+  assert.equal(photoIdSuggestion("Triggers & Parts"), "");
+  assert.equal(photoIdSuggestion("Firearms"), "");
+  assert.equal(photoIdSuggestion("Suppressors"), "");
+  assert.equal(photoIdSuggestion("Ammo Storage & Loaders"), "Ammo Storage & Loaders");
+  for (const item of [mag, trig, lower, rifle]) {
+    const priced = applyMarketPrices(item, {
+      retailNew: 10, value: 9, usedLow: 1, sources: [{ url: "https://example.com/a", label: "store" }], priceNote: "on sale",
+    }, "2026-10-27");
+    assert.equal(priced.paidSource, "manual");
+    assert.equal(priced.retailNew, undefined);
+    assert.equal(priced.value, undefined);
+    assert.equal(priced.marketSources, undefined);
+    assert.equal(priced.priceNote, undefined);
+    assert.equal(settleDeal(item, { price: 8, url: "https://example.com/a", where: "shop" }).price, null);
+  }
+  const shelf = planImport(readCsvText("Item,Type,Price\nSteel can,Ammo Storage & Loaders,18\n").tables, { importId: "01SHELF", now: "2026-10-27T00:00:00.000Z" });
+  const stored = shelf.items[0];
+  assert.equal(stored.category, "Ammo Storage & Loaders");
+  assert.equal(saleRestricted(stored), false);
+  assert.equal(importSkipsLookup(stored), false);
+  assert.equal(stored.paid, 18);
+  assert.equal(stored.paidSource, "manual");
+  const storedPriced = applyMarketPrices(stored, { retailNew: 22, value: 20, sources: [{ url: "https://example.com/can", label: "store" }] }, "2026-10-27");
+  assert.equal(storedPriced.paid, 18);
+  assert.equal(storedPriced.paidSource, "manual");
+  assert.equal(storedPriced.retailNew, 22);
   const ammoCsv = "Caliber,Manufacturer,Quantity,Lot Number,Purchase Price,Current Value\n9mm,Federal,1000,LOT1,280.00,310";
   const ammo = planImport(readCsvText(ammoCsv).tables, { now: "2026-10-27T00:00:00.000Z", importId: "01AMMO" });
   assert.equal(ammo.ammo.length, 1);
@@ -206,10 +245,15 @@ test("restricted shelves keep What I paid and drop market value columns", () => 
   assert.equal(ammo.ammo[0].rounds, 1000);
   assert.equal(importRestricted(ammo.ammo[0]), true);
   const pouch = planImport(readCsvText("Item,Brand,Quantity,Price\nAdmin pouch,Crye,1,40.5").tables, { importId: "01GEAR", now: "2026-10-27T00:00:00.000Z" });
-  assert.equal(pouch.items[0].category === "Firearms", false);
-  assert.equal(pouch.items[0].paid, 40.5);
-  assert.equal(pouch.items[0].paidSource, "manual");
-  const kept = applyMarketPrices(pouch.items[0], { retailNew: 80, value: 70 }, "2026-10-27");
+  assert.equal(pouch.rows[0].target, "needs");
+  assert.equal(pouch.items.length, 0);
+  const placed = planImport(readCsvText("Item,Brand,Quantity,Price\nAdmin pouch,Crye,1,40.5").tables, {
+    importId: "01GEAR", now: "2026-10-27T00:00:00.000Z", rowCategories: { 0: { 0: "Pouches" } },
+  });
+  assert.equal(placed.items[0].category, "Pouches");
+  assert.equal(placed.items[0].paid, 40.5);
+  assert.equal(placed.items[0].paidSource, "manual");
+  const kept = applyMarketPrices(placed.items[0], { retailNew: 80, value: 70 }, "2026-10-27");
   assert.equal(kept.paid, 40.5);
   assert.equal(kept.paidSource, "manual");
 });
@@ -242,14 +286,19 @@ test("duplicates default to skip and undo restores a merge", () => {
 });
 
 test("undo removes a batch and reports later edits", () => {
-  const plan = planImport(readCsvText("Item,Brand\nPouch,Crye\nRadio,Bao").tables, { importId: "01BATCH", now: "2026-10-27T00:00:00.000Z" });
+  const plan = planImport(readCsvText("Category,Item,Brand\nPouches,Pouch,Crye\nComms & Radios,Radio,Bao").tables, { importId: "01BATCH", now: "2026-10-27T00:00:00.000Z" });
   assert.equal(plan.items.length, 2);
   assert.equal(chunk(plan.items, WRITE_BATCH).every(part => part.length <= 400), true);
   assert.equal(chunk(Array.from({ length: 801 }, (_, i) => i), 400).map(p => p.length).join(","), "400,400,1");
   const edited = { ...plan.items[0], updatedAt: "2026-10-28T00:00:00.000Z" };
   assert.equal(changedAfterImport([edited, plan.items[1]], "01BATCH").length, 1);
+  const stamped = { ...plan.items[0], updatedAt: "2026-10-28T00:00:00.000Z", importBookkeeping: "2026-10-28T00:00:00.000Z" };
+  assert.equal(changedAfterImport([stamped, plan.items[1]], "01BATCH").length, 0);
+  const userEdit = { ...plan.items[0], updatedAt: "2026-10-28T00:00:00.000Z", importEdited: true, importBookkeeping: "2026-10-28T00:00:00.000Z" };
+  assert.equal(changedAfterImport([userEdit], "01BATCH").length, 1);
   const undone = undoImportState(plan.items, [], "01BATCH", "2026-10-27T02:00:00.000Z");
   assert.equal(undone.items.every(i => i.deleted), true);
+  assert.equal(undone.items.some(i => i.importId), false);
 });
 
 test("accessories link to the parent serial", () => {
@@ -292,6 +341,11 @@ test("encodings, separators, quotes, and a header that is not on row 1", async (
   const open = readCsvText('Name,Notes\nGood,"ok"\nBad,"no end\n');
   assert.equal(open.tables[0].partial, 3);
   assert.equal(open.tables[0].grid.length, 1);
+  assert.equal(open.tables[0].warnings[0], "Couldn't read from row 3. A quote was left open.");
+  const stuck = readCsvText('Name,Notes\nBad,"no end');
+  assert.equal(stuck.ok, false);
+  assert.equal(stuck.code, "partial");
+  assert.equal(stuck.message, "Couldn't read from row 2. A quote was left open.");
   const banner = readCsvText("My list\nExported on 2026-10-01\n\nManufacturer,Model,Serial Number\nTarnway,Ranger,SAMPLE-9\n");
   assert.equal(banner.tables[0].headerRow, 4);
   const dup = mapColumns(["Notes", "Notes"]);
@@ -349,11 +403,22 @@ test("xlsx dates, formulas, guntrack headers, and refused files", async () => {
   assert.equal(json.ok, true);
   assert.equal(json.tables[0].source, "guntrack");
   const nested = planImport(json.tables, { importId: "01J", now: "2026-10-27T00:00:00.000Z" });
-  const child = nested.items.find(i => i.serial === "OPT-1");
+  const child = nested.rows.find(i => i.serial === "OPT-1");
   const parent = nested.items.find(i => i.serial === "SAMPLE-7");
-  assert.equal(child.mountedOn, parent.id);
+  assert.equal(child.target, "needs");
+  assert.equal(nested.items.some(i => i.serial === "OPT-1"), false);
+  const linked = planImport(json.tables, {
+    importId: "01J", now: "2026-10-27T00:00:00.000Z", rowCategories: { 0: { 1: "NVG & Optics" } },
+  });
+  const optic = linked.items.find(i => i.serial === "OPT-1");
+  assert.equal(optic.mountedOn, linked.items.find(i => i.serial === "SAMPLE-7").id);
   assert.equal(parent.paid, 10);
   assert.equal(parent.paidSource, "manual");
+  assert.equal((await readImportFile(new Uint8Array(200).fill(0), { name: "binary_renamed.csv" })).message, "This doesn't look like a spreadsheet.");
+  const fakeBook = zipStore([{ name: "xl/not-a-workbook.xml", data: Buffer.from("<x/>") }]);
+  const fake = await readImportFile(fakeBook, { name: "fake.xlsx" });
+  assert.equal(fake.code, "not-workbook");
+  assert.equal(fake.message, "This isn't a spreadsheet workbook.");
 });
 
 test("remembered maps store header hashes only, and the summary counts skips", () => {
@@ -366,6 +431,107 @@ test("remembered maps store header hashes only, and the summary counts skips", (
   assert.deepEqual(loadMaps(store)[headerHash(keys)], ["brand", "serial"]);
   const line = summaryLine({ firearms: 42, gear: 118, ammo: 9, skipped: 3 });
   assert.equal(line, "Import 42 firearms, 118 gear items, 9 ammo lots. 3 duplicates skipped.");
+});
+
+test("unknown types stay uncategorized and sheets follow relationship ids", async () => {
+  const mixed = [
+    "Manufacturer,Model,Type,Serial Number,Purchase Price",
+    "Acme,Widget,Gadget,SN-1,12",
+    "Acme,Ranger,Rifle,SN-2,100",
+    "Acme,Dot,Red dot,SN-3,40",
+    "Acme,Rifle,,SN-4,50",
+  ].join("\n");
+  const parsed = readCsvText(mixed);
+  assert.equal(parsed.tables[0].defaultTarget, "needs");
+  const plan = planImport(parsed.tables, { importId: "01MIX", now: "2026-10-27T00:00:00.000Z" });
+  assert.equal(plan.rows.find(r => r.serial === "SN-1").target, "needs");
+  assert.equal(plan.rows.find(r => r.serial === "SN-4").target, "needs");
+  assert.equal(plan.items.some(i => i.serial === "SN-1" || i.serial === "SN-4"), false);
+  assert.equal(plan.items.filter(i => i.category === "Firearms").map(i => i.serial).join(","), "SN-2");
+  const gun = plan.items.find(i => i.serial === "SN-2");
+  assert.equal(gun.paid, 100);
+  assert.equal(gun.paidSource, "manual");
+  assert.equal(plan.items.find(i => i.serial === "SN-3").category, "NVG & Optics");
+  const forced = planImport(readCsvText("Item,Serial Number\nWidget,SN-9\n").tables, { targets: { 0: "armory" }, importId: "01FORCE", now: "2026-10-27T00:00:00.000Z" });
+  assert.equal(forced.rows[0].target, "needs");
+  assert.equal(forced.items.length, 0);
+  const latin = new Uint8Array([
+    ..."Type,Item,Caliber,Notes\nAmmo can,Range tin,9mm,Munici".split("").map(c => c.charCodeAt(0)),
+    0xF3,
+    ..."n\nAmmunition,Ammo can,9mm,ball\n".split("").map(c => c.charCodeAt(0)),
+  ]);
+  const latinRead = await readImportFile(latin, { name: "windows1252.csv" });
+  assert.equal(latinRead.tables[0].encoding, "windows-1252");
+  const routed = planImport(latinRead.tables, { importId: "01CAN", now: "2026-10-27T00:00:00.000Z" });
+  const can = routed.rows.find(r => r.name === "Range tin");
+  const named = routed.rows.find(r => r.name === "Ammo can");
+  assert.equal(can.category, "Ammo Storage & Loaders");
+  assert.equal(can.target, "gear");
+  assert.equal(named.target, "ammo");
+  assert.equal(normalizeCaliber(".30-30 Win").suggestion, "");
+  assert.equal(normalizeCaliber(".30-30 Win").value, ".30-30 Win");
+  assert.equal(normalizeCaliber("6.5 Creedmoor").value, "6.5 Creedmoor");
+  assert.equal(normalizeCaliber("6.5 Creedmoor").suggestion, "");
+  const calibers = planImport(readCsvText("Type,Caliber\nAmmunition,.30-30 Win\nAmmunition,6.5 Creedmoor\n").tables, { importId: "01CAL", now: "2026-10-27T00:00:00.000Z" });
+  assert.equal(JSON.stringify(calibers.rows).includes("Could be .308 Win"), false);
+  assert.equal(calibers.ammo.find(a => a.caliber === "6.5 Creedmoor").caliber, "6.5 Creedmoor");
+  assert.equal(serialAriaLabel("AB-0001", true), "ending 0001");
+  const existing = [{ id: "g1", name: "=CMD", brand: "Crye", category: "Pouches", serial: "=SN1", updatedAt: "2026-01-01T00:00:00.000Z" }];
+  const again = planImport(readCsvText('Category,Item,Brand/Model,Serial Number\nPouches,"\'=CMD",Crye,"\'=SN1"\n').tables, {
+    items: existing, importId: "01RE", now: "2026-10-27T00:00:00.000Z",
+  });
+  assert.equal(again.rows[0].name, "=CMD");
+  assert.equal(again.rows[0].serial, "=SN1");
+  assert.equal(again.rows[0].skipped, true);
+  assert.equal(again.items.length, 0);
+  const made = planImport(readCsvText("Manufacturer,Model,Serial Number,Type\nTarnway,Ranger,SAMPLE-0007,Rifle\n").tables, { importId: "01A", now: "2026-10-27T00:00:00.000Z" });
+  const created = made.items[0];
+  const merged = planImport(readCsvText("Manufacturer,Model,Serial Number,Caliber,Type\nTarnway,Ranger,SAMPLE-0007,5.56,Rifle\n").tables, {
+    items: [created], importId: "01B", now: "2026-10-27T01:00:00.000Z", rowDecisions: { 0: { 0: "merge" } },
+  });
+  assert.equal(merged.merges[0].patch.importId, "01A");
+  const combined = { ...created, ...merged.merges[0].patch };
+  const aFirst = undoImportState([combined], [], "01A", "2026-10-27T02:00:00.000Z");
+  assert.equal(aFirst.items[0].deleted, true);
+  const aThenB = undoImportState(aFirst.items, [], "01B", "2026-10-27T03:00:00.000Z");
+  assert.equal(aThenB.items[0].deleted, true);
+  assert.equal(aThenB.items.some(i => i.importId), false);
+  const bFirst = undoImportState([{ ...created, ...merged.merges[0].patch }], [], "01B", "2026-10-27T02:00:00.000Z");
+  assert.equal(bFirst.items[0].deleted, undefined);
+  assert.equal(bFirst.items[0].importId, "01A");
+  const bThenA = undoImportState(bFirst.items, [], "01A", "2026-10-27T03:00:00.000Z");
+  assert.equal(bThenA.items[0].deleted, true);
+  assert.equal(bThenA.items.some(i => i.importId), false);
+  const wb = `<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Firearms" sheetId="1" r:id="rId1"/><sheet name="Ammunition" sheetId="2" r:id="rId2"/><sheet name="Notes" sheetId="3" r:id="rId3"/></sheets></workbook>`;
+  const rels = `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="worksheets/sheet1.xml" Id="rId1" Type="worksheet"/><Relationship Target="worksheets/sheet2.xml" Id="rId2" Type="worksheet"/><Relationship Target="worksheets/sheet3.xml" Id="rId3" Type="worksheet"/></Relationships>`;
+  const book = zipStore([
+    { name: "xl/workbook.xml", data: Buffer.from(wb) },
+    { name: "xl/_rels/workbook.xml.rels", data: Buffer.from(rels) },
+    { name: "xl/worksheets/sheet1.xml", data: Buffer.from(sheetXml([["SERIAL NUMBER", "TYPE OF FIREARM", "MANUFACTURER", "MODEL/NAME"], ["FIREARM-ROW", "Rifle", "Tarnway", "Ranger"]])) },
+    { name: "xl/worksheets/sheet2.xml", data: Buffer.from(sheetXml([["CALIBER", "MANUFACTURER", "LOT NUMBER", "QUANTITY"], ["9mm", "Federal", "AMMO-ROW", "20"]])) },
+    { name: "xl/worksheets/sheet3.xml", data: Buffer.from(sheetXml([["Notes", "Item"], ["NOTES-ROW", "Sticky"]])) },
+  ]);
+  const sheets = await readImportFile(book, { name: "guntrack_export.xlsx" });
+  assert.equal(sheets.tables.map(t => t.name).join(","), "Firearms,Ammunition,Notes");
+  assert.match(sheets.tables[0].grid[0].join(" "), /FIREARM-ROW/);
+  assert.match(sheets.tables[1].grid[0].join(" "), /AMMO-ROW/);
+  assert.equal(sheets.tables[1].grid[0].join(" ").includes("FIREARM-ROW"), false);
+  assert.match(sheets.tables[2].grid[0].join(" "), /NOTES-ROW/);
+  const core = fs.readFileSync(new URL("../js/core.js", import.meta.url), "utf8");
+  assert.match(core, /ensureCategoryOption/);
+  assert.match(core, /Magazines & Belts/);
+  assert.match(core, /Triggers & Parts/);
+  assert.match(core, /Lower receiver/);
+  assert.match(core, /importEdited/);
+  const social = fs.readFileSync(new URL("../js/social.js", import.meta.url), "utf8");
+  assert.match(social, /importBookkeeping/);
+  const ui = fs.readFileSync(new URL("../js/import-ui.js", import.meta.url), "utf8");
+  assert.match(ui, /Needs a category/);
+  assert.match(ui, /Set category for all that need one/);
+  assert.match(ui, /cancelSave/);
+  const css = fs.readFileSync(new URL("../css/import.css", import.meta.url), "utf8");
+  assert.match(css, /#importSheet:not\(\[hidden\]\)/);
+  assert.match(css, /\.importUndo \.btn\.ghost\{color:var\(--bg\)/);
 });
 
 test("the importer source never calls the network", async () => {

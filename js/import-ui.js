@@ -1,8 +1,8 @@
 // On-device import screen. File bytes stay in memory until this sheet closes.
 import {
   FIELD_LABELS, LIMITS, confidenceLabel, headerHash, loadMaps, mapColumns,
-  maskSerial, planImport, readImportFile, rememberMap, summaryLine, undoImportState,
-  changedAfterImport, loadHistory, saveHistory, undoOpen, countPlan,
+  maskSerial, serialAriaLabel, planImport, readImportFile, rememberMap, summaryLine, undoImportState,
+  changedAfterImport, loadHistory, saveHistory, undoOpen, countPlan, chunk, WRITE_BATCH,
 } from "./import-engine.js";
 
 const PRIVACY = "Your file is read on this phone. Nothing is uploaded until you save, and then only to your own account.";
@@ -34,6 +34,7 @@ function blank() {
     choices: {},
     targets: {},
     rowTargets: {},
+    rowCategories: {},
     rowDecisions: {},
     rowFixes: {},
     dateOrders: {},
@@ -46,6 +47,8 @@ function blank() {
     error: null,
     reading: "",
     saving: false,
+    cancelSave: false,
+    saveProgress: null,
     savedId: "",
     worker: null,
     camera: null,
@@ -187,6 +190,7 @@ function currentPlan() {
     columnChoices: S.choices,
     targets: S.targets,
     rowTargets: S.rowTargets,
+    rowCategories: S.rowCategories,
     rowDecisions: S.rowDecisions,
     rowFixes: S.rowFixes,
     dateOrders: S.dateOrders,
@@ -499,7 +503,7 @@ function whereView() {
   const box = el("div");
   box.append(el("h2", { text: "Where they go" }));
   S.tables.forEach((table, ti) => {
-    const target = S.targets[ti] || table.defaultTarget || "gear";
+    const target = S.targets[ti] || (table.defaultTarget && table.defaultTarget !== "needs" ? table.defaultTarget : "");
     const card = el("div", { className: "card" }, [
       el("b", { text: table.fileName || table.name || `Sheet ${ti + 1}` }),
       segmented(target, ti),
@@ -542,7 +546,7 @@ function segmented(current, ti, ri) {
 }
 
 function targetLabel(id) {
-  return id === "armory" ? "Armory" : id === "ammo" ? "Ammo" : id === "gear" ? "Gear" : "Skip";
+  return id === "armory" ? "Armory" : id === "ammo" ? "Ammo" : id === "gear" ? "Gear" : id === "needs" ? "Needs a category" : "Skip";
 }
 
 function previewView() {
@@ -551,12 +555,12 @@ function previewView() {
   box.append(el("h2", { text: "Preview" }));
   const counts = plan.counts;
   const tally = el("div", { className: "tally" });
-  [["firearms", "Firearms"], ["gear", "Gear"], ["ammo", "Ammo lots"], ["skipped", "Skipped"]].forEach(([key, label]) => {
+  [["firearms", "Firearms"], ["gear", "Gear"], ["ammo", "Ammo lots"], ["needs", "Needs a category"], ["skipped", "Skipped"]].forEach(([key, label]) => {
     tally.append(el("div", {}, [el("b", { text: String(counts[key] || 0) }), el("div", { text: label })]));
   });
   box.append(tally);
   const filters = el("div", { className: "chips" });
-  [["all", "All"], ["look", "Needs a look"], ["armory", "Armory"], ["gear", "Gear"], ["ammo", "Ammo"]].forEach(([id, label]) => {
+  [["all", "All"], ["needs", "Needs a category"], ["look", "Needs a look"], ["armory", "Armory"], ["gear", "Gear"], ["ammo", "Ammo"]].forEach(([id, label]) => {
     filters.append(el("button", {
       className: "chip",
       text: label,
@@ -569,6 +573,7 @@ function previewView() {
     text: S.showSerials ? "Hide serials" : "Show serials",
     attrs: { type: "button", "data-import": "serials" },
   }));
+  if ((counts.needs || 0) > 0) box.append(categorySelect(null, true));
   let rows = plan.rows;
   if (S.filter === "look") rows = rows.filter(r => (r.problems && r.problems.length) || r.duplicate);
   else if (S.filter !== "all") rows = rows.filter(r => r.target === S.filter);
@@ -589,9 +594,15 @@ function previewCard(row) {
   card.append(el("b", { text: row.name || "Imported item", attrs: { dir: "auto" } }));
   card.append(el("div", { text: [targetLabel(row.target), row.gearArmory ? "Gear + Armory" : "", row.category || ""].filter(Boolean).join(" · ") }));
   if (row.serial) {
-    const shown = S.showSerials || (row.duplicate && row.duplicate.kind === "serial") ? row.serial : (row.serialMasked || maskSerial(row.serial));
-    card.append(el("div", { className: "mono", text: shown, attrs: { dir: "auto" } }));
+    const masked = !(S.showSerials || (row.duplicate && row.duplicate.kind === "serial"));
+    const shown = masked ? (row.serialMasked || maskSerial(row.serial)) : row.serial;
+    card.append(el("div", {
+      className: "mono",
+      text: shown,
+      attrs: { dir: "auto", "aria-label": serialAriaLabel(row.serial, masked) },
+    }));
   }
+  if (row.target === "needs") card.append(categorySelect(row, false));
   if (row.paid != null) card.append(el("div", { text: `What I paid ${moneyPaid(row.paid)}` }));
   (row.problems || []).forEach(p => card.append(el("span", { className: "pill warn", text: p.message || "Needs a look" })));
   if (row.duplicate) {
@@ -636,6 +647,24 @@ function previewCard(row) {
   return card;
 }
 
+function categorySelect(row, bulk) {
+  const sel = el("select", {
+    attrs: {
+      "aria-label": bulk ? "Set category for all that need one" : `Category for ${row.name || "row"}`,
+      "data-import": bulk ? "bulk-category" : "row-category",
+      "data-table": bulk ? null : String(row.table),
+      "data-row": bulk ? null : String(row.row),
+    },
+  });
+  sel.append(el("option", { text: bulk ? "Set category for all that need one" : "Choose a category", attrs: { value: "" } }));
+  categories().forEach(name => {
+    const opt = el("option", { text: name, attrs: { value: name } });
+    if (!bulk && S.rowCategories[row.table] && S.rowCategories[row.table][row.row] === name) opt.selected = true;
+    sel.append(opt);
+  });
+  return sel;
+}
+
 function textFix(row, key, label, type) {
   const current = (S.rowFixes[row.table] && S.rowFixes[row.table][row.row] && S.rowFixes[row.table][row.row][key]) || "";
   const input = el("input", {
@@ -674,12 +703,22 @@ function summaryView() {
     el("p", { className: "privacy", text: PRIVACY }),
   ]);
   const total = counts.total || 0;
+  const progress = S.saveProgress || { done: 0, total };
   const btn = el("button", {
     className: "btn",
-    text: S.saving ? `Saving ${total} items…` : `Import ${total} item${total === 1 ? "" : "s"}`,
+    text: S.saving ? `Saving ${progress.done} of ${progress.total}…` : `Import ${total} item${total === 1 ? "" : "s"}`,
     attrs: { type: "button", "data-import": "save", disabled: total && !S.saving ? null : "disabled" },
   });
-  box.append(el("div", { className: "actions" }, [btn]));
+  const actions = [btn];
+  if (S.saving) {
+    actions.push(el("button", {
+      className: "btn ghost",
+      text: "Undo",
+      attrs: { type: "button", "data-import": "undo", "data-id": S.importId },
+    }));
+  }
+  if (counts.needs) box.append(el("p", { text: `${counts.needs} still need a category. Pick one in the preview before they can be saved.` }));
+  box.append(el("div", { className: "actions" }, actions));
   return box;
 }
 
@@ -700,8 +739,11 @@ function errorText(err) {
   if (code === "encrypted-backup") return "My Armory backups are encrypted. Open Data management, then CSV Data Management, and export a CSV. War Box can't read the backup file.";
   if (code === "encrypted-workbook") return "This workbook is password-protected. Save it as CSV or xlsx without a password, then try again.";
   if (code === "binary") return "This doesn't look like a spreadsheet.";
+  if (code === "not-workbook") return "This isn't a spreadsheet workbook.";
+  if (code === "partial") return (err && err.message) || "A quote was left open.";
   if (code === "empty") return "That file has no rows to import.";
   if (code === "encoding") return "Couldn't read the text in this file.";
+  if (err && err.message) return err.message;
   return "War Box can't read this file. Save it as CSV or xlsx and try again.";
 }
 
@@ -769,26 +811,51 @@ async function saveImport() {
   const total = plan.counts.total || 0;
   if (!total) return;
   S.saving = true;
+  S.cancelSave = false;
+  S.saveProgress = { done: 0, total };
   S.plan = plan;
   paint();
   const at = plan.at || new Date().toISOString();
-  saveHistory(localStorage, { id: plan.importId, at, counts: plan.counts, status: "saving" });
-  (plan.items || []).forEach(doc => all.push(doc));
-  (plan.ammo || []).forEach(doc => db.ammo.push(doc));
-  (plan.merges || []).forEach(merge => {
-    const list = merge.collection === "ammo" ? db.ammo : all;
-    const row = list.find(item => item.id === merge.id);
-    if (row) Object.assign(row, merge.patch);
-  });
+  const jobs = [
+    ...(plan.items || []).map(doc => ({ kind: "item", doc })),
+    ...(plan.ammo || []).map(doc => ({ kind: "ammo", doc })),
+    ...(plan.merges || []).map(merge => ({ kind: "merge", merge })),
+  ];
+  saveHistory(localStorage, { id: plan.importId, at, counts: plan.counts, status: "saving", progress: S.saveProgress });
+  const parts = chunk(jobs, WRITE_BATCH);
+  for (const part of parts) {
+    if (S.cancelSave) break;
+    part.forEach(entry => {
+      if (entry.kind === "item") all.push(entry.doc);
+      else if (entry.kind === "ammo") db.ammo.push(entry.doc);
+      else {
+        const list = entry.merge.collection === "ammo" ? db.ammo : all;
+        const row = list.find(item => item.id === entry.merge.id);
+        if (row) Object.assign(row, entry.merge.patch);
+      }
+    });
+    S.saveProgress = { done: Math.min(total, S.saveProgress.done + part.length), total };
+    saveHistory(localStorage, { id: plan.importId, at, counts: plan.counts, status: "saving", progress: S.saveProgress });
+    paint();
+    paintUndoBar();
+    if (typeof render === "function") render();
+    if (typeof persist === "function") await persist();
+  }
+  if (S.cancelSave) {
+    const id = plan.importId;
+    S.saving = false;
+    S.saveProgress = null;
+    await undoImport(id, { skipConfirm: true });
+    return;
+  }
   S.tables.forEach((table, ti) => {
     const fields = table.columns.map(col => (S.choices[ti] && S.choices[ti][col.index]) || col.field);
     rememberMap(localStorage, table.columns.map(col => col.key), fields);
   });
-  if (typeof render === "function") render();
-  if (typeof persist === "function") await persist();
-  saveHistory(localStorage, { id: plan.importId, at, counts: plan.counts, status: "saved" });
+  saveHistory(localStorage, { id: plan.importId, at, counts: plan.counts, status: "saved", progress: { done: total, total } });
   S.savedId = plan.importId;
   S.saving = false;
+  S.saveProgress = null;
   S.files = [];
   S.step = "done";
   paint();
@@ -796,10 +863,14 @@ async function saveImport() {
   if (typeof toast === "function") toast(`${total} item${total === 1 ? "" : "s"} imported`);
 }
 
-async function undoImport(id) {
+async function undoImport(id, opts) {
+  if (S.saving && !(opts && opts.skipConfirm)) {
+    if (!id || id === S.importId) S.cancelSave = true;
+    return;
+  }
   if (typeof all === "undefined" || typeof db === "undefined") return;
-  const changed = changedAfterImport([...(all || []), ...(db.ammo || [])], id);
-  if (changed.length) {
+  const changed = !(opts && opts.skipConfirm) && changedAfterImport([...(all || []), ...(db.ammo || [])], id);
+  if (changed && changed.length) {
     const msg = changed.length === 1
       ? "1 item was changed after import. Remove it anyway?"
       : `${changed.length} items were changed after import. Remove them anyway?`;
@@ -836,7 +907,11 @@ function paintUndoBar() {
   if (!open) { bar.hidden = true; return; }
   bar.hidden = false;
   const total = open.counts && open.counts.total ? open.counts.total : 0;
-  bar.append(el("span", { text: open.status === "saving" ? "Incomplete. Undo or finish" : `${total} item${total === 1 ? "" : "s"} imported` }));
+  const progress = open.progress;
+  const savingText = progress && progress.total
+    ? `Saving ${progress.done} of ${progress.total}. Incomplete. Undo or finish`
+    : "Incomplete. Undo or finish";
+  bar.append(el("span", { text: open.status === "saving" ? savingText : `${total} item${total === 1 ? "" : "s"} imported` }));
   if (open.status === "saving") {
     bar.append(el("button", { className: "btn ghost", text: "Finish", attrs: { type: "button", "data-import": "finish", "data-id": open.id } }));
   }
@@ -948,6 +1023,26 @@ function onChange(event) {
     const key = node.getAttribute("data-key");
     S.rowFixes[ti] = S.rowFixes[ti] || {};
     S.rowFixes[ti][ri] = { ...(S.rowFixes[ti][ri] || {}), [key]: node.value };
+    return;
+  }
+  if (act === "row-category") {
+    const ti = +node.getAttribute("data-table") || 0;
+    const ri = +node.getAttribute("data-row") || 0;
+    S.rowCategories[ti] = S.rowCategories[ti] || {};
+    S.rowCategories[ti][ri] = node.value;
+    paint();
+    return;
+  }
+  if (act === "bulk-category") {
+    const value = node.value;
+    if (!value) return;
+    const plan = currentPlan();
+    plan.rows.forEach(row => {
+      if (!row || row.skipped || row.target !== "needs") return;
+      S.rowCategories[row.table] = S.rowCategories[row.table] || {};
+      S.rowCategories[row.table][row.row] = value;
+    });
+    paint();
   }
 }
 

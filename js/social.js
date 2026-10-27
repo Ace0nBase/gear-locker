@@ -24,7 +24,7 @@ $("fCat").addEventListener("change",syncArmDefault);$("fName").addEventListener(
 /* every item on the record gets an ID (fixes knives added before) */
 function fillArmIds(){
   const taken=[];let n=0;const t=now();
-  ARM_KEYS.forEach(k=>live().filter(i=>armOf(i)===k&&!i.armId).sort((a,b)=>(a.createdAt||"").localeCompare(b.createdAt||"")).forEach(i=>{const id=nextArmId(k,taken);taken.push(id);i.armId=id;if(!i.arm)i.arm=k;i.updatedAt=t;n++}));
+  ARM_KEYS.forEach(k=>live().filter(i=>armOf(i)===k&&!i.armId).sort((a,b)=>(a.createdAt||"").localeCompare(b.createdAt||"")).forEach(i=>{const id=nextArmId(k,taken);taken.push(id);i.armId=id;if(!i.arm)i.arm=k;i.updatedAt=t;if(i.importId&&!i.importEdited)i.importBookkeeping=t;n++}));
   if(n)persist();return n;
 }
 {const _ra=renderArms;renderArms=function(){fillArmIds();_ra()}}

@@ -1,7 +1,7 @@
 // On-device spreadsheet import. No network, no disk, no price lookups.
 // Column matching uses the header text only.
 
-import { importRestricted, saleRestricted } from "./logic.js";
+import { GEAR_CATEGORIES, importRestricted, saleRestricted } from "./logic.js";
 
 export const LIMITS = {
   fileBytes: 15 * 1024 * 1024,
@@ -17,11 +17,7 @@ export const WRITE_BATCH = 400;
 export const HIST_KEY = "gearLocker.importHistory";
 export const MAP_KEY = "gearLocker.importMaps";
 
-export const DEFAULT_CATEGORIES = [
-  "Firearms", "Suppressors", "Armor & Carriers", "Belts & Rigs", "Pouches", "Holsters & Slings",
-  "Helmet & Head", "NVG & Optics", "Lights & Lasers", "Comms & Radios", "Medical", "Packs & Bags",
-  "Cases & Bags", "Clothing & Boots", "Knives & Tools", "Mags & Ammo Storage", "Cleaning & Maintenance", "Misc",
-];
+export const DEFAULT_CATEGORIES = GEAR_CATEGORIES.slice();
 
 const PAID_KEYS = new Set([
   "purchase price", "price paid", "amount paid", "what i paid", "paid", "cost", "price", "unit price", "purchase cost",
@@ -132,6 +128,13 @@ export function maskSerial(value) {
   if (!s) return "";
   const tail = s.slice(-4);
   return "••••" + tail;
+}
+
+export function serialAriaLabel(serial, masked) {
+  const s = String(serial ?? "");
+  if (!s) return "";
+  if (!masked) return s;
+  return "ending " + s.slice(-4);
 }
 
 export function chunk(list, size = WRITE_BATCH) {
@@ -370,6 +373,8 @@ export function headerHash(keys) {
 
 function cleanText(value, notes) {
   let s = String(value ?? "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+  // The app's own CSV prefixes '=+-@ so a spreadsheet will not run the cell. Put the value back.
+  if (s.startsWith("'") && /^[=+\-@\t\r]/.test(s.slice(1))) s = s.slice(1);
   if (!notes) s = s.replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim();
   else s = s.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   if (s.length > LIMITS.cellChars) return { text: s.slice(0, LIMITS.cellChars), truncated: true };
@@ -465,14 +470,7 @@ export function normalizeCaliber(raw) {
   const s = cleanText(raw).text;
   if (!s) return { value: "", suggestion: "", unknown: false };
   for (const [re, name] of CALIBERS) if (re.test(s)) return { value: name, suggestion: "", unknown: false };
-  let suggestion = "";
-  let best = 0;
-  for (const [, name] of CALIBERS) {
-    const score = jaroWinkler(s.toLowerCase(), name.toLowerCase());
-    if (score > best) { best = score; suggestion = name; }
-  }
-  if (best < 0.84) suggestion = "";
-  return { value: s, suggestion, unknown: true };
+  return { value: s, suggestion: "", unknown: true };
 }
 
 function mapCondition(raw) {
@@ -482,10 +480,16 @@ function mapCondition(raw) {
   return { value: "", note: s };
 }
 
-function classifyType(typeText) {
-  const t = String(typeText || "").toLowerCase();
+function classifyType(typeText, categories) {
+  const t = String(typeText || "").toLowerCase().trim();
   if (!t) return null;
-  if (/suppressor|silencer/.test(t) || (/\bcan\b/.test(t) && !/ammo/.test(t))) return { target: "armory", arm: "SU", category: "Suppressors", armType: "Suppressor" };
+  const list = categories || [];
+  const exact = list.find(c => c.toLowerCase() === t);
+  if (/(ammo|ammunition)[^\n]{0,40}\b(can|box|bag)\b|\b(can|box|bag)\b[^\n]{0,40}\b(ammo|ammunition)\b|ammo storage|\bloaders?\b|speed\s*loader/.test(t)) {
+    return { target: "gear", arm: "", category: storageCategory(list), storage: true };
+  }
+  if (exact && /storage|\bloader/i.test(exact)) return { target: "gear", arm: "", category: exact, storage: true };
+  if (/suppressor|silencer/.test(t) || (/\bcan\b/.test(t) && !/ammo|ammunition/.test(t))) return { target: "armory", arm: "SU", category: "Suppressors", armType: "Suppressor" };
   if (/handgun|pistol|revolver/.test(t)) return { target: "armory", arm: "FA", category: "Firearms", armType: "Handgun" };
   if (/shotgun/.test(t)) return { target: "armory", arm: "FA", category: "Firearms", armType: "Shotgun" };
   if (/rifle|carbine|\bsbr\b|long gun/.test(t)) return { target: "armory", arm: "FA", category: "Firearms", armType: "Rifle" };
@@ -498,8 +502,17 @@ function classifyType(typeText) {
   if (/magazine|\bmags?\b/.test(t)) return { target: "gear", arm: "", category: "Magazines & Belts" };
   if (/trigger/.test(t)) return { target: "gear", arm: "", category: "Triggers & Parts" };
   if (/reload/.test(t)) return { target: "gear", arm: "", category: "Reloading" };
+  if (exact) return routeNamedCategory(exact);
   if (/ammunition|\bammo\b|cartridge/.test(t)) return { target: "ammo", arm: "", category: "Ammunition" };
   return null;
+}
+
+function routeNamedCategory(name) {
+  if (/^firearms$/i.test(name)) return { target: "armory", arm: "FA", category: name, armType: "" };
+  if (/suppressor/i.test(name)) return { target: "armory", arm: "SU", category: name, armType: "Suppressor" };
+  if (/lower/i.test(name)) return { target: "armory", arm: "FA", category: name, armType: name };
+  if (/^ammunition$/i.test(name)) return { target: "ammo", arm: "", category: name };
+  return { target: "gear", arm: "", category: name };
 }
 
 function storageCategory(categories) {
@@ -510,8 +523,7 @@ function storageCategory(categories) {
 function fileDefaultTarget(columns) {
   const fields = new Set(columns.filter(c => c.field !== "ignore").map(c => c.field));
   if ((fields.has("rounds") || fields.has("lot") || fields.has("load")) && !fields.has("serial")) return "ammo";
-  if (fields.has("serial") || fields.has("armType")) return "armory";
-  return "gear";
+  return "needs";
 }
 
 function applyColumns(columns, choices) {
@@ -571,29 +583,27 @@ export function buildTable(matrix, opts = {}) {
   };
 }
 
+function finishRoute(typed, fields) {
+  if (!typed) return { target: "needs", arm: "", category: "", needsCategory: true, gearArmory: false };
+  if (typed.storage || typed.target === "ammo") return { ...typed, gearArmory: false };
+  if (typed.arm === "OP" || typed.arm === "WL" || typed.arm === "LA" || typed.arm === "KN") {
+    return { ...typed, target: "gear", arm: fields.serial ? typed.arm : "", gearArmory: !!fields.serial && typed.arm !== "KN" };
+  }
+  if (typed.target === "armory") return { ...typed, gearArmory: false };
+  return { ...typed, arm: fields.serial ? (typed.arm || "") : "", gearArmory: !!fields.serial && !!typed.arm, target: "gear" };
+}
+
 function routeOne(fields, fileTarget, categories) {
-  const typed = classifyType(fields.armType || fields.categoryText || "");
-  if (typed && (typed.target === "armory" || typed.arm === "FA" || typed.arm === "SU")) {
-    if (typed.arm === "OP" || typed.arm === "WL" || typed.arm === "LA") {
-      return { ...typed, target: "gear", arm: fields.serial ? typed.arm : "", gearArmory: !!fields.serial };
-    }
-    return { ...typed, gearArmory: false };
-  }
-  if (typed && (typed.arm === "OP" || typed.arm === "WL" || typed.arm === "LA" || typed.arm === "KN")) {
-    return { ...typed, target: typed.target === "ammo" ? "ammo" : "gear", arm: fields.serial ? typed.arm : "", gearArmory: !!fields.serial && typed.arm !== "KN" };
-  }
-  if (typed && typed.target === "ammo") return { ...typed, gearArmory: false };
-  if (typed && typed.target === "gear") return { ...typed, arm: fields.serial ? typed.arm : "", gearArmory: !!fields.serial && !!typed.arm, target: "gear" };
+  const typed = classifyType(fields.armType || "", categories);
+  if (typed) return finishRoute(typed, fields);
   const qty = fields.qty;
-  if (fields.caliber && !fields.serial && qty != null && qty >= 20) return { target: "ammo", arm: "", category: "Ammunition", gearArmory: false };
-  if (fields.load || fields.lot) return { target: "ammo", arm: "", category: "Ammunition", gearArmory: false };
-  if (fileTarget === "ammo" && !fields.caliber && /\b(can|box|bag)\b/i.test(fields.name || "")) {
-    return { target: "gear", arm: "", category: storageCategory(categories), gearArmory: false, moved: true };
-  }
-  if (fields.serial && fields.caliber && fileTarget === "armory") return { target: "armory", arm: "FA", category: "Firearms", gearArmory: false };
-  if (fileTarget === "armory") return { target: "armory", arm: fields.serial ? "FA" : "", category: "Firearms", gearArmory: false };
-  if (fileTarget === "ammo") return { target: "ammo", arm: "", category: "Ammunition", gearArmory: false };
-  return { target: "gear", arm: "", category: typed ? typed.category : "Misc", gearArmory: false };
+  const structuralAmmo = !fields.serial && (
+    !!fields.load || !!fields.lot ||
+    (fields.caliber && qty != null && qty >= 20) ||
+    (fileTarget === "ammo" && !!fields.caliber)
+  );
+  if (structuralAmmo) return { target: "ammo", arm: "", category: "Ammunition", gearArmory: false };
+  return { target: "needs", arm: "", category: "", needsCategory: true, gearArmory: false };
 }
 
 function readFields(row, columns, opts) {
@@ -717,7 +727,7 @@ export function planImport(tables, opts = {}) {
     const choices = opts.columnChoices && opts.columnChoices[ti];
     let columns = applyColumns(table.columns, choices);
     columns = retargetQuantity(columns);
-    const fileTarget = (opts.targets && opts.targets[ti]) || table.defaultTarget || "gear";
+    const fileTarget = (opts.targets && opts.targets[ti]) || table.defaultTarget || "needs";
     const monthFirst = opts.monthFirst !== false && (opts.dateOrders ? opts.dateOrders[ti] : table.dateOrder) !== "dmy";
     table.grid.forEach((gridRow, ri) => {
       const read = readFields(gridRow, columns, { dateOrder: monthFirst ? "mdy" : "dmy" });
@@ -732,8 +742,10 @@ export function planImport(tables, opts = {}) {
         return;
       }
       let routed = routeOne({ ...fields, qty: fields.qty ?? fields.rounds ?? null }, fileTarget, categories);
+      const picked = opts.rowCategories && opts.rowCategories[ti] && opts.rowCategories[ti][ri];
+      if (picked) routed = finishRoute(classifyType(picked, categories) || routeNamedCategory(picked), fields);
       const rowTarget = opts.rowTargets && opts.rowTargets[ti] && opts.rowTargets[ti][ri];
-      if (rowTarget) routed = { ...routed, target: rowTarget, moved: routed.target !== rowTarget || routed.moved };
+      if (rowTarget && routed.target !== "needs") routed = { ...routed, target: rowTarget, moved: routed.target !== rowTarget || routed.moved };
       if ((routed.arm === "OP" || routed.arm === "WL" || routed.arm === "LA") && !fields.serial) routed.arm = "";
       const name = composeName(fields, review.length + 1);
       let decision = "add";
@@ -767,7 +779,7 @@ export function planImport(tables, opts = {}) {
       const recordBase = {
         name,
         brand: fields.brand || "",
-        category: routed.category || (routed.target === "armory" ? "Firearms" : "Misc"),
+        category: routed.category || (routed.target === "armory" ? "Firearms" : routed.target === "needs" ? "" : "Misc"),
         qty: fields.qty || 1,
         location: fields.location || "",
         notes: fields.notes || "",
@@ -806,6 +818,10 @@ export function planImport(tables, opts = {}) {
         review.push({ ...view, skipped: true });
         return;
       }
+      if (routed.target === "needs") {
+        review.push({ ...view, needsCategory: true, decision: "add" });
+        return;
+      }
       if (decision === "merge" && duplicate && duplicate.where === "saved") {
         const collection = routed.target === "ammo" ? "ammo" : "items";
         const current = (collection === "ammo" ? existingAmmo : existingItems).find(r => r.id === duplicate.existingId);
@@ -826,10 +842,16 @@ export function planImport(tables, opts = {}) {
             const line = `Imported ${now.slice(0, 10)}: ${incoming.notes}`;
             patch.notes = current.notes ? `${current.notes}\n${line}` : line;
           }
+          const prevIds = Array.isArray(current.importIds) ? current.importIds.slice() : (current.importId ? [current.importId] : []);
+          const prevBy = current.importUndoBy && typeof current.importUndoBy === "object" ? current.importUndoBy : null;
           undo.importId = current.importId || "";
           undo.importedAt = current.importedAt || "";
-          patch.importId = importId;
-          patch.importedAt = now;
+          undo.importIds = prevIds.length ? prevIds : "";
+          undo.importUndoBy = prevBy || "";
+          patch.importId = current.importId || importId;
+          patch.importIds = prevIds.concat(importId);
+          patch.importUndoBy = { ...(prevBy || {}), [importId]: undo };
+          patch.importedAt = current.importedAt || now;
           patch.importUndo = undo;
           patch.updatedAt = now;
           merges.push({ id: current.id, collection, patch });
@@ -841,7 +863,7 @@ export function planImport(tables, opts = {}) {
       if (routed.target === "ammo") {
         if (!recordBase.caliber) problems.push({ kind: "caliber", message: "Ammo needs a caliber" });
         const doc = {
-          id, createdAt: now, updatedAt: now, importedAt: now, importId,
+          id, createdAt: now, updatedAt: now, importedAt: now, importId, importIds: [importId],
           caliber: recordBase.caliber, brand: recordBase.brand, load: fields.load || "",
           rounds: fields.rounds || fields.qty || 0, lot: fields.lot || "", location: recordBase.location,
           lowAlert: fields.lowAlert || "", notes: recordBase.notes, kind: "ammo", tab: "ammo",
@@ -854,7 +876,7 @@ export function planImport(tables, opts = {}) {
         return;
       }
       const doc = {
-        id, createdAt: now, updatedAt: now, importedAt: now, importId,
+        id, createdAt: now, updatedAt: now, importedAt: now, importId, importIds: [importId],
         name: recordBase.name, brand: recordBase.brand, category: recordBase.category,
         qty: recordBase.qty || 1, location: recordBase.location, notes: recordBase.notes,
         acquired: recordBase.acquired, condition: recordBase.condition || "Good", color: recordBase.color,
@@ -906,13 +928,15 @@ function linkMounted(items, existing) {
 }
 
 export function countPlan(rows) {
-  const live = rows.filter(r => !r.skipped);
-  const skipped = rows.filter(r => r.skipped).length;
+  const live = (rows || []).filter(r => r && !r.skipped && r.target !== "needs");
+  const skipped = (rows || []).filter(r => r && r.skipped).length;
+  const needs = (rows || []).filter(r => r && !r.skipped && r.target === "needs").length;
   return {
     firearms: live.filter(r => r.target === "armory").length,
     gear: live.filter(r => r.target === "gear").length,
     ammo: live.filter(r => r.target === "ammo").length,
     skipped,
+    needs,
     total: live.length,
   };
 }
@@ -927,28 +951,47 @@ export function summaryLine(counts) {
   return line;
 }
 
-export function undoImportState(items, ammo, importId, nowIso) {
-  const touch = rows => (rows || []).map(row => {
-    if (!row || row.importId !== importId || row.deleted) return row;
-    if (row.importUndo && typeof row.importUndo === "object") {
-      const next = { ...row, updatedAt: nowIso };
-      for (const [k, prev] of Object.entries(row.importUndo)) {
-        if (k === "importUndo") continue;
-        if (prev === "" || prev == null) delete next[k];
-        else next[k] = prev;
-      }
-      delete next.importUndo;
-      if (next.importId === importId) delete next.importId;
-      if (!row.importUndo.importedAt) delete next.importedAt;
-      return next;
-    }
+function applyUndo(row, undo, nowIso) {
+  const next = { ...row, updatedAt: nowIso };
+  for (const [k, prev] of Object.entries(undo || {})) {
+    if (k === "importUndo") continue;
+    if (prev === "" || prev == null) delete next[k];
+    else next[k] = prev;
+  }
+  delete next.importUndo;
+  return next;
+}
+
+function undoOne(row, importId, nowIso) {
+  if (!row || row.deleted) return row;
+  const by = row.importUndoBy && typeof row.importUndoBy === "object" ? row.importUndoBy : null;
+  if (by && Object.prototype.hasOwnProperty.call(by, importId)) return applyUndo(row, by[importId], nowIso);
+  const ids = Array.isArray(row.importIds) ? row.importIds : [];
+  const createdBy = ids.length ? ids[0] : "";
+  if (by && createdBy === importId) return { id: row.id, deleted: true, updatedAt: nowIso };
+  if (row.importUndo && typeof row.importUndo === "object" && (row.importId === importId || ids[ids.length - 1] === importId)) {
+    return applyUndo(row, row.importUndo, nowIso);
+  }
+  if (createdBy === importId || (row.importId === importId && !row.importUndo)) {
     return { id: row.id, deleted: true, updatedAt: nowIso };
-  });
+  }
+  return row;
+}
+
+export function undoImportState(items, ammo, importId, nowIso) {
+  const touch = rows => (rows || []).map(row => undoOne(row, importId, nowIso));
   return { items: touch(items), ammo: touch(ammo) };
 }
 
 export function changedAfterImport(rows, importId) {
-  return (rows || []).filter(r => r && !r.deleted && r.importId === importId && r.updatedAt && r.importedAt && r.updatedAt !== r.importedAt);
+  return (rows || []).filter(r => {
+    if (!r || r.deleted) return false;
+    const ids = Array.isArray(r.importIds) ? r.importIds : [];
+    if (r.importId !== importId && !ids.includes(importId)) return false;
+    if (r.importEdited) return true;
+    if (r.importBookkeeping && r.updatedAt === r.importBookkeeping) return false;
+    return !!(r.updatedAt && r.importedAt && r.updatedAt !== r.importedAt);
+  });
 }
 
 export function loadHistory(storage) {
@@ -966,6 +1009,7 @@ export function saveHistory(storage, entry) {
     counts: entry.counts || {},
     status: entry.status || "saved",
     undone: !!entry.undone,
+    progress: entry.progress || null,
   });
   storage.setItem(HIST_KEY, JSON.stringify(list.slice(0, 20)));
 }
@@ -993,7 +1037,20 @@ export function rememberMap(storage, keys, fields) {
 }
 
 function fail(code, extra) {
-  return { ok: false, code, ...(extra || {}) };
+  const more = extra || {};
+  let message = more.message || "";
+  if (!message) {
+    if (code === "binary") message = "This doesn't look like a spreadsheet.";
+    else if (code === "not-workbook") message = "This isn't a spreadsheet workbook.";
+    else if (code === "partial") message = more.partial ? `Couldn't read from row ${more.partial}. A quote was left open.` : "A quote was left open.";
+    else if (code === "empty") message = "That file has no rows to import.";
+    else if (code === "encrypted-backup") message = "This backup is encrypted. Export a CSV and try that file.";
+    else if (code === "encrypted-workbook") message = "This workbook is password-protected. Save it as CSV or xlsx without a password, then try again.";
+    else if (code === "encoding") message = "Couldn't read the text in this file.";
+    else if (code === "too-big") message = "This file is too big.";
+    else message = "War Box can't read this file. Save it as CSV or xlsx and try again.";
+  }
+  return { ok: false, code, ...more, message };
 }
 
 function extOf(name) {
@@ -1154,16 +1211,20 @@ export function readCsvText(text, opts = {}) {
   }
   const parsed = parseDelimited(body, sniffed.sep, opts);
   if (parsed.tooBig) return fail("too-big", { limit: "rows" });
+  const quoteMessage = parsed.partial ? `Couldn't read from row ${parsed.partial}. A quote was left open.` : "";
   const built = tableFromMatrix(parsed.rows, {
     ...opts,
     encoding: opts.encoding || "utf-8",
     separator: sniffed.sep,
     partial: parsed.partial,
-    warnings: parsed.partial ? [`Couldn't read from row ${parsed.partial}`] : [],
+    warnings: quoteMessage ? [quoteMessage] : [],
   });
-  if (!built.ok) return built;
+  if (!built.ok) {
+    if (parsed.partial) return fail("partial", { message: quoteMessage, partial: parsed.partial });
+    return built;
+  }
   if (parsed.partial) built.partial = parsed.partial;
-  return { ok: true, tables: [built] };
+  return { ok: true, tables: [built], message: quoteMessage };
 }
 
 function asObjects(value, parentSerial) {
@@ -1380,13 +1441,37 @@ function parseSheet(xml, strings, dateStyles, date1904) {
   return { rows: rows.map(r => r || []), formulaNoValue, merges, tooBig: false, cached };
 }
 
+function relPairs(xml) {
+  const map = {};
+  for (const tag of String(xml || "").matchAll(/<[^>]*\bRelationship\b[^>]*>/g)) {
+    const id = /(?:^|\s)Id="([^"]+)"/.exec(tag[0]);
+    const target = /(?:^|\s)Target="([^"]+)"/.exec(tag[0]);
+    if (id && target) map[id[1]] = decodeXml(target[1]);
+  }
+  return map;
+}
+
+function sheetPath(names, target) {
+  if (!target) return "";
+  let t = String(target).replace(/\\/g, "/");
+  if (t.startsWith("/")) t = t.slice(1);
+  else if (!/^xl\//i.test(t)) t = "xl/" + t.replace(/^\.\//, "");
+  const parts = [];
+  for (const part of t.split("/")) {
+    if (part === "..") parts.pop();
+    else if (part && part !== ".") parts.push(part);
+  }
+  const norm = parts.join("/");
+  return (names || []).find(name => String(name).replace(/\\/g, "/") === norm) || "";
+}
+
 export async function readXlsx(bytes, opts = {}) {
   const zip = await readZip(bytes);
   if (!zip.ok) return zip;
   const names = Object.keys(zip.files);
   if (names.some(n => /mimetype$/i.test(n) && /opendocument|apple.numbers|iwork/i.test(xmlText(zip.files[n])))) return fail("unsupported");
   const wb = names.find(n => /xl\/workbook\.xml$/i.test(n));
-  if (!wb) return fail("unsupported");
+  if (!wb) return fail("not-workbook");
   const wbText = xmlText(zip.files[wb]);
   if (/<encryption/i.test(wbText)) return fail("encrypted-workbook");
   const date1904 = /date1904="1"|date1904="true"/i.test(wbText);
@@ -1398,8 +1483,7 @@ export async function readXlsx(bytes, opts = {}) {
   });
   const relsName = names.find(n => /xl\/_rels\/workbook\.xml\.rels$/i.test(n));
   const rels = relsName ? xmlText(zip.files[relsName]) : "";
-  const relMap = {};
-  for (const m of rels.matchAll(/Id="([^"]+)"[^>]*Target="([^"]+)"/g)) relMap[m[1]] = m[2];
+  const relMap = relPairs(rels);
   const ssName = names.find(n => /xl\/sharedStrings\.xml$/i.test(n));
   const strings = ssName ? sharedStrings(zip.files[ssName]) : [];
   const styleName = names.find(n => /xl\/styles\.xml$/i.test(n));
@@ -1407,8 +1491,7 @@ export async function readXlsx(bytes, opts = {}) {
   const tables = [];
   const skipped = [];
   for (const sheet of sheets) {
-    const target = (relMap[sheet.id] || "").replace(/^\//, "");
-    const path = names.find(n => n.endsWith(target.replace(/^.*\//, "")) && /worksheets\/sheet/i.test(n)) || names.find(n => target && n.endsWith(target));
+    const path = sheetPath(names, relMap[sheet.id] || "");
     if (!path) { skipped.push(sheet.name); continue; }
     const parsed = parseSheet(zip.files[path], strings, dateStyles, date1904);
     if (parsed.tooBig) return fail("too-big", { limit: "rows" });
@@ -1458,7 +1541,7 @@ export async function readImportFile(bytes, opts = {}) {
 
 const GearImport = {
   LIMITS, UNDO_MS, WRITE_BATCH, HIST_KEY, MAP_KEY, DEFAULT_CATEGORIES, FIELD_LABELS,
-  nrm, maskSerial, chunk, newUlid, normalizeHeader, priceKind, confidenceOf, confidenceLabel,
+  nrm, maskSerial, serialAriaLabel, chunk, newUlid, normalizeHeader, priceKind, confidenceOf, confidenceLabel,
   findHeaderRow, detectSource, mapColumns, headerHash, parsePaid, excelSerialToIso, parseDate,
   columnDateOrder, normalizeCaliber, buildTable, planImport, countPlan, summaryLine,
   undoImportState, changedAfterImport, loadHistory, saveHistory, undoOpen, loadMaps, rememberMap,

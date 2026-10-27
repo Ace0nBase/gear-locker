@@ -48,7 +48,7 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device and the service worker is version 46", () => {
+test("sign-out clears this device, the app is version 41, and the service worker cache is version 46", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
