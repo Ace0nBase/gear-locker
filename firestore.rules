@@ -120,22 +120,23 @@ service cloud.firestore {
       allow read: if signedIn()
         && request.auth.uid == uid
         && col in ['items','ammo','sessions','dope','maint','wish','loans','freqs','pace','meta'];
-      allow write: if signedIn()
+      allow create, update: if signedIn()
         && request.auth.uid == uid
         && !tombstoned()
+        && col in ['items','ammo','sessions','dope','maint','wish','loans','freqs','pace','meta'];
+      allow delete: if signedIn()
+        && request.auth.uid == uid
         && col in ['items','ammo','sessions','dope','maint','wish','loans','freqs','pace','meta'];
     }
 
     match /{path=**}/loans/{loanId} {
       allow read: if emailOk() && resource.data.friendEmail == request.auth.token.email;
       allow read: if emailOk() && resource.data.friendEmail == request.auth.token.email.lower();
-      allow update: if !tombstoned()
-        && emailOk()
+      allow update: if emailOk()
         && resource.data.friendEmail == request.auth.token.email
         && request.resource.data.friendEmail == ""
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['friendEmail','updatedAt','serverUpdatedAt']);
-      allow update: if !tombstoned()
-        && emailOk()
+      allow update: if emailOk()
         && resource.data.friendEmail == request.auth.token.email.lower()
         && request.resource.data.friendEmail == ""
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['friendEmail','updatedAt','serverUpdatedAt']);
@@ -143,7 +144,7 @@ service cloud.firestore {
 
     match /shares/{sid} {
       allow get: if true;
-      allow list: if signedIn() && !tombstoned() && resource.data.owner == request.auth.uid;
+      allow list: if signedIn() && resource.data.owner == request.auth.uid;
       allow create: if signedIn()
         && !tombstoned()
         && request.resource.data.owner == request.auth.uid
@@ -153,7 +154,7 @@ service cloud.firestore {
         && resource.data.owner == request.auth.uid
         && request.resource.data.owner == resource.data.owner
         && shareShape(request.resource.data);
-      allow delete: if signedIn() && !tombstoned() && resource.data.owner == request.auth.uid;
+      allow delete: if signedIn() && resource.data.owner == request.auth.uid;
     }
 
     match /lends/{id} {
@@ -173,21 +174,19 @@ service cloud.firestore {
           && request.resource.data.lender == resource.data.lender)
         || (borrowerMatch()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['borrowerReturned','updatedAt','serverUpdatedAt'])));
-      allow update: if !tombstoned()
-        && emailOk()
+      allow update: if emailOk()
         && resource.data.borrowerEmail == request.auth.token.email
         && request.resource.data.borrowerEmail == ""
         && request.resource.data.borrowerEmailLower == ""
         && request.resource.data.lender == resource.data.lender
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['borrowerEmail','borrowerEmailLower','updatedAt','serverUpdatedAt']);
-      allow update: if !tombstoned()
-        && emailOk()
+      allow update: if emailOk()
         && resource.data.borrowerEmailLower == request.auth.token.email.lower()
         && request.resource.data.borrowerEmail == ""
         && request.resource.data.borrowerEmailLower == ""
         && request.resource.data.lender == resource.data.lender
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['borrowerEmail','borrowerEmailLower','updatedAt','serverUpdatedAt']);
-      allow delete: if isLender() && !tombstoned();
+      allow delete: if isLender();
     }
 
     match /deletedUsers/{uid} {

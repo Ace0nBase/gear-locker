@@ -9,11 +9,19 @@
 // ALLOWED_EMAILS (used only when BETA_ONLY=true), BETA_ONLY, REVIEW_EMAILS, REVIEW_DAILY_LIMIT,
 // DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS, FREE_SPEND_CAP_USD,
 // PLAN_LIMIT_FREE, PLAN_LIMIT_PRO, PLAN_LIMIT_ARMORY, SPEND_INPUT_PER_MILLION, SPEND_OUTPUT_PER_MILLION, SPEND_SEARCH_EACH,
-// SPEND_RESERVE_USD (optional hold before a free lookup; unset uses a built-in estimate)
+// SPEND_RESERVE_USD (optional floor under the worst-case lookup hold; it cannot lower that hold)
+// Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, usageDecision, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, reserveFits, lookupReserveMicro, reconcileSpendMicro } from "../js/logic.js";
+import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, worstCaseSpendMicro } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
+import { deleteUserFirestore } from "./account-delete.js";
+
+export { UsageLedger } from "./usage-ledger.js";
+
+function claudeBody(model, fields) {
+  return JSON.stringify({ model, ...fields, max_tokens: clampMaxTokens(fields.max_tokens) });
+}
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 let jwksCache = null, jwksAt = 0;
@@ -143,7 +151,7 @@ async function callClaude(env, model, it) {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model, max_tokens: 4000, tools, messages }),
+      body: claudeBody(model, { max_tokens: MODEL_CALLS.lookup.maxTokens, tools, messages }),
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.status = r.status; e.usage = usageFromResponse(data); throw e; }
@@ -199,7 +207,7 @@ Reply with ONLY this JSON object:
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 600, messages: [{ role: "user", content: [
+    body: claudeBody(env.MODEL || "claude-haiku-5-5", { max_tokens: MODEL_CALLS.identify.maxTokens, messages: [{ role: "user", content: [
       { type: "image", source: { type: "base64", media_type: "image/jpeg", data: img } },
       { type: "text", text: ask } ] }] }),
   });
@@ -243,7 +251,7 @@ async function dealCheck(env, w) {
   for (let i = 0; i < 3; i++) {
     const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
       headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 3000, tools, messages }) });
+      body: claudeBody(env.MODEL || "claude-haiku-5-5", { max_tokens: MODEL_CALLS.deal.maxTokens, tools, messages }) });
     data = await r.json().catch(() => ({}));
     usage = addUsage(usage, usageFromResponse(data));
     if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
@@ -256,75 +264,71 @@ async function dealCheck(env, w) {
   return { ...settled, date: localDay(new Date()), hit: settled.price != null && settled.price <= +w.target, usage };
 }
 const WKEY = uid => "w:" + uid;
-async function readCount(env, key) { return +(await env.WATCH.get(key)) || 0; }
 const SPEND_KEY = "spend:free";
-async function chargeAi(env, user, add) {
-  if (!env.WATCH) return { ok: false, status: 503, error: "Lookups are paused until price-alert storage is connected." };
-  const uid = user && user.sub;
+function usageStub(env) {
+  const ns = env && env.USAGE;
+  if (!ns) return null;
+  if (typeof ns.getByName === "function") return ns.getByName("global");
+  if (typeof ns.idFromName === "function" && typeof ns.get === "function") return ns.get(ns.idFromName("global"));
+  return null;
+}
+async function spendSeed(env) {
+  if (!env.WATCH) return 0;
+  try { return +(await env.WATCH.get(SPEND_KEY)) || 0; }
+  catch { return null; }
+}
+async function reserveCall(env, user, op, count, extra) {
+  extra = extra || {};
+  const stub = usageStub(env);
+  if (!stub) return { ok: false, status: 503, error: "Lookups are paused until usage storage is connected.", reserved: 0 };
+  const n = Math.max(1, +count || 1);
   const email = String((user && user.email) || "");
   const review = isReviewEmail(email, env);
   const plan = lookupPlan(user, env);
+  const skipSpend = review || plan !== "free";
   const day = new Date();
-  const dailyLimit = review ? reviewDailyLimit(env) : +(env.DAILY_AI_LIMIT || 40);
-  const monthLimit = planMonthlyLimit(plan, env);
-  const qk = quotaKey(uid, day);
-  const mk = monthQuotaKey(uid, day);
-  const dailyUsed = await readCount(env, qk);
-  const monthUsed = review ? 0 : await readCount(env, mk);
-  const spent = review || plan !== "free" ? 0 : (+(await env.WATCH.get(SPEND_KEY)) || 0);
-  const d = usageDecision({
-    plan, review, dailyUsed, dailyAdd: add, dailyLimit, monthUsed, monthAdd: add, monthLimit,
-    spentMicro: spent, capMicro: spendCapMicro(env),
-  });
-  if (!d.ok) return d;
-  await env.WATCH.put(qk, String(d.daily.next), { expirationTtl: 48 * 3600 });
-  if (d.month) await env.WATCH.put(mk, String(d.month.next), { expirationTtl: 40 * 24 * 3600 });
-  return d;
-}
-function freeSpendSkipped(env, user) {
-  const email = String((user && user.email) || "");
-  return isReviewEmail(email, env) || lookupPlan(user, env) !== "free";
-}
-async function reserveBlocked(env, user, count) {
-  if (!env.WATCH || freeSpendSkipped(env, user)) return false;
+  const uid = user && (user.sub || user.uid);
   try {
-    const n = Math.max(1, +count || 1);
-    const cur = +(await env.WATCH.get(SPEND_KEY)) || 0;
-    return !reserveFits(cur, lookupReserveMicro(env) * n, spendCapMicro(env));
-  } catch { return true; }
+    return await stub.reserve({
+      id: crypto.randomUUID(),
+      reserve: skipSpend ? 0 : worstCaseSpendMicro(env, op) * n,
+      cap: spendCapMicro(env),
+      skipSpend,
+      skipMonth: review,
+      dailyAdd: n,
+      dailyLimit: review ? reviewDailyLimit(env) : +(env.DAILY_AI_LIMIT || 40),
+      monthAdd: n,
+      monthLimit: planMonthlyLimit(plan, env),
+      alertAdd: extra.alertAdd || 0,
+      alertLimit: +(env.ALERT_DAILY_CAP || 6),
+      dailyKey: quotaKey(uid, day),
+      monthKey: monthQuotaKey(uid, day),
+      alertKey: alertQuotaKey(uid, day),
+      seedSpend: await spendSeed(env),
+    });
+  } catch {
+    return { ok: false, status: 503, error: LOOKUPS_PAUSED, reserved: 0 };
+  }
 }
-async function holdFreeSpend(env, user, count) {
-  const n = Math.max(1, +count || 1);
-  if (freeSpendSkipped(env, user)) return { blocked: false, reserved: 0 };
-  if (!env.WATCH) return { blocked: true, reserved: 0, error: LOOKUPS_PAUSED };
+async function finishCall(env, id, reserved, usage) {
   try {
-    const reserve = lookupReserveMicro(env) * n;
-    const cap = spendCapMicro(env);
-    const cur = +(await env.WATCH.get(SPEND_KEY)) || 0;
-    if (!reserveFits(cur, reserve, cap)) return { blocked: true, reserved: 0, error: LOOKUPS_PAUSED };
-    await env.WATCH.put(SPEND_KEY, String(cur + reserve));
-    return { blocked: false, reserved: reserve };
-  } catch { return { blocked: true, reserved: 0, error: LOOKUPS_PAUSED }; }
-}
-async function finishFreeSpend(env, user, reserved, usage) {
-  try {
-    if (!env.WATCH || !reserved || freeSpendSkipped(env, user)) return;
-    const actual = estimateSpendMicro(usage, spendRates(env));
-    const current = +(await env.WATCH.get(SPEND_KEY)) || 0;
-    await env.WATCH.put(SPEND_KEY, String(reconcileSpendMicro(current, reserved, actual)));
+    const stub = usageStub(env);
+    if (!stub || !id || !reserved) return;
+    await stub.reconcile({ id, actual: estimateSpendMicro(usage, spendRates(env)) });
   } catch { /* the answer is already in hand */ }
 }
-async function chargeScheduledAlert(env, user) {
-  if (!env.WATCH) return { ok: false, status: 503, error: "Price alerts aren't switched on yet" };
-  const uid = user && (user.sub || user.uid);
-  const alertLimit = +(env.ALERT_DAILY_CAP || 6);
-  const ak = alertQuotaKey(uid, new Date());
-  const al = chargeDecision(await readCount(env, ak), 1, alertLimit);
-  if (!al.ok) return { ok: false, status: 429, error: "You've used today's price alerts. Try again tomorrow." };
-  const bill = await chargeAi(env, { sub: uid, email: user && user.email }, 1);
-  if (!bill.ok) return bill;
-  await env.WATCH.put(ak, String(al.next), { expirationTtl: 48 * 3600 });
-  return { ok: true };
+async function clearUsageForUser(env, uid) {
+  const stub = usageStub(env);
+  if (!stub || !uid) return;
+  await stub.clearUser({ uid });
+}
+async function usageSnapshot(env, uid, now) {
+  const stub = usageStub(env);
+  if (!stub) return null;
+  try {
+    const read = await stub.read({ keys: [quotaKey(uid, now), monthQuotaKey(uid, now), alertQuotaKey(uid, now), SPEND_KEY] });
+    return (read && read.values) || {};
+  } catch { return null; }
 }
 async function deleteUserKv(env, uid) {
   if (!env.WATCH || !uid) return;
@@ -374,11 +378,10 @@ async function listWatchUsers(env) {
   return users;
 }
 async function runDueWatches(env, budget) {
-  if (!env.WATCH) return 0;
+  if (!env.WATCH || !usageStub(env)) return 0;
   const gapMs = Math.max(1, +(env.MIN_ALERT_GAP_HOURS || 20)) * 3600e3;
   const alertLimit = +(env.ALERT_DAILY_CAP || 6);
   const now = new Date();
-  const spent = +(await env.WATCH.get(SPEND_KEY)) || 0;
   const eligible = [];
   for (const u of await listWatchUsers(env)) {
     const email = String(u.rec.email || "").toLowerCase();
@@ -388,11 +391,13 @@ async function runDueWatches(env, budget) {
     const who = { sub: u.uid, email };
     const review = isReviewEmail(email, env);
     const plan = lookupPlan(who, env);
+    const counts = await usageSnapshot(env, u.uid, now);
+    if (!counts) continue;
     const dailyLimit = review ? reviewDailyLimit(env) : +(env.DAILY_AI_LIMIT || 40);
-    if (await readCount(env, quotaKey(u.uid, now)) >= dailyLimit) continue;
-    if (!review && await readCount(env, monthQuotaKey(u.uid, now)) >= planMonthlyLimit(plan, env)) continue;
-    if (!review && plan === "free" && spent >= spendCapMicro(env)) continue;
-    if (await readCount(env, alertQuotaKey(u.uid, now)) >= alertLimit) continue;
+    if ((counts[quotaKey(u.uid, now)] || 0) >= dailyLimit) continue;
+    if (!review && (counts[monthQuotaKey(u.uid, now)] || 0) >= planMonthlyLimit(plan, env)) continue;
+    if (!review && plan === "free" && (counts[SPEND_KEY] || 0) >= spendCapMicro(env)) continue;
+    if ((counts[alertQuotaKey(u.uid, now)] || 0) >= alertLimit) continue;
     eligible.push(u);
   }
   eligible.forEach(u => { u.list = (u.list || []).filter(w => w && !priceRouteBlocked(w)); });
@@ -404,23 +409,20 @@ async function runDueWatches(env, budget) {
     const w = u && u.rec.list.find(x => x.id === p.watch.id);
     if (!w || saleRestricted(w)) continue;
     const who = { sub: u.uid, email: u.rec.email };
-    if (await reserveBlocked(env, who, 1)) continue;
-    const billed = await chargeScheduledAlert(env, who);
-    if (!billed.ok) continue;
-    const hold = await holdFreeSpend(env, who, 1);
-    if (hold.blocked) continue;
+    const hold = await reserveCall(env, who, "deal", 1, { alertAdd: 1 });
+    if (!hold.ok) continue;
     const wasHit = !!(w.best && w.best.hit);
     try {
       const b = await dealCheck(env, w);
       const spentUsage = b.usage;
       delete b.usage;
       w.best = b; w.lastErr = "";
-      await finishFreeSpend(env, who, hold.reserved, spentUsage);
+      await finishCall(env, hold.id, hold.reserved, spentUsage);
       if (!wasHit && b.hit && u.rec.push) {
         const sent = await sendWebPush(u.rec.push, JSON.stringify({ title: "Price alert", body: `${w.name} is at or under your target`, url: "./?tab=wish" }), env);
         if (sent && sent.gone) delete u.rec.push;
       }
-    } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await finishFreeSpend(env, who, hold.reserved, e.usage); }
+    } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await finishCall(env, hold.id, hold.reserved, e.usage); }
     w.lastCheck = new Date().toISOString();
     dirty.set(u.key, u.rec);
     done++;
@@ -441,7 +443,7 @@ Reply with ONLY this JSON:
   const messages = [{ role: "user", content: ask }];
   let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
   for (let i = 0; i < 3; i++) {
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 2000, tools, messages }) });
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(env.MODEL || "claude-haiku-5-5", { max_tokens: MODEL_CALLS.battery.maxTokens, tools, messages }) });
     data = await r.json().catch(() => ({}));
     usage = addUsage(usage, usageFromResponse(data));
     if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
@@ -492,7 +494,7 @@ Reply with ONLY this JSON:
   const messages = [{ role: "user", content: ask }];
   let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
   for (let i = 0; i < 4; i++) {
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 4000, ...(b.location ? { tools } : {}), messages }) });
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(env.MODEL || "claude-haiku-5-5", { max_tokens: MODEL_CALLS.pace.maxTokens, ...(b.location ? { tools } : {}), messages }) });
     data = await r.json().catch(() => ({}));
     usage = addUsage(usage, usageFromResponse(data));
     if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
@@ -503,7 +505,7 @@ Reply with ONLY this JSON:
   if (!j) {
     messages.push({ role: "assistant", content: data.content.filter(x => x.type !== "text" || (x.text || "").trim()) });
     messages.push({ role: "user", content: "Now reply with ONLY the JSON object described above. No other text." });
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 3000, messages }) });
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(env.MODEL || "claude-haiku-5-5", { max_tokens: MODEL_CALLS.paceFollow.maxTokens, messages }) });
     data = await r.json().catch(() => ({}));
     usage = addUsage(usage, usageFromResponse(data));
     j = findJson(textOf(data.content || []), ["steps"]);
@@ -563,9 +565,12 @@ export default {
       catch { return json({ error: "Please sign in again." }, 401, h); }
       if (!signInIsRecent(accountUser.auth_time)) return json({ error: "Enter your password again, then delete the account." }, 401, h);
       try {
+        const cleaned = await deleteUserFirestore(env, idToken, accountUser);
+        if (!cleaned.ok) return json({ error: cleaned.error }, 502, h);
         const removed = await deleteAuthUser(env, idToken);
         if (!removed.ok) return json({ error: removed.error }, 502, h);
-        await deleteUserKv(env, accountUser.sub);
+        try { await deleteUserKv(env, accountUser.sub); } catch { /* auth is already gone; a retry clears the rest */ }
+        try { await clearUsageForUser(env, accountUser.sub); } catch { /* same retry */ }
         deleteRevenueCatCustomer(env, accountUser.sub);
         return json({ ok: true }, 200, h);
       } catch { return json({ error: "Couldn't finish deleting the account. Try again." }, 502, h); }
@@ -626,17 +631,14 @@ export default {
           return json(pub(), 200, h);
         }
         if (w.lastCheck && Date.now() - Date.parse(w.lastCheck) < 10 * 60e3) return json(pub(), 200, h);
-        if (await reserveBlocked(env, user, 1)) return json({ error: LOOKUPS_PAUSED }, 403, h);
-        const bill = await chargeScheduledAlert(env, user);
-        if (!bill.ok) return json({ error: bill.error || "Try again tomorrow." }, bill.status || 429, h);
-        const watchHold = await holdFreeSpend(env, user, 1);
-        if (watchHold.blocked) return json({ error: watchHold.error }, 403, h);
+        const watchHold = await reserveCall(env, user, "deal", 1, { alertAdd: 1 });
+        if (!watchHold.ok) return json({ error: watchHold.error || "Try again tomorrow." }, watchHold.status || 429, h);
         try {
           const b = await dealCheck(env, w);
-          await finishFreeSpend(env, user, watchHold.reserved, b.usage);
+          await finishCall(env, watchHold.id, watchHold.reserved, b.usage);
           delete b.usage;
           w.best = b; w.lastErr = "";
-        } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await finishFreeSpend(env, user, watchHold.reserved, e.usage); }
+        } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await finishCall(env, watchHold.id, watchHold.reserved, e.usage); }
         w.lastCheck = new Date().toISOString();
         await saveRec();
         return json(pub(), 200, h);
@@ -648,31 +650,25 @@ export default {
       const b = { location: S(body.location, 80), scenario: S(body.scenario, 60), distance: S(body.distance, 60), terrain: S(body.terrain, 60), cell: S(body.cell, 40), grid: S(body.grid, 40), people: S(body.people, 80), licensed: S(body.licensed, 80), duration: S(body.duration, 40), notes: S(body.notes, 300),
         devices: (Array.isArray(body.devices) ? body.devices : []).slice(0, 12).map(d => S(d, 40)),
         freqs: (Array.isArray(body.freqs) ? body.freqs : []).slice(0, 150).map((f, i) => ({ i, name: S(f.name, 30), rx: S(f.rx, 12), duplex: S(f.duplex, 6), offset: S(f.offset, 8), tx: S(f.tx, 12), tone: S(f.tone, 16), mode: S(f.mode, 4), service: S(f.service, 24), group: S(f.group, 30), notes: S(f.notes, 80), onRadio: !!f.onRadio })) };
-      if (await reserveBlocked(env, user, 1)) return json({ error: LOOKUPS_PAUSED }, 403, h);
-      const paceBill = await chargeAi(env, user, 1);
-      if (!paceBill.ok) return json({ error: paceBill.error }, paceBill.status, h);
-      const paceHold = await holdFreeSpend(env, user, 1);
-      if (paceHold.blocked) return json({ error: paceHold.error }, 403, h);
+      const paceHold = await reserveCall(env, user, "pace", 1);
+      if (!paceHold.ok) return json({ error: paceHold.error }, paceHold.status, h);
       try {
         const built = await paceBuild(env, b);
-        await finishFreeSpend(env, user, paceHold.reserved, built.usage);
+        await finishCall(env, paceHold.id, paceHold.reserved, built.usage);
         return json({ result: built.result }, 200, h);
       }
-      catch (e) { await finishFreeSpend(env, user, paceHold.reserved, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await finishCall(env, paceHold.id, paceHold.reserved, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/ammo") return json({ error: "Ammo price search is turned off." }, 410, h);
     if (url.pathname === "/battery") {
-      if (await reserveBlocked(env, user, 1)) return json({ error: LOOKUPS_PAUSED }, 403, h);
-      const battBill = await chargeAi(env, user, 1);
-      if (!battBill.ok) return json({ error: battBill.error }, battBill.status, h);
-      const battHold = await holdFreeSpend(env, user, 1);
-      if (battHold.blocked) return json({ error: battHold.error }, 403, h);
+      const battHold = await reserveCall(env, user, "battery", 1);
+      if (!battHold.ok) return json({ error: battHold.error }, battHold.status, h);
       try {
         const found = await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) });
-        await finishFreeSpend(env, user, battHold.reserved, found.usage);
+        await finishCall(env, battHold.id, battHold.reserved, found.usage);
         return json({ result: found.result }, 200, h);
       }
-      catch (e) { await finishFreeSpend(env, user, battHold.reserved, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await finishCall(env, battHold.id, battHold.reserved, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/identify") {
       const subject = {
@@ -682,31 +678,25 @@ export default {
       if (photoIdHardBlocked(subject)) return json({ error: "Photo ID isn't available for this record." }, 403, h);
       const img = String(body.image || "");
       if (!img || img.length > 2_800_000 || !/^[A-Za-z0-9+/=]+$/.test(img.slice(0, 200))) return json({ error: "Send a photo (JPEG, under 2 MB)" }, 400, h);
-      if (await reserveBlocked(env, user, 1)) return json({ error: LOOKUPS_PAUSED }, 403, h);
-      const idBill = await chargeAi(env, user, 1);
-      if (!idBill.ok) return json({ error: idBill.error }, idBill.status, h);
-      const idHold = await holdFreeSpend(env, user, 1);
-      if (idHold.blocked) return json({ error: idHold.error }, 403, h);
+      const idHold = await reserveCall(env, user, "identify", 1);
+      if (!idHold.ok) return json({ error: idHold.error }, idHold.status, h);
       try {
         const found = await identify(env, img, String(body.hint || "").slice(0, 80));
-        await finishFreeSpend(env, user, idHold.reserved, found.usage);
+        await finishCall(env, idHold.id, idHold.reserved, found.usage);
         return json({ result: found.result }, 200, h);
       }
-      catch (e) { await finishFreeSpend(env, user, idHold.reserved, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await finishCall(env, idHold.id, idHold.reserved, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     const max = +(env.MAX_ITEMS || 4);
     const items = Array.isArray(body.items) ? body.items.slice(0, max) : [];
     if (!items.length) return json({ error: "No items" }, 400, h);
-    if (await reserveBlocked(env, user, items.length)) return json({ error: LOOKUPS_PAUSED }, 403, h);
-    const lookBill = await chargeAi(env, user, items.length);
+    const lookBill = await reserveCall(env, user, "lookup", items.length);
     if (!lookBill.ok) return json({ error: lookBill.error }, lookBill.status, h);
-    const lookHold = await holdFreeSpend(env, user, items.length);
-    if (lookHold.blocked) return json({ error: lookHold.error }, 403, h);
 
     const packed = await Promise.all(items.map(it => lookupOne(env, it).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160), usage: e.usage }))));
     let spentUsage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
     const results = packed.map(r => { spentUsage = addUsage(spentUsage, r.usage); const copy = { ...r }; delete copy.usage; return copy; });
-    await finishFreeSpend(env, user, lookHold.reserved, spentUsage);
+    await finishCall(env, lookBill.id, lookBill.reserved, spentUsage);
     const firstErr = results.find(r => !r.ok)?.error;
     if (results.every(r => !r.ok)) return json({ error: firstErr || "Lookup failed", results }, 502, h);
     return json({ results }, 200, h);

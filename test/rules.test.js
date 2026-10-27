@@ -119,6 +119,8 @@ test("a tombstone blocks later writes and the named person can clear their email
   }));
   await assertSucceeds(setDoc(doc(owner, "lends/loan1"), loan()));
   await assertSucceeds(setDoc(doc(owner, "users/owner/items/i1"), { name: "Pouch" }));
+  await assertSucceeds(setDoc(doc(owner, "shares/share1"), share("owner")));
+  await assertSucceeds(setDoc(doc(owner, "lends/loan2"), { ...loan(), borrowerEmail: "named@example.com", borrowerEmailLower: "named@example.com" }));
   const borrower = as("friend", "friend@example.com", true);
   await assertSucceeds(updateDoc(doc(borrower, "users/owner/loans/loan1"), {
     friendEmail: "", updatedAt: "2026-10-27T00:00:00.000Z",
@@ -129,8 +131,18 @@ test("a tombstone blocks later writes and the named person can clear their email
   }));
   await assertSucceeds(setDoc(doc(owner, "deletedUsers/owner"), { uid: "owner", at: "2026-10-27T00:00:00.000Z" }));
   await assertFails(setDoc(doc(owner, "users/owner/items/i2"), { name: "Belt" }));
-  await assertFails(deleteDoc(doc(owner, "lends/loan1")));
-  await assertSucceeds(getDoc(doc(owner, "users/owner/items/i1")));
+  await assertFails(setDoc(doc(owner, "shares/share2"), share("owner")));
+  await assertSucceeds(getDocs(query(collection(owner, "shares"), where("owner", "==", "owner"))));
+  await assertFails(getDocs(collection(owner, "shares")));
+  await assertSucceeds(deleteDoc(doc(owner, "shares/share1")));
+  await assertSucceeds(deleteDoc(doc(owner, "users/owner/items/i1")));
+  await assertSucceeds(deleteDoc(doc(owner, "lends/loan1")));
+  const named = as("named", "named@example.com", true);
+  await assertSucceeds(setDoc(doc(named, "deletedUsers/named"), { uid: "named", at: "2026-10-27T00:00:00.000Z" }));
+  await assertSucceeds(updateDoc(doc(named, "lends/loan2"), {
+    borrowerEmail: "", borrowerEmailLower: "", updatedAt: "2026-10-27T00:00:00.000Z",
+  }));
+  await assertSucceeds(getDoc(doc(owner, "users/owner/loans/loan1")));
   await assertSucceeds(getDoc(doc(owner, "deletedUsers/owner")));
   await assertFails(updateDoc(doc(owner, "deletedUsers/owner"), { at: "later" }));
   await assertFails(deleteDoc(doc(owner, "deletedUsers/owner")));

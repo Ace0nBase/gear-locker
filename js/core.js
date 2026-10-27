@@ -102,10 +102,10 @@ function showMagShelfPrompt(){
   const rows=magShelfRows();
   if(!rows.length){el.hidden=true;if(typeof showBeltRigPrompt==="function")showBeltRigPrompt();else if(typeof syncLock==="function")syncLock();return}
   el.querySelector(".panel").innerHTML=`<h2>These were on Mags &amp; Ammo Storage</h2>
-    <p class="hint">They are now under Ammo Storage &amp; Loaders. Prices and store links stay off until you answer. Move a magazine, such as a PMAG or a Glock mag, to Magazines if it belongs there. That shelf does not look up prices or stores. Nothing moves because of its name.</p>
-    <div class="links">${rows.map(r=>`<div class="pk"><span class="pkn"><b>${esc(r.name||"Untitled")}</b><small>${esc([r.brand,r.category].filter(Boolean).join(" · "))}</small></span><button class="btn ghost" type="button" data-mag="move" data-id="${esc(r.id)}">Move to Magazines</button></div>`).join("")}</div>
-    <div class="actions"><button class="btn ghost" type="button" data-mag="dismiss">Dismiss</button><button class="btn" type="button" data-mag="move-all">Move all to Magazines</button></div>`;
-  el.hidden=false;if(typeof showBeltRigPrompt==="function")showBeltRigPrompt();else if(typeof syncLock==="function")syncLock();
+    <p class="hint">They are now under Ammo Storage &amp; Loaders. Prices and store links stay off until you answer. Move a magazine or a belt to Magazines &amp; Belts if it belongs there. That shelf does not look up prices or stores. Nothing moves because of its name. Dismiss keeps them on Ammo Storage &amp; Loaders, with prices and store links on.</p>
+    <div class="links">${rows.map(r=>`<div class="pk"><span class="pkn"><b>${esc(r.name||"Untitled")}</b><small>${esc([r.brand,r.category].filter(Boolean).join(" · "))}</small></span><button class="btn ghost" type="button" data-mag="move" data-id="${esc(r.id)}">Move to Magazines &amp; Belts</button></div>`).join("")}</div>
+    <div class="actions"><button class="btn ghost" type="button" data-mag="dismiss">Dismiss</button><button class="btn" type="button" data-mag="move-all">Move all to Magazines &amp; Belts</button></div>`;
+  el.hidden=false;if(typeof syncLock==="function")syncLock();
 }
 async function applyMagShelfAnswer(action,id){
   const stamp=now();

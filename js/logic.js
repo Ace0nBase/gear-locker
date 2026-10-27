@@ -329,19 +329,167 @@ export function reserveFits(spent, reserve, cap) {
   return Math.max(0, +spent || 0) + Math.max(0, +reserve || 0) <= Math.max(0, +cap || 0);
 }
 
-// One lookup can pull a large web-search prompt. Hold that much before the call.
-export function lookupReserveMicro(env) {
-  if (env && env.SPEND_RESERVE_USD != null && String(env.SPEND_RESERVE_USD).trim() !== "") {
-    return Math.round(configuredNumber(env.SPEND_RESERVE_USD, 0) * 1e6);
+export const MAX_OUTPUT_TOKENS = 4000;
+
+export function clampMaxTokens(n) {
+  const v = Math.floor(+n);
+  if (!isFinite(v) || v < 1) return 1;
+  return Math.min(MAX_OUTPUT_TOKENS, v);
+}
+
+// rounds counts every continuation, including the last JSON turn.
+// calls counts a fallback model. searches is the per-round web_search max_uses.
+export const MODEL_CALLS = {
+  lookup: { maxTokens: 4000, searches: 3, rounds: 5, calls: 2, promptTokens: 8000 },
+  identify: { maxTokens: 600, searches: 0, rounds: 1, calls: 1, promptTokens: 20000 },
+  deal: { maxTokens: 3000, searches: 2, rounds: 3, calls: 1, promptTokens: 6000 },
+  battery: { maxTokens: 2000, searches: 2, rounds: 3, calls: 1, promptTokens: 4000 },
+  pace: { maxTokens: 4000, searches: 2, rounds: 4, calls: 1, promptTokens: 8000 },
+  paceFollow: { maxTokens: 3000, searches: 0, rounds: 1, calls: 1, promptTokens: 8000 },
+};
+
+export function worstCaseUsage(spec) {
+  spec = spec || {};
+  const maxTokens = clampMaxTokens(spec.maxTokens);
+  const rounds = Math.max(1, Math.floor(+spec.rounds || 1));
+  const searches = Math.max(0, Math.floor(+spec.searches || 0));
+  const promptTokens = Math.max(0, Math.floor(spec.promptTokens == null ? 8000 : +spec.promptTokens));
+  const output_tokens = maxTokens * rounds;
+  const web_search_requests = searches * rounds;
+  const echoed = (maxTokens * rounds * (rounds - 1)) / 2;
+  return {
+    input_tokens: Math.round(promptTokens * rounds + echoed),
+    output_tokens,
+    web_search_requests,
+  };
+}
+
+export function operationWorstUsage(name) {
+  if (name === "pace") return addUsage(worstCaseUsage(MODEL_CALLS.pace), worstCaseUsage(MODEL_CALLS.paceFollow));
+  const spec = MODEL_CALLS[name] || MODEL_CALLS.lookup;
+  const once = worstCaseUsage(spec);
+  const calls = Math.max(1, Math.floor(+spec.calls || 1));
+  let total = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
+  for (let i = 0; i < calls; i++) total = addUsage(total, once);
+  return total;
+}
+
+// Hold the worst case from the clamped output cap and the search count.
+// SPEND_RESERVE_USD can only raise a lookup hold, never lower it under that worst case.
+export function worstCaseSpendMicro(env, nameOrSpec) {
+  const usage = nameOrSpec && typeof nameOrSpec === "object"
+    ? worstCaseUsage(nameOrSpec)
+    : operationWorstUsage(nameOrSpec || "lookup");
+  let worst = estimateSpendMicro(usage, spendRates(env));
+  const lookup = nameOrSpec == null || nameOrSpec === "lookup";
+  if (lookup && env && env.SPEND_RESERVE_USD != null && String(env.SPEND_RESERVE_USD).trim() !== "") {
+    worst = Math.max(worst, Math.round(configuredNumber(env.SPEND_RESERVE_USD, 0) * 1e6));
   }
-  return estimateSpendMicro(
-    { input_tokens: 1500000, output_tokens: 16000, web_search_requests: 12 },
-    spendRates(env),
-  );
+  return worst;
+}
+
+export function lookupReserveMicro(env) {
+  return worstCaseSpendMicro(env, "lookup");
 }
 
 export function reconcileSpendMicro(current, reserved, actual) {
   return Math.max(0, Math.round((+current || 0) - (+reserved || 0) + Math.max(0, +actual || 0)));
+}
+
+const ALERTS_FULL = "You've used today's price alerts. Try again tomorrow.";
+
+// One synchronous decision for spend, daily quota, monthly quota, and alert quota.
+export function applyReserve(state, req) {
+  state = state || {};
+  req = req || {};
+  const spend = Math.max(0, Math.round(+state.spend || 0));
+  const daily = Math.max(0, Math.round(+state.daily || 0));
+  const month = Math.max(0, Math.round(+state.month || 0));
+  const alert = Math.max(0, Math.round(+state.alert || 0));
+  const same = { spend, daily, month, alert };
+  const reserve = Math.max(0, Math.round(+req.reserve || 0));
+  const skipSpend = !!req.skipSpend;
+  if (!skipSpend && !reserveFits(spend, reserve, req.cap)) {
+    return { ok: false, status: 403, error: LOOKUPS_PAUSED, reserved: 0, state: same };
+  }
+  const dailyAdd = Math.max(0, +req.dailyAdd || 0);
+  const dailyDecision = chargeDecision(daily, dailyAdd, req.dailyLimit);
+  if (dailyAdd && !dailyDecision.ok) {
+    return { ok: false, status: 429, error: `Daily lookup limit reached (${dailyDecision.limit} per day). Try again tomorrow.`, reserved: 0, state: same };
+  }
+  let monthNext = month;
+  if (!req.skipMonth) {
+    const monthAdd = Math.max(0, +req.monthAdd || 0);
+    const monthDecision = chargeDecision(month, monthAdd, req.monthLimit);
+    if (monthAdd && !monthDecision.ok) return { ok: false, status: 429, error: MONTHLY_FULL, reserved: 0, state: same };
+    monthNext = monthAdd ? monthDecision.next : month;
+  }
+  const alertAdd = Math.max(0, +req.alertAdd || 0);
+  let alertNext = alert;
+  if (alertAdd) {
+    const alertDecision = chargeDecision(alert, alertAdd, req.alertLimit);
+    if (!alertDecision.ok) return { ok: false, status: 429, error: ALERTS_FULL, reserved: 0, state: same };
+    alertNext = alertDecision.next;
+  }
+  const held = skipSpend ? 0 : reserve;
+  return {
+    ok: true,
+    status: 200,
+    error: "",
+    reserved: held,
+    state: { spend: spend + held, daily: dailyAdd ? dailyDecision.next : daily, month: monthNext, alert: alertNext },
+  };
+}
+
+// Recorded cost cannot exceed the reservation, so the counter cannot pass the cap.
+export function applyReconcile(state, req) {
+  state = state || {};
+  req = req || {};
+  const reserved = Math.max(0, Math.round(+req.reserved || 0));
+  const actual = Math.max(0, Math.round(+req.actual || 0));
+  const billed = Math.min(actual, reserved);
+  return {
+    ok: true,
+    billed,
+    state: {
+      spend: reconcileSpendMicro(state.spend, reserved, billed),
+      daily: Math.max(0, Math.round(+state.daily || 0)),
+      month: Math.max(0, Math.round(+state.month || 0)),
+      alert: Math.max(0, Math.round(+state.alert || 0)),
+    },
+  };
+}
+
+export const SERVER_DELETE_STEPS = ["firestore", "auth", "kv"];
+
+export function deleteRetryRoute(hasTombstone) {
+  return hasTombstone ? ["server"] : ["client-data", "tombstone", "server"];
+}
+
+// Attempt 1 can die on a 502, a timeout, or offline. Auth and usage counters stay.
+// A later sign-in only posts to the server, which finishes shares, the auth user, and counters.
+export function runDeleteAttempt(state, serverResult) {
+  const route = deleteRetryRoute(!!(state && state.tombstone));
+  const next = {
+    tombstone: !!(state && state.tombstone),
+    shares: Math.max(0, +(state && state.shares) || 0),
+    gear: Math.max(0, +(state && state.gear) || 0),
+    auth: !!(state && state.auth),
+    kv: !!(state && state.kv),
+  };
+  const queriedShares = route[0] !== "server";
+  if (queriedShares) {
+    next.gear = 0;
+    next.shares = 0;
+    next.tombstone = true;
+  }
+  if (serverResult !== "ok") return { ok: false, route, queriedShares, steps: [], state: next };
+  next.shares = 0;
+  next.gear = 0;
+  next.auth = false;
+  next.kv = false;
+  next.tombstone = true;
+  return { ok: true, route, queriedShares, steps: SERVER_DELETE_STEPS.slice(), state: next };
 }
 
 const LOAN_EMAIL_FIELDS = ["friendEmail", "lenderEmail", "borrowerEmail", "borrowerEmailLower"];
@@ -1474,7 +1622,7 @@ const GearLogic = {
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, LOOKUPS_PAUSED,
-  reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
+  reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, deleteRetryRoute,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, bulkLookupIds, singleLookupIds, applyMarketPrices,

@@ -262,8 +262,11 @@ async function deleteMyAccount(password,signal){
   if(typeof lendUnsubs!=="undefined"&&lendUnsubs){lendUnsubs.forEach(x=>{try{x()}catch(err){}});lendUnsubs.length=0}
   const gearMsg="Couldn't finish removing your gear. Your sign-in is still here. Try again.";
   const signInMsg="Your gear was removed, but the sign-in is still here. Try again.";
+  let tombSnap=null;
+  try{tombSnap=await fsdb.collection("deletedUsers").doc(u.uid).get()}catch(e){}
+  const straight=GearLogic.deleteRetryRoute(!!(tombSnap&&tombSnap.exists))[0]==="server";
   let removedAny=false;
-  try{
+  if(!straight)try{
     for(const c of GearLogic.USER_COLLECTIONS){
       const snap=await userRef().collection(c).get();
       if(snap.docs.length)removedAny=true;
@@ -318,9 +321,12 @@ async function deleteMyAccount(password,signal){
     if(!tombSnap.exists)await tomb.set({uid:u.uid,at:now()});
     removedAny=true;
   }catch(e){
-    if(!removedAny){accountDeleting=false;throw new Error(gearMsg)}
-    showDeleteFailure(gearMsg);
-    throw new Error(gearMsg);
+    const code=e&&e.code||"";
+    if(code!=="permission-denied"){
+      if(!removedAny){accountDeleting=false;throw new Error(gearMsg)}
+      showDeleteFailure(gearMsg);
+      throw new Error(gearMsg);
+    }
   }
   let tok;
   try{tok=await u.getIdToken(true)}catch(e){showDeleteFailure(signInMsg);throw new Error(signInMsg)}
@@ -417,7 +423,7 @@ async function qaStorageCheckRun(){
   else toast("Storage check failed. Another account or a signed-out check was not blocked ("+otherCode+" / "+signedOutCode+").",6000);
 }
 }
-var APP_VERSION="32";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+var APP_VERSION="33";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 if("serviceWorker" in navigator&&GearLogic.serviceWorkerAllowed(location,window.GEAR_QA)){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const poke=()=>{if(reg.waiting)reg.waiting.postMessage({type:"skip-waiting"});reg.update().catch(()=>{})};reg.addEventListener("updatefound",()=>{const worker=reg.installing;if(worker)worker.addEventListener("statechange",()=>{if(worker.state==="installed")poke()})});document.addEventListener("visibilitychange",()=>{if(!document.hidden)poke()});setInterval(poke,20*60e3);poke()}).catch(()=>{});

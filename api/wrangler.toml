@@ -9,14 +9,25 @@ workers_dev = true
 keep_vars = true
 
 # Public web API key, the same value already published in config.js. Not a secret.
-# Auth deletion calls Identity Toolkit with it, so a deploy from main includes the key.
+# Identity Toolkit rejects this key from the worker (no Referer): API_KEY_HTTP_REFERRER_BLOCKED.
+# Account deletion can remove the sign-in only after Ace replaces it with a server key.
+# See README. A dashboard-only value is overwritten on deploy because this var is in the file.
 [vars]
 FIREBASE_API_KEY = "AIzaSyBexXFiQtDEnmlL2z0x4FXD7YCbeAHTGC4"
 
-# Price-alert storage
+# Price-alert storage. Watch lists stay here. Spend and quotas live in UsageLedger.
 [[kv_namespaces]]
 binding = "WATCH"
 id = "3830bb679d28482db6ca2ec6e69b95f1"
+
+# SQLite-backed so Workers Free can run it. KV-backed classes are not used.
+[[durable_objects.bindings]]
+name = "USAGE"
+class_name = "UsageLedger"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["UsageLedger"]
 
 # Hourly price-alert checks
 [triggers]

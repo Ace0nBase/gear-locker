@@ -48,13 +48,13 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device and the service worker is version 32", () => {
+test("sign-out clears this device and the service worker is version 33", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v32/);
-  assert.match(read("js/cloud.js"), /APP_VERSION="32"/);
+  assert.match(sw, /war-box-v33/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="33"/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
   assert.match(manifest, /maskable-512\.png/);
@@ -209,6 +209,14 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/cloud.js"), /if\(accountDeleteError\)/);
   assert.match(read("js/cloud.js"), /deletedUsers/);
   assert.match(read("js/cloud.js"), /where\("owner","=="/);
+  assert.match(read("js/cloud.js"), /deleteRetryRoute/);
+  const delFn = read("js/cloud.js");
+  const delStart = delFn.indexOf("async function deleteMyAccount");
+  const delStop = delFn.indexOf("async function startCloud");
+  const delBody = delFn.slice(delStart, delStop);
+  assert.ok(delBody.indexOf("deleteRetryRoute") < delBody.indexOf('where("owner","=="'));
+  assert.ok(delBody.indexOf("deleteRetryRoute") < delBody.indexOf('"/account/delete"'));
+  assert.match(read("js/core.js"), /Dismiss keeps them on Ammo Storage &amp; Loaders, with prices and store links on\./);
   assert.match(read("js/cloud.js"), /showDeleteFailure/);
   assert.match(read("js/security.js"), /That took too long\. Try deleting the account again\./);
   assert.match(read("js/security.js"), /err\.textContent=""/);
@@ -230,6 +238,10 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.ok(webKey);
   assert.match(wrangler, new RegExp(`FIREBASE_API_KEY\\s*=\\s*"${webKey[1]}"`));
   assert.match(wrangler, /keep_vars\s*=\s*true/);
+  assert.match(wrangler, /name\s*=\s*"USAGE"/);
+  assert.match(wrangler, /class_name\s*=\s*"UsageLedger"/);
+  assert.match(wrangler, /new_sqlite_classes\s*=\s*\["UsageLedger"\]/);
+  assert.doesNotMatch(wrangler, /\bnew_classes\b/);
   assert.doesNotMatch(wrangler, /^\s*BETA_ONLY\s*=/m);
   assert.doesNotMatch(read("api/stub.js"), /https:\/\/identitytoolkit\.googleapis\.com/);
   const pkg = JSON.parse(read("package.json"));
