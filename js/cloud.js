@@ -235,20 +235,22 @@ function openDetail(i,quiet){
   const ln=onLoan(i.id);const tasks=maintRows().filter(r=>r.m.itemId===i.id);const ks=kitsUsing(i.id);
   const isGun=i.category==="Firearms";
   const restricted=GearLogic.saleRestricted(i);
+  const shownVal=restricted?GearLogic.countedValue(i):(+i.value||0);
   const sess=isGun?L("sessions").filter(s=>(s.lines||[]).some(l=>l.firearmId===i.id)):[];
   const links=marketSourceText(i);
   const f=(label,val,sub,opt)=>(!val&&opt)?"":`<div><dt>${esc(label)}</dt><dd>${val||"—"}${sub?`<small>${sub}</small>`:""}</dd></div>`;
   const wt=i.weight!=null&&i.weight!==""?esc(fmtWt(i.weight)):lookingUp.has(i.id)?"Looking up…":lookupsOn()?(i.weightStatus==="notfound"?"Not found":"Pending"):"—";
-  const priceState=restricted?(i.value?"Entered by you":""):lookingUp.has(i.id)?"Looking up…":/^estimate/i.test(i.priceNote||"")&&i.priceSource==="market"?`Estimate ${esc(i.priceDate||"")}`:(i.marketCheck==="requested"&&!window.LOOKUP_URL)?"Market check queued":i.priceSource==="market"?`Market check ${esc(i.priceDate||"")}`:i.priceSource==="manual"?"Entered by you":"";
+  const wnote=restricted?GearLogic.publicWeightNote(i.weightNote||""):(i.weightNote||"");
+  const priceState=restricted?(i.valueSource==="manual"&&shownVal?"Entered by you":(+i.value>0&&!shownVal?"Old lookup, not counted":"")):lookingUp.has(i.id)?"Looking up…":/^estimate/i.test(i.priceNote||"")&&i.priceSource==="market"?`Estimate ${esc(i.priceDate||"")}`:(i.marketCheck==="requested"&&!window.LOOKUP_URL)?"Market check queued":i.priceSource==="market"?`Market check ${esc(i.priceDate||"")}`:i.priceSource==="manual"?"Entered by you":"";
   const canLookup=lookupsOn()&&(window.LOOKUP_URL||(!restricted&&i.marketCheck!=="requested"&&!isGun));
   $("detail").innerHTML=`
    <div class="dh"><div><h2>${esc(i.name)}${i.nick?` <span class="tag" style="font-size:.8rem">${esc(i.nick)}</span>`:""}</h2><div class="dsub">${esc([i.brand,i.color,i.category].filter(Boolean).join(" · "))}</div></div>
      <div class="vbtns"><button class="btn" type="button" data-dact="edit">Edit</button><button class="btn ghost" type="button" data-dact="share">Share</button>${canLookup?(lookingUp.has(i.id)?`<button class="btn ghost" type="button" disabled>Looking up…</button>`:`<button class="btn ghost" type="button" data-dact="mkt">${restricted||isGun?"Look up weight":"Market check"}</button>`):""}</div></div>
    <dl>
      ${f("Category",esc(i.category||""))}${f("Where it is",parent?`On <button class="lnk" type="button" data-dview="${esc(parent.id)}">${esc(parent.name)}</button>`:i.setupOn?esc(i.setupOn):"Spare (not set up on anything)")}${f("Quantity",esc(String(+i.qty||0)))}${f("Condition",esc((i.condition||"").replace("-"," ")))}
-     ${f(restricted?"Insured value":"Value each",i.value?money(i.value):"",priceState)}${f("Total value",i.value?money((+i.value)*(+i.qty||1)):"")}${f("What I paid",i.paid?m2(i.paid):"",i.paid&&(+i.qty||1)>1?`${m2((+i.paid)*(+i.qty||1))} for all ${+i.qty}`:i.paid&&i.value&&!restricted?(+i.value>=+i.paid?`worth ${money(i.value-i.paid)} more now`:`worth ${money(i.paid-i.value)} less now`):"",1)}
+     ${f(restricted?"Insured value":"Value each",shownVal?money(shownVal):"",priceState)}${f("Total value",shownVal?money(shownVal*(+i.qty||1)):"")}${f("What I paid",i.paid?m2(i.paid):"",i.paid&&(+i.qty||1)>1?`${m2((+i.paid)*(+i.qty||1))} for all ${+i.qty}`:i.paid&&shownVal&&!restricted?(shownVal>=+i.paid?`worth ${money(shownVal-i.paid)} more now`:`worth ${money(i.paid-shownVal)} less now`):"",1)}
      ${restricted?"":f("New retail",i.retailNew?money(i.retailNew):"","",1)+f("Used range",(i.usedLow||i.usedHigh)?`${money(i.usedLow)}–${money(i.usedHigh)}`:"","",1)}
-     ${f("Weight each",wt,i.weightNote?esc(i.weightNote):i.weightSource==="manual"?"Entered by you":"")}${f("Stored at",esc(i.location||""))}
+     ${f("Weight each",wt,wnote?esc(wnote):i.weightSource==="manual"?"Entered by you":"")}${f("Stored at",esc(i.location||""))}
      ${f("Goes with",gun?`<button class="lnk" type="button" data-dview="${esc(gun.id)}">${esc(gun.name)}</button>`:"","",1)}
      
      ${isGun?f("Caliber",esc(i.caliber||""))+f("Rounds fired",roundsFired(i.id).toLocaleString(),sess.length?`${sess.length} logged session${sess.length>1?"s":""}`:""):""}
@@ -290,7 +292,7 @@ function applyLookup(id,res){
   const it=all.find(x=>x.id===id);if(!it||it.deleted||!res||!res.ok)return false;
   const n=v=>v==null||v===""||!isFinite(+v)?null:Math.round(+v);
   const restricted=GearLogic.saleRestricted(it);
-  if(restricted){it.retailNew=0;delete it.usedLow;delete it.usedHigh;delete it.priceNote;it.marketSources=[];if(it.priceSource==="market")it.priceSource="manual"}
+  if(restricted){it.retailNew=0;delete it.usedLow;delete it.usedHigh;delete it.priceNote;it.marketSources=[];if(it.valueSource!=="manual"){it.value=0;delete it.priceSource;delete it.priceDate}}
   else{
     if(n(res.retailNew)!=null)it.retailNew=n(res.retailNew);
     if(n(res.usedLow)!=null)it.usedLow=n(res.usedLow);
@@ -300,10 +302,10 @@ function applyLookup(id,res){
     it.priceSource="market";it.priceDate=today();it.priceNote=String(res.priceNote||"").slice(0,240);
     it.marketSources=(Array.isArray(res.sources)?res.sources:[]).filter(s=>/^https:\/\//.test(s?.url||"")).slice(0,4).map(s=>({label:String(s.label||"source").slice(0,40),url:s.url}));
   }
-  if(res.weightOz!=null&&isFinite(+res.weightOz)&&+res.weightOz>0&&it.weightSource!=="manual"){it.weight=Math.round(+res.weightOz*10)/10;it.weightSource="lookup";it.weightStatus="done";it.weightNote=String(res.weightNote||"").slice(0,80)}
+  if(res.weightOz!=null&&isFinite(+res.weightOz)&&+res.weightOz>0&&it.weightSource!=="manual"){it.weight=Math.round(+res.weightOz*10)/10;it.weightSource="lookup";it.weightStatus="done";it.weightNote=restricted?GearLogic.publicWeightNote(res.weightNote||""):String(res.weightNote||"").slice(0,80)}
   else if(it.weight==null||it.weight==="")it.weightStatus="notfound";
   it.marketCheck="done";delete it.lookupError;it.updatedAt=now();
-  if(!$("form").hidden&&editing&&editing.id===it.id){editing=it;$("fRetail").value=it.retailNew||"";if(!valueTouched)$("fVal").value=it.value||"";if(!$("fWt").value&&it.weight!=null)$("fWt").value=it.weight;showPrice(it)}
+  if(!$("form").hidden&&editing&&editing.id===it.id){editing=it;$("fRetail").value=it.retailNew||"";if(!valueTouched)$("fVal").value=(restricted&&it.valueSource!=="manual")?"":(it.value||"");if(!$("fWt").value&&it.weight!=null)$("fWt").value=it.weight;showPrice(it)}
   return true;
 }
 async function runLookups(ids,quiet){
@@ -337,7 +339,12 @@ saveCurrent=async function(extra){
     if(rec.usedHigh!=null){delete rec.usedHigh;scrub=true}
     if(Array.isArray(rec.marketSources)&&rec.marketSources.length){rec.marketSources=[];scrub=true}
     if(rec.priceNote){delete rec.priceNote;scrub=true}
-    if(rec.priceSource==="market"){rec.priceSource="manual";scrub=true}
+    if(rec.valueSource!=="manual"){
+      if(+rec.value){rec.value=0;scrub=true}
+      if(rec.priceSource){delete rec.priceSource;scrub=true}
+      if(rec.priceDate){delete rec.priceDate;scrub=true}
+    }
+    if(rec.weightNote){const clean=GearLogic.publicWeightNote(rec.weightNote);if(clean!==rec.weightNote){rec.weightNote=clean;scrub=true}}
     if(scrub)await persist();
   }
   const changed=!before||before.name!==rec.name||before.brand!==rec.brand||before.category!==rec.category||before.arm!==rec.arm||(!restricted&&before.condition!==rec.condition);

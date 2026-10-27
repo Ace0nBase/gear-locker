@@ -107,7 +107,7 @@ function render(){
   if(typeof afterRender==="function")afterRender();
   const items=live();
   const q=$("q").value.trim().toLowerCase(), sort=$("sort").value;
-  const totQty=items.reduce((a,i)=>a+(+i.qty||0),0), totVal=items.reduce((a,i)=>a+(+i.qty||0)*(+i.value||0),0);
+  const totQty=items.reduce((a,i)=>a+(+i.qty||0),0), totVal=items.reduce((a,i)=>a+(+i.qty||0)*GearLogic.countedValue(i),0);
   $("sItems").textContent=items.length;$("sQty").textContent=totQty;$("sCats").textContent=new Set(items.map(i=>i.category)).size;$("sVal").textContent=money(totVal);{const pd=items.reduce((a,i)=>a+(+i.qty||0)*(+i.paid||0),0);$("sPaid").textContent=pd?` · paid ${money(pd)}`:""}
   const queued=window.LOOKUP_URL?0:items.filter(i=>i.marketCheck==="requested").length;
   $("sub").textContent=`KIT INVENTORY · ${items.length} LINE ITEMS${queued?` · ${queued} QUEUED FOR MARKET CHECK`:""}`;
@@ -118,10 +118,10 @@ function render(){
   $("locations").innerHTML=[...new Set(items.map(i=>i.location).filter(Boolean))].map(v=>`<option>${esc(v)}</option>`).join("");
   let rows=items.filter(i=>(filter==="All"||i.category===filter)&&(!q||[i.name,i.brand,i.color,i.setupOn,i.location,i.notes,i.category,i.serial,i.armId].join(" ").toLowerCase().includes(q)));
   const key={name:i=>(i.name||"").toLowerCase(),on:i=>(i.setupOn||"~").toLowerCase(),loc:i=>(i.location||"~").toLowerCase()}[sort];
-  rows.sort(sort==="val"?(a,b)=>(b.qty*b.value||0)-(a.qty*a.value||0):(a,b)=>key(a).localeCompare(key(b)));
+  rows.sort(sort==="val"?(a,b)=>(b.qty*GearLogic.countedValue(b)||0)-(a.qty*GearLogic.countedValue(a)||0):(a,b)=>key(a).localeCompare(key(b)));
   if(!items.length){$("list").innerHTML=`<div class="empty"><b>Locker's empty</b>Add your first item with <em>+ Add item</em>. Work through one area at a time: carrier, belt, pouches, med, packs.</div>`;return}
   if(!rows.length){$("list").innerHTML=`<div class="empty">No items match that search.</div>`;return}
-  $("list").innerHTML=CATS.filter(c=>rows.some(r=>r.category===c)).map(c=>{const g=rows.filter(r=>r.category===c);const gq=g.reduce((a,i)=>a+(+i.qty||0),0),gv=g.reduce((a,i)=>a+(+i.qty||0)*(+i.value||0),0);
+  $("list").innerHTML=CATS.filter(c=>rows.some(r=>r.category===c)).map(c=>{const g=rows.filter(r=>r.category===c);const gq=g.reduce((a,i)=>a+(+i.qty||0),0),gv=g.reduce((a,i)=>a+(+i.qty||0)*GearLogic.countedValue(i),0);
     return `<section class="group"><div class="ghead"><h3>${esc(c)}</h3><span>${gq} pcs${gv?` · ${money(gv)}`:""}</span></div>
     <div class="row colhead" aria-hidden="true"><span>Qty</span><span>Item</span><span>Set up on</span><span>Stored</span><span>Cond.</span><span style="text-align:right">Value</span></div>
     ${g.map(i=>`<button type="button" class="row" data-id="${esc(i.id)}"><span class="qty">${+i.qty||0}×</span>
@@ -129,7 +129,7 @@ function render(){
       <span class="meta">${i.mountedOn&&itemById(i.mountedOn)?`on <em>${esc(itemById(i.mountedOn).name)}</em>`:i.setupOn?`<em>${esc(i.setupOn)}</em>`:"Spare"}${onLoan(i.id)?`<span class="tag" style="display:block">on loan · ${esc(onLoan(i.id).borrower)}</span>`:""}</span>
       <span class="meta">${esc(i.location||"—")}</span>
       <span class="cond ${esc(i.condition)}">${esc((i.condition||"").replace("-"," "))}</span>
-      <span class="val">${i.value?money(i.qty*i.value):"—"}${lookingUp.has(i.id)?`<span class="tag">looking up…</span>`:GearLogic.saleRestricted(i)?"":(i.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
+      <span class="val">${GearLogic.countedValue(i)?money(i.qty*GearLogic.countedValue(i)):"—"}${lookingUp.has(i.id)?`<span class="tag">looking up…</span>`:GearLogic.saleRestricted(i)?"":(i.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
 }
 
 /* ---------- pricing ---------- */
@@ -175,11 +175,12 @@ var formFrom=null;
 function openForm(item){
   formFrom=item&&viewing&&!$("detail").hidden?item.id:null;
   $("detail").hidden=true;
-  editing=item||null;delArmed=false;valueTouched=!!(item&&item.value&&!(item.retailNew&&Math.round(item.retailNew*(FACTOR[item.condition]??0.6))===Math.round(item.value)));
+  const staleInsured=!!(item&&GearLogic.saleRestricted(item)&&item.valueSource!=="manual");
+  editing=item||null;delArmed=false;valueTouched=!!(item&&item.value&&!staleInsured&&!(item.retailNew&&Math.round(item.retailNew*(FACTOR[item.condition]??0.6))===Math.round(item.value)));
   $("formTitle").textContent=item?"Edit item":"Add item";
   $("fName").value=item?.name||"";$("fBrand").value=item?.brand||"";$("fCat").value=item?.category||(filter!=="All"?filter:"Pouches");
   $("fQty").value=item?.qty??1;$("fColor").value=item?.color||"";$("fCond").value=item?.condition||"Good";
-  $("fRetail").value=item?.retailNew||"";$("fVal").value=item?.value||"";$("fOn").value=item?.setupOn||"";$("fLoc").value=item?.location||"";$("fNotes").value=item?.notes||"";
+  $("fRetail").value=item?.retailNew||"";$("fVal").value=staleInsured?"":(item?.value||"");$("fOn").value=item?.setupOn||"";$("fLoc").value=item?.location||"";$("fNotes").value=item?.notes||"";
   $("delBtn").hidden=!item;$("delBtn").className="btn ghost";$("delBtn").textContent="Delete";
   if(window.LOOKUP_URL){const busy=!!item&&lookingUp.has(item.id);$("mktBtn").disabled=busy;$("mktBtn").textContent=busy?"Looking up…":"Market check"}else{$("mktBtn").disabled=item?.marketCheck==="requested";$("mktBtn").textContent=item?.marketCheck==="requested"?"Check queued":"Market check"}
   $("fMount").innerHTML=mountOpts(item?.id);$("fMount").value=item?.mountedOn||"";
@@ -257,12 +258,12 @@ $("bulkMktBtn").onclick=async()=>{
 
 /* ---------- print + export ---------- */
 function buildPrint(){
-  const items=live(),totQty=items.reduce((a,i)=>a+(+i.qty||0),0),totVal=items.reduce((a,i)=>a+(+i.qty||0)*(+i.value||0),0);
+  const items=live(),totQty=items.reduce((a,i)=>a+(+i.qty||0),0),totVal=items.reduce((a,i)=>a+(+i.qty||0)*GearLogic.countedValue(i),0);
   let h=`<div class="ph"><div><h1>GEAR LOCKER — INVENTORY</h1><small>Printed ${new Date().toLocaleDateString()} · ${items.length} line items · ${totQty} pieces · Value ${money(totVal)}</small></div><small>PRIVATE — PERSONAL PROPERTY RECORD</small></div>`;
   CATS.forEach(c=>{const g=items.filter(i=>i.category===c).sort((a,b)=>(a.name||"").localeCompare(b.name||""));if(!g.length)return;
-    const gq=g.reduce((a,i)=>a+(+i.qty||0),0),gv=g.reduce((a,i)=>a+(+i.qty||0)*(+i.value||0),0);
+    const gq=g.reduce((a,i)=>a+(+i.qty||0),0),gv=g.reduce((a,i)=>a+(+i.qty||0)*GearLogic.countedValue(i),0);
     h+=`<table><thead><tr class="cat"><th colspan="9">${esc(c.toUpperCase())} — ${gq} pcs${gv?" · "+money(gv):""}</th></tr><tr><th>✓</th><th>Qty</th><th>Item</th><th>Brand / model</th><th>Color</th><th>Set up on</th><th>Stored</th><th>Cond.</th><th class="r">Value</th></tr></thead><tbody>`+
-      g.map(i=>`<tr><td><span class="box"></span></td><td class="r">${+i.qty||0}</td><td>${esc(i.name)}</td><td>${esc(i.brand)}</td><td>${esc(i.color)}</td><td>${esc(i.setupOn||"Spare")}</td><td>${esc(i.location)}</td><td>${esc((i.condition||"").replace("-"," "))}</td><td class="r">${i.value?money(i.qty*i.value):"—"}</td></tr>`).join("")+`</tbody></table>`});
+      g.map(i=>{const v=GearLogic.countedValue(i);return `<tr><td><span class="box"></span></td><td class="r">${+i.qty||0}</td><td>${esc(i.name)}</td><td>${esc(i.brand)}</td><td>${esc(i.color)}</td><td>${esc(i.setupOn||"Spare")}</td><td>${esc(i.location)}</td><td>${esc((i.condition||"").replace("-"," "))}</td><td class="r">${v?money(i.qty*v):"—"}</td></tr>`}).join("")+`</tbody></table>`});
   h+=`<p class="sign">Verified by: ______________________________ &nbsp;&nbsp; Date: ______________</p>`;
   $("printSheet").innerHTML=h;
 }
@@ -275,7 +276,7 @@ $("csvBtn").onclick=()=>{
   const cols=["category","qty","name","brand","color","condition","retailNew","value","paid","weight","setupOn","location","notes","priceSource","priceDate"];
   const q=v=>`"${String(v??"").replace(/"/g,'""')}"`;
   const sorted=CATS.flatMap(c=>items.filter(i=>i.category===c).sort((a,b)=>(a.name||"").localeCompare(b.name||"")));
-  const csv="﻿"+[["Category","Qty","Item","Brand/Model","Color","Condition","New retail","Value each","Paid each","Weight (oz)","Set up on","Stored","Notes","Price source","Price date"].map(q).join(","),...sorted.map(i=>cols.map(k=>q(i[k])).join(","))].join("\r\n");
+  const csv="﻿"+[["Category","Qty","Item","Brand/Model","Color","Condition","New retail","Value each","Paid each","Weight (oz)","Set up on","Stored","Notes","Price source","Price date"].map(q).join(","),...sorted.map(i=>cols.map(k=>q(GearLogic.csvExportField(i,k))).join(","))].join("\r\n");
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`gear-inventory-${today()}.csv`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);
 };
 
@@ -414,7 +415,7 @@ function renderKits(){
   const sugBox=!box?autoContainer(kit):null;
   const boxOpts=[`<option value="__auto">${sugBox?`Choose a bag (suggest: ${esc(sugBox.name)})`:"No bag chosen"}</option>`,...containers().map(i=>`<option value="${esc(i.id)}"${st.container===i.id?" selected":""}>${esc(i.name)}${i.color?` (${esc(i.color)})`:""}</option>`),`<option value="none"${st.container==="none"?" selected":""}>No bag / carry loose</option>`].join("");
   const riders=ridersOf(used);
-  const val=[...[...used].map(id=>live().find(i=>i.id===id)),...riders].reduce((s,i)=>s+(+i.value||0)*(+i.qty||1),0);
+  const val=[...[...used].map(id=>live().find(i=>i.id===id)),...riders].reduce((s,i)=>s+(i?GearLogic.countedValue(i):0)*(+i?.qty||1),0);
   const kw=kitWeight([...used,...riders.map(i=>i.id)]);
   const row=(sid,essential)=>{const [label,, ,tip]=S[sid]; const it=a[sid]; const cands=candidates(kit,sid); const picked=(st.picks||{})[sid];
     const viaMount=it&&!(picked&&picked===it.id)&&it.mountedOn&&it.id!==box?.id;

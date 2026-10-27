@@ -407,13 +407,13 @@ body.appCover::after{content:"";position:fixed;inset:0;z-index:600;background:va
 .ammoP{border:1px solid var(--line,#3a3a30);border-radius:12px;padding:12px;background:rgba(255,255,255,.03)}
 .ammoP.deal{border-color:#7fb069;box-shadow:0 0 0 1px #7fb069 inset}
 .apTop b{display:block}.apTop small,.apMeta{opacity:.7;font-size:.8em}
-.apGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0}
+.apGrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:10px 0}
 .apGrid span{display:block;font-size:.72em;opacity:.7;text-transform:uppercase;letter-spacing:.04em}
 .apGrid b{font-size:1.15em}.apGrid i{font-style:normal;font-size:.7em;opacity:.7}.apGrid small{display:block;font-size:.72em;opacity:.8}
 .apGrid small.up{color:#d9a441}.apGrid small.dn{color:#7fb069}
 .apDeal{background:rgba(127,176,105,.18);border-radius:8px;padding:6px 8px;font-size:.85em;margin-bottom:8px}
 .apBtns{display:flex;flex-wrap:wrap;gap:6px}.apBtns .btn{padding:6px 10px;font-size:.85em;text-decoration:none}
-.apShot{display:flex;gap:6px;margin-top:8px}.apShot input{flex:1;min-width:0}
+.apShot{display:flex;gap:6px;margin-top:8px}.apShot[hidden]{display:none}.apShot input{flex:1;min-width:0}
 .apMeta{display:block;margin-top:8px}
 .cBar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0}.cBar select{max-width:220px}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}

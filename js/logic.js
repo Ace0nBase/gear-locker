@@ -45,7 +45,7 @@ export function shareItemFields(i, parent, prices) {
     caliber: i && i.category === "Firearms" ? String(i.caliber || "") : "",
   };
   if (prices) {
-    row.value = +((i && i.value) || 0) || 0;
+    row.value = countedValue(i);
     row.paid = +((i && i.paid) || 0) || 0;
   }
   return row;
@@ -296,13 +296,6 @@ export function serviceWorkerAllowed(loc, qa) {
   return !!qa && loc.protocol === "http:" && host;
 }
 
-const GEAR_CATEGORIES = new Set([
-  "comms & radios", "medical", "packs & bags", "clothing & boots", "helmet & head",
-  "holsters & slings", "belts & rigs", "pouches", "armor & carriers", "nvg & optics",
-  "lights & lasers", "cases & bags", "cleaning & maintenance", "mags & ammo storage",
-  "knives & tools",
-]);
-
 function normCat(category) {
   return String(category || "").trim().toLowerCase();
 }
@@ -315,22 +308,53 @@ function ammoContainer(blob) {
   return /\bammo\s+(can|box|bag|crate|pouch)\b/.test(blob);
 }
 
+function namedCan(blob) {
+  const t = String(blob || "").trim();
+  if (/\b(ammo|fuel|gas|jerry|water|trash|garbage|oil|food|coffee|paint|tin|milk|soda|beer|watering)\s+cans?\b/.test(t)) return false;
+  if (/\bcans?\s+(opener|light|holder|stove)\b/.test(t)) return false;
+  return /^(the\s+|my\s+)?can$/.test(t) || /\bcan\b/.test(t);
+}
+
+function suppressorIdentity(blob) {
+  if (ammoContainer(blob)) return false;
+  if (/suppress|supress|suppres|silenc|solvent\s*trap|\bsico\b|dead\s*air/.test(blob)) return true;
+  return namedCan(blob);
+}
+
 function accessoryNotFirearm(blob) {
-  return /\b(holster|pouch|sling|scabbard|case|bag)\b/.test(blob)
+  return /\b(holster|pouch|sling|scabbard|case|bag|carrier)\b/.test(blob)
     && !/\blower\b/.test(blob)
     && !/\bframe\b/.test(blob)
-    && !/suppress|supress|silenc/.test(blob);
+    && !suppressorIdentity(blob);
+}
+
+function lightOrScope(blob) {
+  return /\b(lights?|lamps?|scopes?|sights?)\b/.test(blob) && !/\blower\b/.test(blob) && !suppressorIdentity(blob);
+}
+
+// Magazines are not priced like firearms or ammunition. A caliber in the name does not change that.
+function isMagazine(blob) {
+  if (/\b(pouch|holster|sling|case|bag|carrier|well)\b/.test(blob)) return false;
+  return /\b(pmags?|magazines?|mags?)\b/.test(blob);
+}
+
+function cleaningNotAmmo(blob) {
+  return /\bcleaning\s+kit\b|\bbore\s+snake\b/.test(blob) && !/solvent\s*trap/.test(blob);
 }
 
 function clearCartridge(blob) {
-  if (ammoContainer(blob) || accessoryNotFirearm(blob)) return false;
+  if (ammoContainer(blob) || accessoryNotFirearm(blob) || isMagazine(blob) || cleaningNotAmmo(blob)) return false;
   return /\d+(?:\.\d+)?\s*mm\b/.test(blob)
     || /\.\d{2,3}\b/.test(blob)
+    || /\d+\s*gauges?\b/.test(blob)
     || /\d+\s*ga\b/.test(blob)
     || /\b22\s*lr\b/.test(blob)
     || /\b5\.56\b/.test(blob)
     || /\b7\.62\b/.test(blob)
-    || /\d+\s*gr\b/.test(blob)
+    || /\d+\s*gr(?:ain)?s?\b/.test(blob)
+    || /\bcreedmoor\b/.test(blob)
+    || /\b\d+\s*acp\b/.test(blob)
+    || /\bblazer\s+brass\b/.test(blob)
     || /\b(ammunition|cartridges?)\b/.test(blob)
     || /\bammo\b/.test(blob);
 }
@@ -338,21 +362,33 @@ function clearCartridge(blob) {
 const LOWER_PLATFORM = "(?:ar[\\s-]?15|ar15|ar[\\s-]?10|ar10|\\bar\\b|\\bm4|\\b308\\b)";
 const LOWER_NEAR = new RegExp(LOWER_PLATFORM + ".{0,40}lower|lower.{0,40}" + LOWER_PLATFORM);
 
+function namedFirearm(blob) {
+  return /\bglock\s*\d{2}\w*\b/.test(blob)
+    || /\bp365\w*\b/.test(blob)
+    || /\bremington\s*870\b/.test(blob)
+    || /\bm\s*&\s*p\s*15\b|\bm&p\s*15\b/.test(blob);
+}
+
 function firearmIdentity(blob) {
-  if (ammoContainer(blob) || accessoryNotFirearm(blob)) return false;
-  if (/suppress|supress|silenc/.test(blob)) return true;
+  if (ammoContainer(blob) || accessoryNotFirearm(blob) || lightOrScope(blob) || isMagazine(blob)) return false;
+  if (suppressorIdentity(blob)) return true;
   if (/\bpolymer\s*80\b|\bpf-?\s*940/.test(blob)) return true;
+  if (/\b(window|internal|door|bed|picture|photo|pack|tent|bike)\s+frame\b/.test(blob) || /\bframe\s+pack\b/.test(blob)) return false;
   if (/\b(pistol|rifle|handgun|firearm)\s+frame\b/.test(blob)) return true;
-  if (/\b(?!pack\b|photo\b|tent\b|bike\b|picture\b)[a-z0-9][\w.+-]*\s+frame\b/.test(blob)) return true;
+  if (/\b(?!pack\b|photo\b|tent\b|bike\b|picture\b|window\b|internal\b|door\b|bed\b)[a-z0-9][\w.+-]*\s+frame\b/.test(blob)) return true;
   if (/\b(stripped|serialized|complete)\s+(lower|receiver)\b/.test(blob)) return true;
   if (/\blower\s+receiver\b/.test(blob)) return true;
-  if (/\b80%\s*(frame|lower|receiver)\b/.test(blob)) return true;
+  if (/\b80\s*(%|percent)?\s*(frame|lower|receiver)\b/.test(blob)) return true;
   if (LOWER_NEAR.test(blob)) return true;
+  if (/\bfcu\b|\bfire\s*control\s*unit\b/.test(blob)) return true;
+  if (/\breceiver\b/.test(blob) && !/\b(handheld|upper|radio|satellite|weather|gps|noaa)\b/.test(blob)) return true;
+  if (namedFirearm(blob)) return true;
   if (/\b(pistols?|rifles?|shotguns?|handguns?|revolvers?|carbines?)\b/.test(blob)) return true;
   return false;
 }
 
 // The app must not shop for firearms, firearm parts that are the firearm, or ammunition.
+// The name is checked in every category. Magazines are not restricted.
 export function saleRestricted(item) {
   if (!item || typeof item !== "object") return false;
   const arm = String(item.arm || "").trim().toUpperCase();
@@ -361,10 +397,41 @@ export function saleRestricted(item) {
   if (category === "firearms" || category === "suppressors" || category === "ammo" || category === "ammunition") return true;
   const blob = itemBlob(item);
   if (!category && item.caliber && (item.load || item.cpr != null || item.rounds != null)) return true;
-  if (category === "mags & ammo storage") return clearCartridge(blob);
-  if (GEAR_CATEGORIES.has(category)) return false;
+  if (isMagazine(blob)) return false;
+  if (suppressorIdentity(blob)) return true;
+  if (cleaningNotAmmo(blob)) return false;
   if (clearCartridge(blob)) return true;
   return firearmIdentity(blob);
+}
+
+// A looked-up price on a restricted item is not an insured value.
+export function countedValue(item) {
+  if (!item || typeof item !== "object") return 0;
+  const n = +item.value;
+  if (!isFinite(n) || n <= 0) return 0;
+  if (saleRestricted(item) && item.valueSource !== "manual") return 0;
+  return n;
+}
+
+export function csvExportField(item, key) {
+  if (!item || typeof item !== "object") return "";
+  if (saleRestricted(item) && (key === "retailNew" || key === "priceSource" || key === "priceDate")) return "";
+  if (key === "value" && saleRestricted(item)) {
+    const n = countedValue(item);
+    return n || "";
+  }
+  const v = item[key];
+  return v == null ? "" : v;
+}
+
+export function publicWeightNote(note) {
+  const store = /\b(amazon|ebay|tacswap|brownells|palmetto|\bpsa\b|midway|opticsplanet|primary\s*arms|gunbroker|cheaper\s*than\s*dirt|cabela'?s|bass\s*pro|sportsman'?s|grabagun|bud'?s?\s*gun\s*shop|aim\s*surplus|eurooptic|armslist|ammoseek|wikiarms|guns\.com|impact\s*guns|kygunco|classic\s*firearms|gun\.deals)\b/gi;
+  let s = String(note || "");
+  s = s.replace(/https?:\/\/\S+/gi, "");
+  s = s.replace(/\bwww\.\S+/gi, "");
+  s = s.replace(store, "");
+  s = s.replace(/\s{2,}/g, " ").replace(/^[\s,;:.\-|]+|[\s,;:.\-|]+$/g, "");
+  return s.slice(0, 80);
 }
 
 // Missing or "1" keeps the signed-in session. Only an explicit "0" turns it off.
@@ -417,6 +484,7 @@ const GearLogic = {
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
+  countedValue, csvExportField, publicWeightNote,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armoryLookupBlocked,
 };
 globalThis.GearLogic = GearLogic;

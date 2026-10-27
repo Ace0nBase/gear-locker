@@ -101,7 +101,7 @@ function downloadIcs(x){
 var loanDue=x=>!x.returned&&x.remindAt&&new Date(x.remindAt)<=new Date();
 {const _bf=badgeFor;badgeFor=function(k){
   if(k==="loans")return L("loans").filter(x=>!x.returned&&((x.due&&x.due<today())||loanDue(x)||lentRemote[x.id]?.borrowerReturned)).length+borrowed.filter(b=>!b.returned&&b.due&&b.due<today()).length;
-  if(k==="wish")return L("wish").filter(w=>w.status!=="got"&&w.deal&&w.deal.hit&&w.dealSeen!==w.deal.date).length;
+  if(k==="wish")return L("wish").filter(w=>w.status!=="got"&&!GearLogic.saleRestricted(w)&&w.deal&&w.deal.hit&&w.dealSeen!==w.deal.date).length;
   return _bf(k)}}
 {const _rl=RENDER.loans;RENDER.loans=()=>{
   _rl();const v=$("loansView");

@@ -4,7 +4,7 @@ import {
   clearUserLocal, shareItemFields, decideAccess, chargeDecision, quotaKey, alertQuotaKey,
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
-  saleRestricted,
+  saleRestricted, countedValue, csvExportField, publicWeightNote,
   keepSignedIn, firestoreMemoryOnly, settleOrTimeout, signOutConfirmNeeded, SIGN_OUT_WAIT_MS, armoryLookupBlocked,
 } from "../js/logic.js";
 
@@ -56,10 +56,13 @@ test("shareItemFields drops serials, notes, location, and arm ids", () => {
   assert.equal(row.caliber, "");
   assert.equal(row.parent, "parent");
   assert.equal(row.name, "Pouch");
-  const priced = shareItemFields({ id: "g", name: "Rifle", category: "Firearms", caliber: "5.56", value: 1, paid: 2 }, "", true);
+  const priced = shareItemFields({ id: "g", name: "Rifle", category: "Firearms", caliber: "5.56", value: 1, paid: 2, valueSource: "manual" }, "", true);
   assert.equal(priced.caliber, "5.56");
   assert.equal(priced.value, 1);
   assert.equal(priced.serial, undefined);
+  const stale = shareItemFields({ id: "g2", name: "Rifle", category: "Firearms", value: 400, priceSource: "market", paid: 9 }, "", true);
+  assert.equal(stale.value, 0);
+  assert.equal(stale.paid, 9);
 });
 
 test("decideAccess denies an empty allowlist, strangers, and unverified email", () => {
@@ -270,6 +273,64 @@ test("price search and sale links skip firearms, ammunition, and the parts that 
   assert.equal(saleRestricted({ category: "Misc", name: "Upper receiver" }), false);
   assert.equal(saleRestricted({ category: "Misc", name: "Pack frame" }), false);
   assert.equal(saleRestricted(null), false);
+  const caught = [
+    ["Cleaning & Maintenance", "Suppressor"],
+    ["Cases & Bags", "Silencer"],
+    ["NVG & Optics", "AR-15 lower"],
+    ["Holsters & Slings", "Glock 19 pistol"],
+    ["Misc", "Glock 19"],
+    ["Misc", "Sig P365"],
+    ["Misc", "Remington 870"],
+    ["Misc", "M&P 15"],
+    ["Misc", "suppresor"],
+    ["Misc", "SiCo"],
+    ["Misc", "Dead Air"],
+    ["Misc", "Can"],
+    ["Misc", "solvent trap"],
+    ["Misc", "80 lower"],
+    ["Misc", "receiver"],
+    ["Misc", "FCU"],
+    ["Misc", "12 gauge"],
+    ["Misc", "124 grain"],
+    ["Misc", "6.5 Creedmoor"],
+    ["Misc", "45 ACP"],
+    ["Misc", "Blazer Brass 9"],
+  ];
+  caught.forEach(([category, name]) => assert.equal(saleRestricted({ category, name }), true, name + " in " + category));
+  const allowed = [
+    ["Lights & Lasers", "Pistol light"],
+    ["NVG & Optics", "rifle scope"],
+    ["Packs & Bags", "internal frame pack"],
+    ["Cleaning & Maintenance", "Otis 9mm cleaning kit"],
+    ["Misc", "Window frame"],
+    ["Mags & Ammo Storage", "PMAG 30"],
+    ["Mags & Ammo Storage", "PMAG 30 5.56"],
+    ["Mags & Ammo Storage", "5.56 magazine"],
+    ["Mags & Ammo Storage", "Glock 19 magazine"],
+    ["Misc", "Jerry can"],
+    ["Misc", "can opener"],
+  ];
+  allowed.forEach(([category, name]) => assert.equal(saleRestricted({ category, name }), false, name + " in " + category));
+});
+
+test("a looked-up price on a restricted item is not an insured value", () => {
+  const leftover = { category: "Firearms", name: "Rifle", value: 800, priceSource: "market", retailNew: 900, priceDate: "2026-01-01" };
+  assert.equal(countedValue(leftover), 0);
+  assert.equal(countedValue({ category: "Firearms", name: "Rifle", value: 800, valueSource: "manual" }), 800);
+  assert.equal(countedValue({ category: "Pouches", name: "Admin pouch", value: 40, priceSource: "market" }), 40);
+  assert.equal(csvExportField(leftover, "retailNew"), "");
+  assert.equal(csvExportField(leftover, "priceSource"), "");
+  assert.equal(csvExportField(leftover, "priceDate"), "");
+  assert.equal(csvExportField(leftover, "value"), "");
+  assert.equal(csvExportField({ category: "Firearms", name: "Rifle", value: 800, valueSource: "manual", retailNew: 1, priceSource: "manual", priceDate: "2026-01-01" }, "value"), 800);
+  assert.equal(csvExportField({ category: "Pouches", name: "Admin pouch", retailNew: 50, priceSource: "market", priceDate: "2026-02-02" }, "retailNew"), 50);
+});
+
+test("a restricted weight note drops store names and links", () => {
+  assert.equal(publicWeightNote("Maker spec https://www.amazon.com/dp/1 via Amazon"), "Maker spec via");
+  assert.equal(publicWeightNote("Brownells listing, www.brownells.com"), "listing");
+  assert.equal(publicWeightNote("Local test weight"), "Local test weight");
+  assert.equal(publicWeightNote("Primary Arms page"), "page");
 });
 
 test("keep-signed-in off uses a memory cache and sign-out confirms only when a save is still pending", async () => {

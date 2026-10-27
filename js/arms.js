@@ -25,18 +25,18 @@ function fmtD(d){return d?fmtDate(d):""}
 function renderArms(){
   const v=$("armsView");if(!v)return;
   const secs=ARM_KEYS.map(k=>({k,rows:armRows(k)}));
-  const n=secs.reduce((a,s)=>a+s.rows.length,0),val=secs.reduce((a,s)=>a+s.rows.reduce((b,i)=>b+(+i.value||0)*(+i.qty||1),0),0);
+  const n=secs.reduce((a,s)=>a+s.rows.length,0),val=secs.reduce((a,s)=>a+s.rows.reduce((b,i)=>b+GearLogic.countedValue(i)*(+i.qty||1),0),0);
   const noSer=secs.reduce((a,s)=>a+s.rows.filter(i=>!i.serial&&s.k!=="KN").length,0);
   v.innerHTML=`<div class="vhead"><div><h2>Arms Room</h2><p>Serial numbers and records for your guns, suppressors, optics, lights, lasers and knives, for insurance and theft reports. Only you can see this when signed in.</p></div>
     <div class="vbtns"><button class="btn ghost" type="button" data-arm="ser">${showSer?"Hide serials":"Show serials"}</button><button class="btn ghost" type="button" data-arm="import">Import record</button><button class="btn ghost" type="button" data-arm="print">Print record</button><button class="btn" type="button" data-arm="new" id="armAdd">+ Add</button></div></div>
   <section class="stats armsStats"><div class="stat"><b>${noSer}</b><span>Missing serial</span></div><div class="stat"><b>${n}</b><span>On record</span></div><div class="stat"><b>${money(val)}</b><span>Value</span></div><div class="stat"><b>${(()=>{const pd=secs.reduce((a,s)=>a+s.rows.reduce((b,i)=>b+(+i.paid||0)*(+i.qty||1),0),0);return pd?money(pd):"—"})()}</b><span>What I paid</span></div></section>
-  ${n?secs.filter(s=>s.rows.length).map(s=>{const sv=s.rows.reduce((b,i)=>b+(+i.value||0)*(+i.qty||1),0);
+  ${n?secs.filter(s=>s.rows.length).map(s=>{const sv=s.rows.reduce((b,i)=>b+GearLogic.countedValue(i)*(+i.qty||1),0);
     return `<section class="group"><div class="ghead"><h3>${esc(ARM[s.k].label)}</h3><span>${s.rows.length}${sv?` · ${money(sv)}`:""}</span></div>
     ${s.rows.map(i=>{const on=itemById(i.mountedOn);const sub=[i.brand,i.armType,i.caliber,on?"on "+on.name:i.setupOn].filter(Boolean).join(" · ");
       return `<button type="button" class="row armRow" data-id="${esc(i.id)}"><span class="qty armId">${esc(i.armId||"—")}</span>
       <span class="nm">${esc(i.name)}${i.nick?` <span class="tag">${esc(i.nick)}</span>`:""}<small>${esc(sub)}</small></span>
       <span class="ser">${s.k==="KN"?esc(i.markings||""):i.serial?`<span class="mono">${esc(maskSer(i.serial))}</span>`:`<span class="tag">no serial</span>`}</span>
-      <span class="val">${i.value?money((+i.value)*(+i.qty||1)):"—"}</span></button>`}).join("")}</section>`}).join("")
+      <span class="val">${GearLogic.countedValue(i)?money(GearLogic.countedValue(i)*(+i.qty||1)):"—"}</span></button>`}).join("")}</section>`}).join("")
   :`<div class="empty"><b>Nothing on record yet</b>Tap <em>Import record</em> to bring in your serial number Word file, or add guns and gear with a serial.</div>`}
   ${armImport?importSheet():""}`;
   syncLock();
@@ -226,16 +226,16 @@ function buildArmsPrint(){
   const m2=n=>"$"+(+n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   const on=i=>{const g=itemById(i.mountedOn);return g?(g.armId||g.name):(i.setupOn||"")};
   const COLS={
-    FA:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Type / Action","armType"],["Caliber","caliber"],["Serial Number","serial"],["Bbl. Len.","bbl"],["Date Acquired",i=>fmtD(i.acquired)],["Acquired From","acquiredFrom"],["Value",i=>i.value?m2(i.value):""],["Notes / Status","notes"]],
-    SU:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Caliber","caliber"],["Serial Number","serial"],["Form","nfaForm"],["Stamp / Approval",i=>fmtD(i.stampDate)],["Dealer","acquiredFrom"],["Mount / Adapter","adapter"],["Value",i=>i.value?m2(i.value):""],["Notes / Status","notes"]],
-    OP:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Type","armType"],["Serial Number","serial"],["Mount","armMount"],["Mounted On",on],["Date Acquired",i=>fmtD(i.acquired)],["Value",i=>i.value?m2(i.value):""],["Notes / Status","notes"]],
-    WL:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Output","armType"],["Serial Number","serial"],["Battery","battery"],["Mounted On",on],["Date Acquired",i=>fmtD(i.acquired)],["Value",i=>i.value?m2(i.value):""],["Notes / Status","notes"]],
-    LA:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Type","armType"],["Serial Number","serial"],["Mounted On",on],["Date Acquired",i=>fmtD(i.acquired)],["Value",i=>i.value?m2(i.value):""],["Notes / Status","notes"]],
-    KN:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Type","armType"],["Blade Len.","bladeLen"],["Steel","steel"],["Handle","handle"],["Markings","markings"],["Date Acquired",i=>fmtD(i.acquired)],["Value",i=>i.value?m2(i.value):""],["Notes / Status","notes"]],
+    FA:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Type / Action","armType"],["Caliber","caliber"],["Serial Number","serial"],["Bbl. Len.","bbl"],["Date Acquired",i=>fmtD(i.acquired)],["Acquired From","acquiredFrom"],["Value",i=>{const n=GearLogic.countedValue(i);return n?m2(n):""}],["Notes / Status","notes"]],
+    SU:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Caliber","caliber"],["Serial Number","serial"],["Form","nfaForm"],["Stamp / Approval",i=>fmtD(i.stampDate)],["Dealer","acquiredFrom"],["Mount / Adapter","adapter"],["Value",i=>{const n=GearLogic.countedValue(i);return n?m2(n):""}],["Notes / Status","notes"]],
+    OP:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Type","armType"],["Serial Number","serial"],["Mount","armMount"],["Mounted On",on],["Date Acquired",i=>fmtD(i.acquired)],["Value",i=>{const n=GearLogic.countedValue(i);return n?m2(n):""}],["Notes / Status","notes"]],
+    WL:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Output","armType"],["Serial Number","serial"],["Battery","battery"],["Mounted On",on],["Date Acquired",i=>fmtD(i.acquired)],["Value",i=>{const n=GearLogic.countedValue(i);return n?m2(n):""}],["Notes / Status","notes"]],
+    LA:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Type","armType"],["Serial Number","serial"],["Mounted On",on],["Date Acquired",i=>fmtD(i.acquired)],["Value",i=>{const n=GearLogic.countedValue(i);return n?m2(n):""}],["Notes / Status","notes"]],
+    KN:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Type","armType"],["Blade Len.","bladeLen"],["Steel","steel"],["Handle","handle"],["Markings","markings"],["Date Acquired",i=>fmtD(i.acquired)],["Value",i=>{const n=GearLogic.countedValue(i);return n?m2(n):""}],["Notes / Status","notes"]],
   };
   const sum=[];
   let h=`<div class="ph"><div><h1>PERSONAL PROPERTY RECORD</h1><small>Firearms, NFA items, accessories &amp; edged weapons · ${esc(cloudUser?.email||"")} · Printed ${new Date().toLocaleDateString()}</small></div><small>PRIVATE — CONTAINS SERIAL NUMBERS</small></div>`;
-  ARM_KEYS.forEach(k=>{const rows=armRows(k);if(!rows.length)return;const tot=rows.reduce((a,i)=>a+(+i.value||0)*(+i.qty||1),0);sum.push([ARM[k].label,rows.length,tot]);
+  ARM_KEYS.forEach(k=>{const rows=armRows(k);if(!rows.length)return;const tot=rows.reduce((a,i)=>a+GearLogic.countedValue(i)*(+i.qty||1),0);sum.push([ARM[k].label,rows.length,tot]);
     const cols=COLS[k];
     h+=`<table><thead><tr class="cat"><th colspan="${cols.length}">${esc(ARM[k].label.toUpperCase())} — ${rows.length} · ${m2(tot)}</th></tr><tr>${cols.map(c=>`<th>${esc(c[0])}</th>`).join("")}</tr></thead><tbody>`+
       rows.map(i=>`<tr>${cols.map(c=>`<td${c[0]==="Value"?' class="r"':""}>${esc(typeof c[1]==="function"?c[1](i):(i[c[1]]||""))}</td>`).join("")}</tr>`).join("")+`</tbody></table>`});
