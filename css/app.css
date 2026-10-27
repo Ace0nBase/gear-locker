@@ -286,6 +286,7 @@ body::before{content:"";position:fixed;top:0;left:0;right:0;height:env(safe-area
   .toast{top:calc(12px + env(safe-area-inset-top,0px));bottom:auto}
   .wrap{padding-bottom:calc(100px + env(safe-area-inset-bottom,0px))}
   #rangeView{padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
+  #loansView{padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
   .drill .you{padding-right:76px}
 }
 .row{-webkit-tap-highlight-color:transparent}
@@ -378,7 +379,8 @@ body.sharing .fab,body.sharing .toast{display:none!important}
 .lockBox{display:flex;flex-direction:column;gap:12px;align-items:center;width:100%;max-width:320px;text-align:center}
 .lockBox h1{margin:0;font-family:var(--display);text-transform:uppercase}.lockBox p{margin:0;color:var(--muted)}
 .lockBox .btn,.lockBox input{width:100%}.lockBox img{border-radius:16px}
-.lockBox .link{appearance:none;background:none;border:0;box-shadow:none;color:var(--accent);text-decoration:underline;font-size:.9rem;padding:10px 4px;min-height:44px;cursor:pointer}
+.lockBox .link{appearance:none;background:none;border:0;box-shadow:none;color:#80603A;text-decoration:underline;font-size:.9rem;padding:10px 4px;min-height:44px;cursor:pointer}
+@media (prefers-color-scheme:dark){.lockBox .link{color:var(--accent)}}
 body.appLocked .wrap,body.appLocked .sheetWrap,body.appLocked .fab,body.appLocked .toast{visibility:hidden!important}
 body.appCover::after{content:"";position:fixed;inset:0;z-index:600;background:var(--bg)}
 .secBlock{border-top:1px solid var(--line);padding:12px 0;display:flex;flex-direction:column;gap:8px}.secBlock h3{margin:0}
@@ -457,6 +459,7 @@ body.appCover::after{content:"";position:fixed;inset:0;z-index:600;background:va
   #loansView .loanOut td:nth-child(2){grid-column:1/-1;grid-row:2}
   #loansView .loanOut td:nth-child(3){grid-column:1;grid-row:3}
   #loansView .loanOut td:nth-child(4){grid-column:2;grid-row:3;justify-self:end;text-align:right}
+  #loansView .loanOut tr{padding-right:76px}
   #loansView .loanOut td:nth-child(6){grid-column:1/-1;grid-row:4;margin-top:6px}
   #loansView .loanOut td[data-k]::before{content:attr(data-k);display:block;font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
   #loansView .loanOut .pill{white-space:nowrap}
