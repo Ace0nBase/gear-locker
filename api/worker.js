@@ -3,10 +3,14 @@
 // Header: Authorization: Bearer <Firebase ID token from the signed-in app user>
 // Returns { results: [{ id, ok, retailNew, usedLow, usedHigh, value, weightOz, priceNote, weightNote, sources }] }
 // Secrets (set in the Cloudflare dashboard, never in code): ANTHROPIC_API_KEY
-// Vars (dashboard, kept across deploys): FIREBASE_PROJECT, ALLOWED_ORIGINS, MODEL, FALLBACK_MODEL, ALLOWED_EMAILS (required), DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS
-// An empty ALLOWED_EMAILS list turns lookups off for everyone, including the owner.
+// Vars (dashboard, kept across deploys): FIREBASE_PROJECT, ALLOWED_ORIGINS, MODEL, FALLBACK_MODEL,
+// ALLOWED_EMAILS (used only when BETA_ONLY=true), BETA_ONLY, REVIEW_EMAILS, REVIEW_DAILY_LIMIT,
+// DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS, FREE_SPEND_CAP_USD,
+// PLAN_LIMIT_FREE, PLAN_LIMIT_PRO, PLAN_LIMIT_ARMORY, SPEND_INPUT_PER_MILLION, SPEND_OUTPUT_PER_MILLION, SPEND_SEARCH_EACH,
+// FIREBASE_API_KEY (web API key, used only to delete the signed-in account)
+// A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, parseAllowlist, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked } from "../js/logic.js";
+import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, usageDecision, accountDeletePlan, deleteRevenueCatCustomer } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -140,26 +144,30 @@ async function callClaude(env, model, it) {
       body: JSON.stringify({ model, max_tokens: 4000, tools, messages }),
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.status = r.status; throw e; }
+    if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.status = r.status; e.usage = usageFromResponse(data); throw e; }
     return data;
   };
   const all = [];
   let data;
+  let usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
   // A long web-search turn can pause; continue it until Claude finishes.
   for (let i = 0; i < 4; i++) {
-    data = await send();
+    try { data = await send(); }
+    catch (e) { e.usage = addUsage(usage, e.usage); throw e; }
+    usage = addUsage(usage, usageFromResponse(data));
     all.push(...(data.content || []));
     if (data.stop_reason !== "pause_turn") break;
     messages.push({ role: "assistant", content: data.content });
   }
-  if (findJson(textOf(data.content))) return { content: all, final: data.content };
+  if (findJson(textOf(data.content))) return { content: all, final: data.content, usage };
   // No JSON yet: ask once more for just the JSON, from what it already found.
   const prev = (data.content || []).filter(b => b.type !== "text" || (b.text || "").trim());
   if (prev.length) messages.push({ role: "assistant", content: prev });
   messages.push({ role: "user", content: "Now reply with ONLY the JSON object described above, filled in from what you found. No other text." });
   data = await send();
+  usage = addUsage(usage, usageFromResponse(data));
   all.push(...(data.content || []));
-  return { content: all, final: data.content };
+  return { content: all, final: data.content, usage };
 }
 function parseResult(data) {
   const blocks = data.content || [];
@@ -194,13 +202,14 @@ Reply with ONLY this JSON object:
       { type: "text", text: ask } ] }] }),
   });
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data?.error?.message || ("Claude API error " + r.status));
+  const usage = usageFromResponse(data);
+  if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
   const t = textOf(data.content);
   const m = t.replace(/```(?:json)?/gi, "").match(/\{[\s\S]*\}/);
-  if (!m) throw new Error("Couldn't read the photo answer");
+  if (!m) { const e = new Error("Couldn't read the photo answer"); e.usage = usage; throw e; }
   const j = JSON.parse(m[0]);
   const s = (v, n) => String(v || "").slice(0, n);
-  return { name: s(j.name, 80), brand: s(j.brand, 80), category: photoIdSuggestion(j.category, CATS), color: s(j.color, 40), confidence: ["high","medium","low"].includes(j.confidence) ? j.confidence : "low", summary: s(j.summary, 200) };
+  return { result: { name: s(j.name, 80), brand: s(j.brand, 80), category: photoIdSuggestion(j.category, CATS), color: s(j.color, 40), confidence: ["high","medium","low"].includes(j.confidence) ? j.confidence : "low", summary: s(j.summary, 200) }, usage };
 }
 
 /* ---------- wishlist price watch ---------- */
@@ -225,49 +234,106 @@ function priceRouteBlocked(it) {
   return saleRestricted(it || {});
 }
 async function dealCheck(env, w) {
-  if (priceRouteBlocked(w)) return { price: null, where: "", url: "", condition: "", note: "", date: localDay(new Date()), hit: false };
+  if (saleRestricted(w)) return { price: null, where: "", url: "", condition: "", note: "", date: localDay(new Date()), hit: false, usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 } };
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
   const messages = [{ role: "user", content: dealPrompt(w) }];
-  let data, all = [];
+  let data, all = [], usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
   for (let i = 0; i < 3; i++) {
     const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
       headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 3000, tools, messages }) });
     data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data?.error?.message || ("Claude API error " + r.status));
+    usage = addUsage(usage, usageFromResponse(data));
+    if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
     all.push(...(data.content || []));
     if (data.stop_reason !== "pause_turn") break;
     messages.push({ role: "assistant", content: data.content });
   }
   const j = pickModelAnswer(textOf(data.content));
   const settled = settleDeal(w, j);
-  return { ...settled, date: localDay(new Date()), hit: settled.price != null && settled.price <= +w.target };
+  return { ...settled, date: localDay(new Date()), hit: settled.price != null && settled.price <= +w.target, usage };
 }
 const WKEY = uid => "w:" + uid;
 async function readCount(env, key) { return +(await env.WATCH.get(key)) || 0; }
-async function chargeAi(env, uid, add) {
+const SPEND_KEY = "spend:free";
+async function chargeAi(env, user, add) {
   if (!env.WATCH) return { ok: false, status: 503, error: "Lookups are paused until price-alert storage is connected." };
-  const limit = +(env.DAILY_AI_LIMIT || 40);
-  const key = quotaKey(uid, new Date());
-  const used = await readCount(env, key);
-  const d = chargeDecision(used, add, limit);
-  if (!d.ok) return { ok: false, status: 429, error: `Daily lookup limit reached (${d.limit} per day). Try again tomorrow.`, remaining: d.remaining, limit: d.limit };
-  await env.WATCH.put(key, String(d.next), { expirationTtl: 48 * 3600 });
-  return { ok: true, remaining: d.remaining, limit: d.limit };
-}
-async function chargeScheduledAlert(env, uid) {
-  if (!env.WATCH) return { ok: false };
-  const aiLimit = +(env.DAILY_AI_LIMIT || 40);
-  const alertLimit = +(env.ALERT_DAILY_CAP || 6);
+  const uid = user && user.sub;
+  const email = String((user && user.email) || "");
+  const review = isReviewEmail(email, env);
+  const plan = lookupPlan(user, env);
   const day = new Date();
+  const dailyLimit = review ? reviewDailyLimit(env) : +(env.DAILY_AI_LIMIT || 40);
+  const monthLimit = planMonthlyLimit(plan, env);
   const qk = quotaKey(uid, day);
-  const ak = alertQuotaKey(uid, day);
-  const ai = chargeDecision(await readCount(env, qk), 1, aiLimit);
+  const mk = monthQuotaKey(uid, day);
+  const dailyUsed = await readCount(env, qk);
+  const monthUsed = review ? 0 : await readCount(env, mk);
+  const spent = review || plan !== "free" ? 0 : (+(await env.WATCH.get(SPEND_KEY)) || 0);
+  const d = usageDecision({
+    plan, review, dailyUsed, dailyAdd: add, dailyLimit, monthUsed, monthAdd: add, monthLimit,
+    spentMicro: spent, capMicro: spendCapMicro(env),
+  });
+  if (!d.ok) return d;
+  await env.WATCH.put(qk, String(d.daily.next), { expirationTtl: 48 * 3600 });
+  if (d.month) await env.WATCH.put(mk, String(d.month.next), { expirationTtl: 40 * 24 * 3600 });
+  return d;
+}
+async function noteFreeSpend(env, user, usage) {
+  try {
+    if (!env.WATCH || !usage) return;
+    const email = String((user && user.email) || "");
+    if (isReviewEmail(email, env) || lookupPlan(user, env) !== "free") return;
+    const add = estimateSpendMicro(usage, spendRates(env));
+    if (add <= 0) return;
+    const cur = +(await env.WATCH.get(SPEND_KEY)) || 0;
+    await env.WATCH.put(SPEND_KEY, String(cur + add));
+  } catch { /* the answer is already in hand */ }
+}
+async function chargeScheduledAlert(env, user) {
+  if (!env.WATCH) return { ok: false, status: 503, error: "Price alerts aren't switched on yet" };
+  const uid = user && (user.sub || user.uid);
+  const alertLimit = +(env.ALERT_DAILY_CAP || 6);
+  const ak = alertQuotaKey(uid, new Date());
   const al = chargeDecision(await readCount(env, ak), 1, alertLimit);
-  if (!ai.ok || !al.ok) return { ok: false };
-  await env.WATCH.put(qk, String(ai.next), { expirationTtl: 48 * 3600 });
+  if (!al.ok) return { ok: false, status: 429, error: "You've used today's price alerts. Try again tomorrow." };
+  const bill = await chargeAi(env, { sub: uid, email: user && user.email }, 1);
+  if (!bill.ok) return bill;
   await env.WATCH.put(ak, String(al.next), { expirationTtl: 48 * 3600 });
   return { ok: true };
+}
+async function deleteUserKv(env, uid) {
+  if (!env.WATCH || !uid) return;
+  const plan = accountDeletePlan(uid);
+  for (const key of plan.kvExact) await env.WATCH.delete(key);
+  for (const prefix of plan.kvPrefixes) {
+    let cursor;
+    do {
+      const page = await env.WATCH.list({ prefix, cursor });
+      for (const k of page.keys || []) await env.WATCH.delete(k.name);
+      cursor = page.list_complete ? null : page.cursor;
+    } while (cursor);
+  }
+}
+async function deleteAuthUser(env, idToken) {
+  const key = env.FIREBASE_API_KEY;
+  if (!key) return { ok: false, error: "Your gear was removed, but the sign-in is still here. Try again after account deletion is switched on." };
+  let data = {};
+  try {
+    const r = await fetch("https://identitytoolkit.googleapis.com/v1/accounts:delete?key=" + encodeURIComponent(key), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ idToken }),
+    });
+    data = await r.json().catch(() => ({}));
+    if (r.ok) return { ok: true };
+  } catch {
+    return { ok: false, error: "Your gear was removed, but the sign-in is still here. Try again." };
+  }
+  const msg = String(data?.error?.message || "");
+  if (/USER_NOT_FOUND/i.test(msg)) return { ok: true };
+  if (/CREDENTIAL_TOO_OLD|TOKEN_EXPIRED|INVALID_ID_TOKEN/i.test(msg)) return { ok: false, error: "Enter your password again, then delete the account." };
+  return { ok: false, error: "Your gear was removed, but the sign-in is still here. Try again." };
 }
 async function listWatchUsers(env) {
   const users = [];
@@ -285,16 +351,23 @@ async function listWatchUsers(env) {
 }
 async function runDueWatches(env, budget) {
   if (!env.WATCH) return 0;
-  const allow = parseAllowlist(env.ALLOWED_EMAILS);
   const gapMs = Math.max(1, +(env.MIN_ALERT_GAP_HOURS || 20)) * 3600e3;
-  const aiLimit = +(env.DAILY_AI_LIMIT || 40);
   const alertLimit = +(env.ALERT_DAILY_CAP || 6);
   const now = new Date();
+  const spent = +(await env.WATCH.get(SPEND_KEY)) || 0;
   const eligible = [];
   for (const u of await listWatchUsers(env)) {
     const email = String(u.rec.email || "").toLowerCase();
-    if (!allow.includes(email) || u.rec.emailVerified === false) continue;
-    if (await readCount(env, quotaKey(u.uid, now)) >= aiLimit) continue;
+    if (!email || u.rec.emailVerified === false) continue;
+    const access = decideAccess({ email, email_verified: true }, env);
+    if (!access.ok) continue;
+    const who = { sub: u.uid, email };
+    const review = isReviewEmail(email, env);
+    const plan = lookupPlan(who, env);
+    const dailyLimit = review ? reviewDailyLimit(env) : +(env.DAILY_AI_LIMIT || 40);
+    if (await readCount(env, quotaKey(u.uid, now)) >= dailyLimit) continue;
+    if (!review && await readCount(env, monthQuotaKey(u.uid, now)) >= planMonthlyLimit(plan, env)) continue;
+    if (!review && plan === "free" && spent >= spendCapMicro(env)) continue;
     if (await readCount(env, alertQuotaKey(u.uid, now)) >= alertLimit) continue;
     eligible.push(u);
   }
@@ -305,17 +378,21 @@ async function runDueWatches(env, budget) {
   for (const p of picked) {
     const u = eligible.find(x => x.uid === p.uid);
     const w = u && u.rec.list.find(x => x.id === p.watch.id);
-    if (!w || priceRouteBlocked(w)) continue;
-    if (!(await chargeScheduledAlert(env, u.uid)).ok) continue;
+    if (!w || saleRestricted(w)) continue;
+    const billed = await chargeScheduledAlert(env, { sub: u.uid, email: u.rec.email });
+    if (!billed.ok) continue;
     const wasHit = !!(w.best && w.best.hit);
     try {
       const b = await dealCheck(env, w);
+      const spentUsage = b.usage;
+      delete b.usage;
       w.best = b; w.lastErr = "";
+      await noteFreeSpend(env, { sub: u.uid, email: u.rec.email }, spentUsage);
       if (!wasHit && b.hit && u.rec.push) {
         const sent = await sendWebPush(u.rec.push, JSON.stringify({ title: "Price alert", body: `${w.name} is at or under your target`, url: "./?tab=wish" }), env);
         if (sent && sent.gone) delete u.rec.push;
       }
-    } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); }
+    } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await noteFreeSpend(env, { sub: u.uid, email: u.rec.email }, e.usage); }
     w.lastCheck = new Date().toISOString();
     dirty.set(u.key, u.rec);
     done++;
@@ -334,18 +411,19 @@ Reply with ONLY this JSON:
 {"none": false, "battery": "e.g. CR123A, CR2032, AA, built-in rechargeable", "count": number, "life": "short note, e.g. '50,000 hrs at setting 8' or '1.5 hrs on high'", "swapMonths": number}`;
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
   const messages = [{ role: "user", content: ask }];
-  let data;
+  let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
   for (let i = 0; i < 3; i++) {
     const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 2000, tools, messages }) });
     data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data?.error?.message || ("Claude API error " + r.status));
+    usage = addUsage(usage, usageFromResponse(data));
+    if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
     if (data.stop_reason !== "pause_turn") break;
     messages.push({ role: "assistant", content: data.content });
   }
   const t = textOf(data.content).replace(/```(?:json)?/gi, "");
   let j = null; for (const c of (t.match(/\{[\s\S]*?\}/g) || []).reverse()) { try { const o = JSON.parse(c); if ("battery" in o || "none" in o) { j = o; break } } catch {} }
-  if (!j) throw new Error("couldn't read the battery answer");
-  return { none: !!j.none, battery: String(j.battery || "").slice(0, 40), count: Math.max(0, Math.min(8, +j.count || 1)), life: String(j.life || "").slice(0, 80), swapMonths: Math.max(0.25, Math.min(60, +j.swapMonths || 6)) };
+  if (!j) { const e = new Error("couldn't read the battery answer"); e.usage = usage; throw e; }
+  return { result: { none: !!j.none, battery: String(j.battery || "").slice(0, 40), count: Math.max(0, Math.min(8, +j.count || 1)), life: String(j.life || "").slice(0, 80), swapMonths: Math.max(0.25, Math.min(60, +j.swapMonths || 6)) }, usage };
 }
 
 /* ---------- PACE plan builder ---------- */
@@ -384,11 +462,12 @@ Reply with ONLY this JSON:
  "gaps":["short things they're missing, e.g. 'No one else is licensed: get them GMRS radios or ham licenses'"]}`;
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
   const messages = [{ role: "user", content: ask }];
-  let data;
+  let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
   for (let i = 0; i < 4; i++) {
     const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 4000, ...(b.location ? { tools } : {}), messages }) });
     data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data?.error?.message || ("Claude API error " + r.status));
+    usage = addUsage(usage, usageFromResponse(data));
+    if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
     if (data.stop_reason !== "pause_turn") break;
     messages.push({ role: "assistant", content: data.content });
   }
@@ -397,14 +476,16 @@ Reply with ONLY this JSON:
     messages.push({ role: "assistant", content: data.content.filter(x => x.type !== "text" || (x.text || "").trim()) });
     messages.push({ role: "user", content: "Now reply with ONLY the JSON object described above. No other text." });
     const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: env.MODEL || "claude-haiku-5-5", max_tokens: 3000, messages }) });
-    data = await r.json().catch(() => ({})); j = findJson(textOf(data.content || []), ["steps"]);
+    data = await r.json().catch(() => ({}));
+    usage = addUsage(usage, usageFromResponse(data));
+    j = findJson(textOf(data.content || []), ["steps"]);
   }
-  if (!j || typeof j.steps !== "object") throw new Error("couldn't read the plan, try again");
+  if (!j || typeof j.steps !== "object") { const e = new Error("couldn't read the plan, try again"); e.usage = usage; throw e; }
   const S = (v, n) => String(v ?? "").slice(0, n);
   const nf = (Array.isArray(j.newFreqs) ? j.newFreqs : []).slice(0, 8).map(f => ({ name: S(f.name, 30), rx: S(f.rx, 12), duplex: ["+", "-"].includes(f.duplex) ? f.duplex : "", offset: S(f.offset, 8), tone: S(f.tone, 8), mode: ["FM", "NFM", "AM"].includes(f.mode) ? f.mode : "FM", service: S(f.service, 20), notes: S(f.notes, 120), source: S(f.source, 60) })).filter(f => +f.rx > 0);
   const steps = {};
   for (const k of ["p", "a", "c", "e"]) { const s = j.steps[k] || {}; steps[k] = { method: S(s.method, 30), f: Number.isInteger(s.f) && s.f >= 0 && s.f < b.freqs.length ? s.f : null, n: Number.isInteger(s.n) && s.n >= 0 && s.n < nf.length ? s.n : null, detail: S(s.detail, 200), when: S(s.when, 120) }; }
-  return { name: S(j.name, 40), summary: S(j.summary, 200), steps, checkin: S(j.checkin, 120), rally: S(j.rally, 160), codes: S(j.codes, 160), newFreqs: nf, gaps: (Array.isArray(j.gaps) ? j.gaps : []).slice(0, 6).map(g => S(g, 160)) };
+  return { result: { name: S(j.name, 40), summary: S(j.summary, 200), steps, checkin: S(j.checkin, 120), rally: S(j.rally, 160), codes: S(j.codes, 160), newFreqs: nf, gaps: (Array.isArray(j.gaps) ? j.gaps : []).slice(0, 6).map(g => S(g, 160)) }, usage };
 }
 async function lookupOne(env, it) {
   const clean = {
@@ -414,26 +495,28 @@ async function lookupOne(env, it) {
     arm: String(it.arm || "").slice(0, 8), caliber: String(it.caliber || "").slice(0, 40), load: String(it.load || "").slice(0, 80),
     weightOnly: it.weightOnly === true || it.weightOnly === "true",
   };
-  if (!clean.name) return { id: clean.id, ok: false, error: "missing name" };
-  if (priceRouteBlocked(clean)) clean.weightOnly = true;
-  if (clean.kind === "wish" && priceRouteBlocked(clean)) return { id: clean.id, ok: false, error: "Price search skips this item." };
-  let data;
-  try { data = await callClaude(env, env.MODEL || "claude-haiku-5-5", clean); }
+  if (!clean.name) return { id: clean.id, ok: false, error: "missing name", usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 } };
+  if (clean.kind === "wish" && saleRestricted(clean)) return { id: clean.id, ok: false, error: "Price search skips this item.", usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 } };
+  let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
+  try { data = await callClaude(env, env.MODEL || "claude-haiku-5-5", clean); usage = addUsage(usage, data.usage); }
   catch (e) {
-    if (env.FALLBACK_MODEL && (e.status === 400 || e.status === 404)) data = await callClaude(env, env.FALLBACK_MODEL, clean);
-    else throw e;
+    usage = addUsage(usage, e.usage);
+    if (env.FALLBACK_MODEL && (e.status === 400 || e.status === 404)) {
+      try { data = await callClaude(env, env.FALLBACK_MODEL, clean); usage = addUsage(usage, data.usage); }
+      catch (e2) { e2.usage = addUsage(usage, e2.usage); throw e2; }
+    } else { e.usage = usage; throw e; }
   }
   const parsed = parseResult(data);
   const settled = settleLookup(clean, parsed);
-  if (!settled.apply) throw new Error("couldn't read the lookup answer, try again");
+  if (!settled.apply) { const e = new Error("couldn't read the lookup answer, try again"); e.usage = usage; throw e; }
   const { apply, ...fields } = settled;
-  if (priceRouteBlocked(clean) || clean.weightOnly) {
-    return { id: clean.id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: fields.weightOz, priceNote: "", weightNote: publicWeightNote(parsed.weightNote), sources: [] };
+  if (saleRestricted(clean) || clean.weightOnly) {
+    return { id: clean.id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: fields.weightOz, priceNote: "", weightNote: publicWeightNote(parsed.weightNote), sources: [], usage };
   }
-  return { id: clean.id, ok: true, ...fields };
+  return { id: clean.id, ok: true, ...fields, usage };
 }
 
-const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
+const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", BETA_ONLY: "", REVIEW_EMAILS: "", REVIEW_DAILY_LIMIT: "8", FREE_SPEND_CAP_USD: "25", PLAN_LIMIT_FREE: "40", PLAN_LIMIT_PRO: "400", PLAN_LIMIT_ARMORY: "2000", SPEND_INPUT_PER_MILLION: "1", SPEND_OUTPUT_PER_MILLION: "5", SPEND_SEARCH_EACH: "0.01", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
 const ROUTES = ["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/watch/push", "/battery", "/ammo", "/pace"];
 
 export default {
@@ -443,7 +526,21 @@ export default {
     const h = cors(env, req);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: h });
     const url = new URL(req.url);
-    if (url.pathname === "/" || url.pathname === "/health") return json({ ok: true, service: "gear-locker-api", access: "allowlist" }, 200, h);
+    if (url.pathname === "/" || url.pathname === "/health") return json({ ok: true, service: "gear-locker-api", access: betaOnly(env) ? "allowlist" : "verified" }, 200, h);
+    if (url.pathname === "/account/delete") {
+      if (req.method !== "POST") return json({ error: "Not found" }, 404, h);
+      const idToken = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+      let accountUser;
+      try { accountUser = await verifyFirebaseToken(idToken, env.FIREBASE_PROJECT); }
+      catch { return json({ error: "Please sign in again." }, 401, h); }
+      try {
+        await deleteUserKv(env, accountUser.sub);
+        deleteRevenueCatCustomer(env, accountUser.sub);
+        const removed = await deleteAuthUser(env, idToken);
+        if (!removed.ok) return json({ error: removed.error }, 502, h);
+        return json({ ok: true }, 200, h);
+      } catch { return json({ error: "Couldn't finish deleting the account. Try again." }, 502, h); }
+    }
     if (!ROUTES.includes(url.pathname) || req.method !== "POST") return json({ error: "Not found" }, 404, h);
     if (!env.ANTHROPIC_API_KEY) return json({ error: "Lookup service isn't set up yet (missing API key)." }, 503, h);
 
@@ -500,9 +597,14 @@ export default {
           return json(pub(), 200, h);
         }
         if (w.lastCheck && Date.now() - Date.parse(w.lastCheck) < 10 * 60e3) return json(pub(), 200, h);
-        const bill = await chargeScheduledAlert(env, user.sub);
-        if (!bill.ok) return json({ error: `Daily lookup limit reached (${+(env.DAILY_AI_LIMIT || 40)} per day). Try again tomorrow.` }, 429, h);
-        try { w.best = await dealCheck(env, w); w.lastErr = ""; } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); }
+        const bill = await chargeScheduledAlert(env, user);
+        if (!bill.ok) return json({ error: bill.error || "Try again tomorrow." }, bill.status || 429, h);
+        try {
+          const b = await dealCheck(env, w);
+          await noteFreeSpend(env, user, b.usage);
+          delete b.usage;
+          w.best = b; w.lastErr = "";
+        } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await noteFreeSpend(env, user, e.usage); }
         w.lastCheck = new Date().toISOString();
         await saveRec();
         return json(pub(), 200, h);
@@ -514,17 +616,25 @@ export default {
       const b = { location: S(body.location, 80), scenario: S(body.scenario, 60), distance: S(body.distance, 60), terrain: S(body.terrain, 60), cell: S(body.cell, 40), grid: S(body.grid, 40), people: S(body.people, 80), licensed: S(body.licensed, 80), duration: S(body.duration, 40), notes: S(body.notes, 300),
         devices: (Array.isArray(body.devices) ? body.devices : []).slice(0, 12).map(d => S(d, 40)),
         freqs: (Array.isArray(body.freqs) ? body.freqs : []).slice(0, 150).map((f, i) => ({ i, name: S(f.name, 30), rx: S(f.rx, 12), duplex: S(f.duplex, 6), offset: S(f.offset, 8), tx: S(f.tx, 12), tone: S(f.tone, 16), mode: S(f.mode, 4), service: S(f.service, 24), group: S(f.group, 30), notes: S(f.notes, 80), onRadio: !!f.onRadio })) };
-      const paceBill = await chargeAi(env, user.sub, 1);
+      const paceBill = await chargeAi(env, user, 1);
       if (!paceBill.ok) return json({ error: paceBill.error }, paceBill.status, h);
-      try { return json({ result: await paceBuild(env, b) }, 200, h); }
-      catch (e) { return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      try {
+        const built = await paceBuild(env, b);
+        await noteFreeSpend(env, user, built.usage);
+        return json({ result: built.result }, 200, h);
+      }
+      catch (e) { await noteFreeSpend(env, user, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/ammo") return json({ error: "Ammo price search is turned off." }, 410, h);
     if (url.pathname === "/battery") {
-      const battBill = await chargeAi(env, user.sub, 1);
+      const battBill = await chargeAi(env, user, 1);
       if (!battBill.ok) return json({ error: battBill.error }, battBill.status, h);
-      try { return json({ result: await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) }) }, 200, h); }
-      catch (e) { return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      try {
+        const found = await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) });
+        await noteFreeSpend(env, user, found.usage);
+        return json({ result: found.result }, 200, h);
+      }
+      catch (e) { await noteFreeSpend(env, user, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/identify") {
       const subject = {
@@ -534,18 +644,25 @@ export default {
       if (photoIdHardBlocked(subject)) return json({ error: "Photo ID isn't available for this record." }, 403, h);
       const img = String(body.image || "");
       if (!img || img.length > 2_800_000 || !/^[A-Za-z0-9+/=]+$/.test(img.slice(0, 200))) return json({ error: "Send a photo (JPEG, under 2 MB)" }, 400, h);
-      const idBill = await chargeAi(env, user.sub, 1);
+      const idBill = await chargeAi(env, user, 1);
       if (!idBill.ok) return json({ error: idBill.error }, idBill.status, h);
-      try { return json({ result: await identify(env, img, String(body.hint || "").slice(0, 80)) }, 200, h); }
-      catch (e) { return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      try {
+        const found = await identify(env, img, String(body.hint || "").slice(0, 80));
+        await noteFreeSpend(env, user, found.usage);
+        return json({ result: found.result }, 200, h);
+      }
+      catch (e) { await noteFreeSpend(env, user, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     const max = +(env.MAX_ITEMS || 4);
     const items = Array.isArray(body.items) ? body.items.slice(0, max) : [];
     if (!items.length) return json({ error: "No items" }, 400, h);
-    const lookBill = await chargeAi(env, user.sub, items.length);
+    const lookBill = await chargeAi(env, user, items.length);
     if (!lookBill.ok) return json({ error: lookBill.error }, lookBill.status, h);
 
-    const results = await Promise.all(items.map(it => lookupOne(env, it).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160) }))));
+    const packed = await Promise.all(items.map(it => lookupOne(env, it).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160), usage: e.usage }))));
+    let spentUsage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
+    const results = packed.map(r => { spentUsage = addUsage(spentUsage, r.usage); const copy = { ...r }; delete copy.usage; return copy; });
+    await noteFreeSpend(env, user, spentUsage);
     const firstErr = results.find(r => !r.ok)?.error;
     if (results.every(r => !r.ok)) return json({ error: firstErr || "Lookup failed", results }, 502, h);
     return json({ results }, 200, h);

@@ -1,5 +1,5 @@
 /* ---------- cloud sync (Firebase) ---------- */
-var cloudUser=null,fsdb=null,cloudUnsubs=[],pushed={},pushTimer=null,kitsPushed="",cloudReady=new Set(),firstLoad=true;
+var cloudUser=null,fsdb=null,cloudUnsubs=[],pushed={},pushTimer=null,kitsPushed="",cloudReady=new Set(),firstLoad=true,accountDeleting=false;
 var CLOUD_COLS=["items",...COLS];
 var clean=o=>JSON.parse(JSON.stringify(o));
 var inflightWrites={}, kitsServerAt="";
@@ -10,7 +10,7 @@ var arrOf=c=>c==="items"?all:db[c];
 function setArr(c,a){if(c==="items")all=a;else db[c]=a}
 function userRef(){return fsdb.collection("users").doc(cloudUser.uid)}
 function setSync(state,txt){const d=$("syncDot");d.className="sync "+state;d.title=txt||"";}
-function pushCloudSoon(){if(!cloudUser||!fsdb)return Promise.resolve();clearTimeout(pushTimer);var delay=GearLogic.cloudWriteDelay(typeof navigator!=="undefined"?navigator.onLine:true);if(delay===0)return pushCloud();pushTimer=setTimeout(pushCloud,delay);return Promise.resolve()}
+function pushCloudSoon(){if(accountDeleting||!cloudUser||!fsdb)return Promise.resolve();clearTimeout(pushTimer);var delay=GearLogic.cloudWriteDelay(typeof navigator!=="undefined"?navigator.onLine:true);if(delay===0)return pushCloud();pushTimer=setTimeout(pushCloud,delay);return Promise.resolve()}
 function offlineNow(){return typeof navigator!=="undefined"&&navigator.onLine===false}
 function seenLocal(pairs){
   var unsubs=[];
@@ -31,7 +31,7 @@ function seenLocal(pairs){
 }
 function commitDurable(commit,pairs){if(!offlineNow())return commit;var watch=seenLocal(pairs);return Promise.race([commit,watch.promise]).finally(()=>watch.cancel())}
 async function pushCloud(){
-  if(!cloudUser||cloudReady.size<CLOUD_COLS.length+1)return;
+  if(accountDeleting||!cloudUser||cloudReady.size<CLOUD_COLS.length+1)return;
   const ops=[];
   CLOUD_COLS.forEach(c=>arrOf(c).forEach(r=>{const k=c+"/"+r.id;if(r.id&&pushed[k]!==r.updatedAt){ops.push([c,r]);pushed[k]=r.updatedAt}}));
   const kj=JSON.stringify(kits);const kitsChanged=kj!==kitsPushed;
@@ -167,6 +167,53 @@ async function beginSignOut(){
   try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch{}
   location.reload();
 }
+async function deleteDocRefs(refs){
+  const list=(refs||[]).filter(Boolean);
+  for(let i=0;i<list.length;i+=400){
+    const b=fsdb.batch();
+    list.slice(i,i+400).forEach(ref=>b.delete(ref));
+    await b.commit();
+  }
+}
+async function deleteMyAccount(password){
+  const u=firebase.auth().currentUser;
+  if(!u||!fsdb||!cloudUser)throw new Error("Sign in again, then delete the account.");
+  if(!window.LOOKUP_URL)throw new Error("Account deletion needs a connection. Try again when you're online.");
+  try{await u.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(u.email,password))}
+  catch(e){
+    const code=e&&e.code||"";
+    if(code==="auth/wrong-password"||code==="auth/invalid-credential"||code==="auth/invalid-login-credentials")throw new Error("That password doesn't match. Your account is still here.");
+    if(code==="auth/too-many-requests")throw new Error("Too many tries. Wait a few minutes. Your account is still here.");
+    throw new Error("Couldn't confirm your password. Your account is still here.");
+  }
+  accountDeleting=true;
+  clearTimeout(pushTimer);pushTimer=null;
+  cloudUnsubs.forEach(x=>{try{x()}catch(err){}});cloudUnsubs=[];
+  if(typeof lendUnsubs!=="undefined"&&lendUnsubs){lendUnsubs.forEach(x=>{try{x()}catch(err){}});lendUnsubs.length=0}
+  try{
+    for(const c of GearLogic.USER_COLLECTIONS){
+      const snap=await userRef().collection(c).get();
+      await deleteDocRefs(snap.docs.map(d=>d.ref));
+    }
+    const shareIds=Object.values((kits&&kits._shares)||{}).map(sid=>sid&&fsdb.collection("shares").doc(String(sid)));
+    await deleteDocRefs(shareIds);
+    const lends=await fsdb.collection("lends").where(GearLogic.accountDeletePlan(u.uid).lendField,"==",u.uid).get();
+    await deleteDocRefs(lends.docs.map(d=>d.ref));
+  }catch(e){
+    accountDeleting=false;
+    throw new Error("Couldn't finish removing your gear. Your sign-in is still here. Try again.");
+  }
+  let tok;
+  try{tok=await u.getIdToken(true)}catch(e){throw new Error("Your gear was removed, but the sign-in is still here. Try again.")}
+  let res;
+  try{res=await fetch(window.LOOKUP_URL.replace(/\/$/,"")+"/account/delete",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+tok},body:"{}"})}
+  catch(e){throw new Error("Your gear was removed, but the sign-in is still here. Try again.")}
+  if(!res.ok){const j=await res.json().catch(()=>({}));throw new Error(j.error||"Your gear was removed, but the sign-in is still here. Try again.")}
+  try{GearLogic.clearUserLocal(localStorage)}catch(e){}
+  try{await firebase.auth().signOut()}catch(e){}
+  try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch(e){}
+  location.reload();
+}
 async function startCloud(){
   if(!initFirebase())return;
   $("gate").hidden=false;$("gateFields").hidden=true;$("gateMsg").textContent="Opening War Box…";
@@ -240,20 +287,7 @@ async function qaStorageCheckRun(){
   else toast("Storage check failed. Another account or a signed-out check was not blocked ("+otherCode+" / "+signedOutCode+").",6000);
 }
 }
-var APP_VERSION="39";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
-var swReloadPending=false;
-function showUpdateToast(){
-  const el=$("toast");if(!el)return;
-  el.replaceChildren();
-  const note=document.createElement("span");
-  note.textContent=toast.q?toast.q+" · War Box updated. ":"War Box updated. ";
-  el.append(note);
-  const b=document.createElement("button");
-  b.type="button";b.textContent="Reload";
-  b.addEventListener("click",()=>{swReloadPending=false;location.reload()});
-  el.append(b);el.hidden=false;clearTimeout(toast.t);
-}
-function finishSwReload(){if(!swReloadPending)return;swReloadPending=false;location.reload()}
+var APP_VERSION="32";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 if("serviceWorker" in navigator&&GearLogic.serviceWorkerAllowed(location,window.GEAR_QA)){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const poke=()=>{if(reg.waiting)reg.waiting.postMessage({type:"skip-waiting"});reg.update().catch(()=>{})};reg.addEventListener("updatefound",()=>{const worker=reg.installing;if(worker)worker.addEventListener("statechange",()=>{if(worker.state==="installed")poke()})});document.addEventListener("visibilitychange",()=>{if(!document.hidden)poke()});setInterval(poke,20*60e3);poke()}).catch(()=>{});

@@ -23,7 +23,7 @@ async function cleanGapWishes(){const old=staleGapWishes();if(!old.length)return
 /* 2) sign out wipes this device's copy, including the offline cache */
 
 
-/* 3) app lock: Face ID / Touch ID / passcode, or a PIN, on this device */
+/* 3) app lock: Face ID / fingerprint, or a PIN, on this device */
 var LOCKK="gearLocker.lock";
 var lockCfg=()=>{try{return JSON.parse(localStorage.getItem(LOCKK)||"{}")}catch{return {}}};
 var setLockCfg=c=>{try{localStorage.setItem(LOCKK,JSON.stringify(c))}catch{}};
@@ -35,7 +35,7 @@ async function bioCheck(id){await navigator.credentials.get({publicKey:{challeng
 var locked=false,hiddenAt=0;
 function showLock(){const c=lockCfg();if(!c.mode||c.mode==="off")return;locked=true;document.body.classList.add("appLocked");const el=$("lockScreen");
   el.innerHTML=`<div class="lockBox"><img src="icon-192.png" alt="" width="72" height="72"><h1>War Box</h1><p>Privacy screen</p>
-    ${c.mode==="bio"?`<button class="btn" type="button" id="lkBio">Show with Face ID</button>`:""}
+    ${c.mode==="bio"?`<button class="btn" type="button" id="lkBio">Show with Face ID / fingerprint</button>`:""}
     ${c.pinHash?`<input id="lkPin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN" maxlength="12"><button class="btn${c.mode==="bio"?" ghost":""}" type="button" id="lkPinGo">Show with PIN</button>`:""}
     <div class="err" id="lkErr"></div><button class="link" type="button" id="lkOut">Forgot? Sign out and sign back in</button></div>`;
   el.hidden=false;
@@ -45,7 +45,7 @@ function showLock(){const c=lockCfg();if(!c.mode||c.mode==="off")return;locked=t
 }
 function unlock(){locked=false;document.body.classList.remove("appLocked");$("lockScreen").hidden=true;$("lockScreen").innerHTML=""}
 var lockFails=0;
-async function tryBio(){const c=lockCfg();try{await bioCheck(c.credId);unlock()}catch{$("lkErr").textContent="Face ID didn't go through."+(c.pinHash?" Use your PIN.":" Tap to try again.")}}
+async function tryBio(){const c=lockCfg();try{await bioCheck(c.credId);unlock()}catch{$("lkErr").textContent="Face ID / fingerprint didn't go through."+(c.pinHash?" Use your PIN.":" Tap to try again.")}}
 async function tryPin(){const c=lockCfg();const v=$("lkPin").value;if(!v)return;if(lockFails>=5&&Date.now()<(c.waitUntil||0)){$("lkErr").textContent="Too many tries. Wait a minute.";return}
   if(await pinHash(v,c.salt)===c.pinHash){lockFails=0;unlock()}else{lockFails++;$("lkPin").value="";$("lkErr").textContent="Wrong PIN.";if(lockFails>=5){c.waitUntil=Date.now()+60e3;setLockCfg(c)}}}
 document.addEventListener("visibilitychange",()=>{const c=lockCfg();if(!c.mode||c.mode==="off")return;
@@ -56,10 +56,10 @@ window.addEventListener("pagehide",()=>{const c=lockCfg();if(c.mode&&c.mode!=="o
 
 /* 4) security screen */
 async function openSecurity(){const c=lockCfg();const bio=await canBio();const sh=Object.entries(kits._shares||{});const lends=L("loans").filter(x=>x.friendEmail&&!x.returned);
-  const el=$("secSheet");el.querySelector(".panel").innerHTML=`<h2>Security</h2>
+  const el=$("secSheet");el.querySelector(".panel").innerHTML=`<h2>Settings</h2>
    <div class="secBlock"><h3>Privacy screen on this device</h3>
     <p class="hint">This hides your gear from someone looking over your shoulder. It is not a lock on your account. Your sign-in password and your phone's own passcode are what protect your data. The screen also blanks in the app switcher.</p>
-    <div class="f"><label for="sLock">Privacy screen</label><select id="sLock"><option value="off">Off</option>${bio?`<option value="bio"${c.mode==="bio"?" selected":""}>Face ID / Touch ID (+ PIN backup)</option>`:""}<option value="pin"${c.mode==="pin"?" selected":""}>PIN</option></select></div>
+    <div class="f"><label for="sLock">Privacy screen</label><select id="sLock"><option value="off">Off</option>${bio?`<option value="bio"${c.mode==="bio"?" selected":""}>Face ID / fingerprint (+ PIN backup)</option>`:""}<option value="pin"${c.mode==="pin"?" selected":""}>PIN</option></select></div>
     <div class="f"><label for="sAfter">Turn the privacy screen on when I leave the app for</label><select id="sAfter">${[[0,"Right away"],[60,"1 minute"],[300,"5 minutes"],[900,"15 minutes"]].map(([v,l])=>`<option value="${v}"${(+c.after||0)===v?" selected":""}>${l}</option>`).join("")}</select></div>
     <div class="f" id="sPinBox"><label for="sPin">${c.pinHash?"New PIN (leave blank to keep the current one)":"PIN (6–12 digits)"}</label><input id="sPin" type="password" inputmode="numeric" autocomplete="new-password" maxlength="12"></div>
     <button class="btn" type="button" data-sec="lock">Save privacy screen</button></div>
@@ -70,20 +70,24 @@ async function openSecurity(){const c=lockCfg();const bio=await canBio();const s
     <div class="f"><label for="sOld">Current password</label><input id="sOld" type="password" autocomplete="current-password"></div>
     <div class="f"><label for="sNew">New password (12+ characters)</label><input id="sNew" type="password" autocomplete="new-password" minlength="12"></div>
     <button class="btn ghost" type="button" data-sec="pw">Change password</button><div class="err" id="sErr"></div></div>
-   <div class="secBlock"><h3>Price &amp; weight lookups</h3><label class="keep"><input type="checkbox" id="sPriv"${kits._settings?.privateArms?" checked":""}> Never send Armory items (guns, suppressors, and gear mounted on a weapon) to lookups</label><p class="hint">Lookups send an item's name, brand, category, color, condition, caliber, load, and Armory type. Photo ID sends the photo to the AI lookup service. They do not send your notes, serial numbers, or where you store it. With this on, Armory records and gear mounted on a weapon are skipped entirely, including photo ID and battery lookup. Headlamps, flashlights, and binoculars still look up. Firearms, suppressors, frames, ammunition, Magazines, and Triggers &amp; Parts get a weight-only lookup with no prices or stores.</p></div>
+   <div class="secBlock"><h3>Price &amp; weight lookups</h3><label class="keep"><input type="checkbox" id="sPriv"${kits._settings?.privateArms?" checked":""}> Never send Armory items (guns, suppressors, and gear mounted on a weapon) to lookups</label><p class="hint">Lookups send an item's name, brand, category, color, condition, caliber, load, and Armory type. Photo ID sends the photo to the AI lookup service. They do not send your notes, serial numbers, or where you store it. With this on, Armory records and gear mounted on a weapon are skipped entirely, including photo ID and battery lookup. Headlamps, flashlights, and binoculars still look up. Firearms, suppressors, frames, ammunition, Magazines &amp; Belts, and Triggers &amp; Parts get a weight-only lookup with no prices or stores.</p></div>
+   ${accountBlock()}
    <div class="secBlock"><h3>About</h3><p class="hint">War Box is a private inventory for the gear you already own. Operated by Six Ridge Labs LLC. getwarbox.com · support@getwarbox.com</p></div>
    <div class="actions"><span class="spacer"></span><button class="btn" type="button" data-sec="close">Done</button></div>`;
   el.hidden=false;syncLock();const tog=()=>{$("sPinBox").hidden=$("sLock").value==="off"};$("sLock").onchange=tog;tog();}
 $("secSheet").addEventListener("click",async e=>{const b=e.target.closest("[data-sec]");if(!b)return;const a=b.dataset.sec;
-  if(a==="close"){$("secSheet").hidden=true;syncLock();return}
+  if(a==="close"){delStep=0;$("secSheet").hidden=true;syncLock();return}
   if(a==="lock"){const mode=$("sLock").value;const after=+$("sAfter").value;const pin=$("sPin").value.trim();const c=lockCfg();
     if(mode==="off"){setLockCfg({});toast("Privacy screen is off");openSecurity();return}
     if(pin&&!GearLogic.pinLengthOk(pin)){toast("PIN must be 6–12 digits");return}
-    if(!pin&&!c.pinHash){toast(mode==="bio"?"Set a backup PIN too, in case Face ID fails":"Enter a PIN");return}
+    if(!pin&&!c.pinHash){toast(mode==="bio"?"Set a backup PIN too, in case Face ID / fingerprint fails":"Enter a PIN");return}
     if(!pin&&c.pinHash)toast("The PIN already saved on this device still works until you change it",4000)
     const n={...c,mode,after};if(pin){n.salt=b64(crypto.getRandomValues(new Uint8Array(16)));n.pinHash=await pinHash(pin,n.salt)}
-    if(mode==="bio"&&!c.credId){try{n.credId=await bioRegister()}catch(err){toast("Face ID setup was cancelled",4000);return}}
-    setLockCfg(n);toast(mode==="bio"?"Privacy screen uses Face ID, with the PIN as backup":"Privacy screen uses a PIN");openSecurity();return}
+    if(mode==="bio"&&!c.credId){try{n.credId=await bioRegister()}catch(err){toast("Face ID / fingerprint setup was cancelled",4000);return}}
+    setLockCfg(n);toast(mode==="bio"?"Privacy screen uses Face ID / fingerprint, with the PIN as backup":"Privacy screen uses a PIN");openSecurity();return}
+  if(a==="del1"){delStep=1;openSecurity();return}
+  if(a==="delback"){delStep=0;openSecurity();return}
+  if(a==="del2"){const pass=$("delPass")&&$("delPass").value||"";const btn=$("delGo");const err=$("delErr");if(!pass){if(err)err.textContent="Re-enter your password.";return}if(btn){btn.disabled=true;btn.textContent="Deleting…"}try{await deleteMyAccount(pass)}catch(e){if(err)err.textContent=e&&e.message||"Couldn't delete the account. Try again.";if(btn){btn.disabled=false;btn.textContent="Delete my account"}}return}
   if(a==="unshare"||a==="unshareall"){const keys=a==="unshare"?[b.dataset.k]:Object.keys(kits._shares||{});const m={...(kits._shares||{})};
     for(const k of keys){try{await fsdb.collection("shares").doc(m[k]).delete()}catch{}delete m[k]}kits={...kits,_shares:m};await persist();toast(keys.length>1?"All share links are off":"Link turned off");openSecurity();return}
   if(a==="pw"){const o=$("sOld").value,nw=$("sNew").value;$("sErr").textContent="";if(nw.length<12){$("sErr").textContent="Use at least 12 characters.";return}
@@ -91,8 +95,10 @@ $("secSheet").addEventListener("click",async e=>{const b=e.target.closest("[data
     catch(err){$("sErr").textContent=err.code==="auth/wrong-password"||err.code==="auth/invalid-credential"?"Current password is wrong.":err.code==="auth/weak-password"?"Pick a stronger password.":err.message}return}
 });
 $("secSheet").addEventListener("change",async e=>{if(e.target.id==="sPriv"){kits={...kits,_settings:{...(kits._settings||{}),privateArms:e.target.checked}};await persist();if(typeof syncPhotoId==="function")syncPhotoId();if(curTab==="maint")renderExtra();toast(e.target.checked?"Armory items won't be sent to lookups":"Armory items can be looked up")}});
-$("secSheet").querySelector(".sheetBg").addEventListener("click",()=>{$("secSheet").hidden=true;syncLock()});
-$("acct").insertAdjacentHTML("beforeend",`<button type="button" id="secBtn">Security</button>`);$("secBtn").onclick=openSecurity;
+$("secSheet").querySelector(".sheetBg").addEventListener("click",()=>{delStep=0;$("secSheet").hidden=true;syncLock()});
+$("acct").insertAdjacentHTML("beforeend",`<button type="button" id="secBtn">Settings</button>`);$("secBtn").onclick=openSecurity;
+var delStep=0;
+function accountBlock(){if(delStep===1)return `<div class="secBlock" id="acctDel"><h3>Account</h3><p>Re-enter your password to permanently delete this account, your gear, your share links, and loans you created. This can't be undone.</p><div class="f"><label for="delPass">Re-enter your password</label><input id="delPass" type="password" autocomplete="current-password"></div><div class="err" id="delErr"></div><div class="actions"><button class="btn ghost" type="button" data-sec="delback">Cancel</button><button class="btn" type="button" data-sec="del2" id="delGo">Delete my account</button></div></div>`;return `<div class="secBlock" id="acctDel"><h3>Account</h3><p class="hint">Delete account removes your gear, your share links, and loans you created. Your sign-in is removed too. This can't be undone.</p><button class="btn ghost" type="button" data-sec="del1">Delete account</button></div>`}
 // honor "never send Armory items" in every lookup path
 {const _rl=runLookups;runLookups=function(ids,quiet){if(kits._settings?.privateArms){const skip=ids.filter(id=>{const i=itemById(id);return i&&GearLogic.armoryLookupBlocked(true,GearLogic.armorySubject(i,i.mountedOn&&itemById(i.mountedOn)))});ids=ids.filter(id=>!skip.includes(id));if(skip.length&&!quiet)toast(`Skipped ${skip.length} Armory item${skip.length>1?"s":""} (private)`)}return _rl(ids,quiet)}}
 
@@ -154,7 +160,7 @@ $("acct").insertAdjacentHTML("beforeend",`<button type="button" id="inviteBtn">I
   // the invite button now sends the join link
   const inv=$("inviteBtn");
   if(inv)inv.onclick=async()=>{const url=withAppQuery({join:"1"});
-    const text="I'm inviting you to War Box so we can each track our gear and loans. Tap the link to make an account, then confirm your email or loans won't show up. Price lookups only work for emails the owner has added. Then in Safari tap Share, then Add to Home Screen:";
+    const text="I'm inviting you to War Box so we can each track our gear and loans. Tap the link to make an account, then confirm your email or loans won't show up. Confirm your email to use price lookups. Then in Safari tap Share, then Add to Home Screen:";
     try{if(navigator.share){await navigator.share({title:"War Box",text,url});return}}catch(e){if(e.name==="AbortError")return}
     try{await navigator.clipboard.writeText(text+" "+url);toast("Invite copied. Paste it in a text.")}catch{prompt("Copy this invite:",text+" "+url)}};
   if(!JOIN||SHARE_ID)return;
@@ -162,7 +168,7 @@ $("acct").insertAdjacentHTML("beforeend",`<button type="button" id="inviteBtn">I
   // sign-up mode: "Create account" becomes the main button
   function joinMode(preview){
     form.classList.add("joinMode");
-    $("gateMsg").innerHTML=preview?"":"You've been invited. Make an account and confirm your email. Price checks stay with the person who invited you unless they add your email.";
+    $("gateMsg").innerHTML=preview?"":"You've been invited. Make an account and confirm your email to use price lookups.";
     $("gNew").className="btn";$("gIn").className="btn ghost";
     const row=$("gNew").parentElement;row.prepend($("gNew"));
     $("gPass").setAttribute("autocomplete","new-password");$("gPass").placeholder="12+ characters";
@@ -179,7 +185,7 @@ $("acct").insertAdjacentHTML("beforeend",`<button type="button" id="inviteBtn">I
   function showPreview(){
     const gate=$("gate");gate.hidden=false;gate.classList.add("previewing");$("gateFields").hidden=false;joinMode(true);
     form.querySelectorAll("input,button").forEach(x=>{if(x.id!=="gBack")x.disabled=true});
-    $("gateMsg").innerHTML=`<span class="pvNote">You're signed in as <b>${esc(cloudUser.email)}</b>, so this link normally opens War Box. This is what your friend sees:</span><br>You've been invited. Make an account and confirm your email. Price checks stay with the person who invited you unless they add your email.`;
+    $("gateMsg").innerHTML=`<span class="pvNote">You're signed in as <b>${esc(cloudUser.email)}</b>, so this link normally opens War Box. This is what your friend sees:</span><br>You've been invited. Make an account and confirm your email to use price lookups.`;
     form.insertAdjacentHTML("beforeend",`<button class="btn" type="button" id="gBack" style="margin-top:12px;width:100%">Back to War Box</button>`);
     $("gBack").onclick=()=>{gate.hidden=true;gate.classList.remove("previewing");$("gBack").remove();form.querySelectorAll("input,button").forEach(x=>x.disabled=false);$("gateMsg").textContent="Sign in to open War Box."};
   }

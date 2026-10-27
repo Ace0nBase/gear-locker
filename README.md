@@ -60,3 +60,20 @@ Use made-up emails. Do not type a real account.
 10. Sign out. The sign-in screen should be back, and the inventory should not stay on screen.
 
 If the page says emulator mode will not open the live locker, you are not on localhost or the local file pointed at the live project. Fix that before continuing. Do not remove the block.
+
+## Lookup service settings
+
+The lookup worker reads these from the Cloudflare dashboard. Leave a setting blank to keep the default. Do not put secret values in this file.
+
+- `BETA_ONLY` — set to `true` to require `ALLOWED_EMAILS` again. Leave it unset so any confirmed email can use lookups.
+- `ALLOWED_EMAILS` — comma-separated emails. Used only when `BETA_ONLY` is true. An empty list then turns lookups off.
+- `REVIEW_EMAILS` — comma-separated emails that skip the free spend cap and the monthly lookup quota. They still have a small daily limit.
+- `REVIEW_DAILY_LIMIT` — daily lookups for those review emails. Default 8.
+- `FREE_SPEND_CAP_USD` — estimated free-tier spend that pauses free lookups. Default 25.
+- `PLAN_LIMIT_FREE`, `PLAN_LIMIT_PRO`, `PLAN_LIMIT_ARMORY` — lookups per UTC month. Defaults 40, 400, and 2000. Paid plans are placeholders until billing is connected. Every account is on the free plan today.
+- `SPEND_INPUT_PER_MILLION`, `SPEND_OUTPUT_PER_MILLION`, `SPEND_SEARCH_EACH` — estimates used for the free spend counter. Defaults 1, 5, and 0.01.
+- `FIREBASE_API_KEY` — the same web API key already published with the site. The worker uses it only to delete a signed-in account. Set it in Cloudflare. Do not paste the key here.
+
+Account deletion also removes that person's price-alert entry and usage counters. RevenueCat is not connected, so there is no customer to delete yet.
+
+These existing limits stay: `DAILY_AI_LIMIT` 40, `ALERT_DAILY_CAP` 6, `WATCH_BATCH` 6.

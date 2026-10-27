@@ -156,13 +156,25 @@ export function parseAllowlist(raw) {
   return String(raw || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
 }
 
+export function betaOnly(env) {
+  return /^(1|true|yes|on)$/i.test(String(env && env.BETA_ONLY || "").trim());
+}
+
+export function isReviewEmail(email, env) {
+  const list = parseAllowlist(env && env.REVIEW_EMAILS);
+  return list.includes(String(email || "").trim().toLowerCase());
+}
+
+// A confirmed email can use lookups. BETA_ONLY=true puts the allowlist back in front.
 export function decideAccess(user, env) {
-  const allow = parseAllowlist(env && env.ALLOWED_EMAILS);
   const email = String((user && user.email) || "").trim().toLowerCase();
-  if (!allow.length) return { ok: false, status: 403, error: "Lookups are turned off until the owner adds approved emails.", email };
-  if (!email || !allow.includes(email)) return { ok: false, status: 403, error: "Lookups are turned off for this account. Ask the owner to add your email.", email };
-  if (!user.email_verified) return { ok: false, status: 403, error: "Confirm your email first (check your inbox), then try again.", email };
-  return { ok: true, status: 200, error: "", email };
+  if (!user || !user.email_verified) return { ok: false, status: 403, error: "Confirm your email first (check your inbox), then try again.", email };
+  if (betaOnly(env)) {
+    const allow = parseAllowlist(env && env.ALLOWED_EMAILS);
+    if (!allow.length) return { ok: false, status: 403, error: "Lookups are turned off until the owner adds approved emails.", email };
+    if (!email || !allow.includes(email)) return { ok: false, status: 403, error: "Lookups are turned off for this account. Ask the owner to add your email.", email };
+  }
+  return { ok: true, status: 200, error: "", email, review: isReviewEmail(email, env) };
 }
 
 export function chargeDecision(used, add, limit) {
@@ -187,6 +199,123 @@ export function quotaKey(uid, date) {
 
 export function alertQuotaKey(uid, date) {
   return `a:${uid}:${utcDay(date)}`;
+}
+
+export function monthQuotaKey(uid, date) {
+  const d = date instanceof Date ? date : new Date(date || Date.now());
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return `m:${uid}:${y}-${m}`;
+}
+
+export const DEFAULT_PLAN_LIMITS = { free: 40, pro: 400, armory: 2000 };
+export const DEFAULT_REVIEW_DAILY_LIMIT = 8;
+export const DEFAULT_FREE_SPEND_CAP_USD = 25;
+export const DEFAULT_SPEND_RATES = { inputPerMillion: 1, outputPerMillion: 5, searchEach: 0.01 };
+
+function configuredNumber(raw, fallback) {
+  if (raw == null || raw === "") return fallback;
+  const n = +raw;
+  return isFinite(n) && n >= 0 ? n : fallback;
+}
+
+export function planMonthlyLimit(plan, env) {
+  const name = plan === "pro" || plan === "armory" ? plan : "free";
+  const keys = { free: "PLAN_LIMIT_FREE", pro: "PLAN_LIMIT_PRO", armory: "PLAN_LIMIT_ARMORY" };
+  return configuredNumber(env && env[keys[name]], DEFAULT_PLAN_LIMITS[name]);
+}
+
+export function reviewDailyLimit(env) {
+  return configuredNumber(env && env.REVIEW_DAILY_LIMIT, DEFAULT_REVIEW_DAILY_LIMIT);
+}
+
+export function spendCapMicro(env) {
+  return Math.round(configuredNumber(env && env.FREE_SPEND_CAP_USD, DEFAULT_FREE_SPEND_CAP_USD) * 1e6);
+}
+
+export function spendRates(env) {
+  return {
+    inputPerMillion: configuredNumber(env && env.SPEND_INPUT_PER_MILLION, DEFAULT_SPEND_RATES.inputPerMillion),
+    outputPerMillion: configuredNumber(env && env.SPEND_OUTPUT_PER_MILLION, DEFAULT_SPEND_RATES.outputPerMillion),
+    searchEach: configuredNumber(env && env.SPEND_SEARCH_EACH, DEFAULT_SPEND_RATES.searchEach),
+  };
+}
+
+// RevenueCat is not connected. Every account stays on the free plan until that lookup exists.
+export function lookupPlan() {
+  return "free";
+}
+
+export function usageFromResponse(data) {
+  const u = data && data.usage && typeof data.usage === "object" ? data.usage : {};
+  const tool = u.server_tool_use && typeof u.server_tool_use === "object" ? u.server_tool_use : {};
+  return {
+    input_tokens: Math.max(0, +u.input_tokens || 0),
+    output_tokens: Math.max(0, +u.output_tokens || 0),
+    web_search_requests: Math.max(0, +tool.web_search_requests || 0),
+  };
+}
+
+export function addUsage(a, b) {
+  const x = a || {};
+  const y = b || {};
+  return {
+    input_tokens: Math.max(0, +x.input_tokens || 0) + Math.max(0, +y.input_tokens || 0),
+    output_tokens: Math.max(0, +x.output_tokens || 0) + Math.max(0, +y.output_tokens || 0),
+    web_search_requests: Math.max(0, +x.web_search_requests || 0) + Math.max(0, +y.web_search_requests || 0),
+  };
+}
+
+// Micro-dollars (millionths of a dollar) so the KV counter stays a whole number.
+export function estimateSpendMicro(usage, rates) {
+  const u = usage || {};
+  const r = rates || DEFAULT_SPEND_RATES;
+  const input = Math.round((Math.max(0, +u.input_tokens || 0) / 1e6) * configuredNumber(r.inputPerMillion, DEFAULT_SPEND_RATES.inputPerMillion) * 1e6);
+  const output = Math.round((Math.max(0, +u.output_tokens || 0) / 1e6) * configuredNumber(r.outputPerMillion, DEFAULT_SPEND_RATES.outputPerMillion) * 1e6);
+  const search = Math.round(Math.max(0, +u.web_search_requests || 0) * configuredNumber(r.searchEach, DEFAULT_SPEND_RATES.searchEach) * 1e6);
+  return input + output + search;
+}
+
+export function freeSpendBlocked(spentMicro, capMicro, plan, review) {
+  if (review || plan !== "free") return false;
+  return Math.max(0, +spentMicro || 0) >= Math.max(0, +capMicro || 0);
+}
+
+const LOOKUPS_PAUSED = "Lookups are paused for now. You can keep using the rest of War Box.";
+const MONTHLY_FULL = "You've used this month's lookups. They reset next month.";
+
+export function usageDecision(opts) {
+  opts = opts || {};
+  const plan = opts.plan === "pro" || opts.plan === "armory" ? opts.plan : "free";
+  const review = !!opts.review;
+  if (freeSpendBlocked(opts.spentMicro, opts.capMicro, plan, review)) {
+    return { ok: false, status: 403, error: LOOKUPS_PAUSED, plan, review };
+  }
+  const daily = chargeDecision(opts.dailyUsed, opts.dailyAdd, opts.dailyLimit);
+  if (!daily.ok) {
+    return { ok: false, status: 429, error: `Daily lookup limit reached (${daily.limit} per day). Try again tomorrow.`, plan, review, daily };
+  }
+  if (review) return { ok: true, status: 200, error: "", plan, review, daily, month: null };
+  const month = chargeDecision(opts.monthUsed, opts.monthAdd, opts.monthLimit);
+  if (!month.ok) return { ok: false, status: 429, error: MONTHLY_FULL, plan, review, daily, month };
+  return { ok: true, status: 200, error: "", plan, review, daily, month };
+}
+
+export const USER_COLLECTIONS = ["items", "ammo", "sessions", "dope", "maint", "wish", "loans", "freqs", "pace", "meta"];
+
+export function accountDeletePlan(uid) {
+  const id = String(uid || "");
+  return {
+    collections: USER_COLLECTIONS.slice(),
+    lendField: "lender",
+    kvExact: [`w:${id}`],
+    kvPrefixes: [`q:${id}:`, `a:${id}:`, `m:${id}:`],
+  };
+}
+
+// RevenueCat is not set up. This is the hook that will delete the customer later.
+export function deleteRevenueCatCustomer() {
+  return { ok: true, skipped: true };
 }
 
 export function selectDueWatches(users, opts) {
@@ -1292,7 +1421,10 @@ export function radioTxLabel(freq) {
 const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
-  parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
+  parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
+  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_SPEND_RATES,
+  planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision,
+  USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, bulkLookupIds, singleLookupIds, applyMarketPrices,

@@ -66,13 +66,19 @@ test("shareItemFields drops serials, notes, location, and arm ids", () => {
   assert.equal(stale.paid, 9);
 });
 
-test("decideAccess denies an empty allowlist, strangers, and unverified email", () => {
+test("decideAccess lets a confirmed email in, and beta mode restores the allowlist", () => {
   const user = { email: "Owner@Example.com", email_verified: true };
-  assert.equal(decideAccess(user, { ALLOWED_EMAILS: "" }).ok, false);
-  assert.match(decideAccess(user, { ALLOWED_EMAILS: "" }).error, /approved emails/);
-  assert.equal(decideAccess(user, { ALLOWED_EMAILS: "friend@example.com" }).ok, false);
-  assert.equal(decideAccess({ email: "owner@example.com", email_verified: false }, { ALLOWED_EMAILS: "owner@example.com" }).ok, false);
-  assert.equal(decideAccess({ email: "owner@example.com", email_verified: true }, { ALLOWED_EMAILS: " owner@example.com , friend@example.com " }).ok, true);
+  assert.equal(decideAccess(user, { ALLOWED_EMAILS: "" }).ok, true);
+  assert.equal(decideAccess({ email: "stranger@example.com", email_verified: true }, {}).ok, true);
+  const unverified = decideAccess({ email: "owner@example.com", email_verified: false }, {});
+  assert.equal(unverified.ok, false);
+  assert.match(unverified.error, /Confirm your email/);
+  const beta = { BETA_ONLY: "true" };
+  assert.equal(decideAccess(user, { ...beta, ALLOWED_EMAILS: "" }).ok, false);
+  assert.match(decideAccess(user, { ...beta, ALLOWED_EMAILS: "" }).error, /approved emails/);
+  assert.equal(decideAccess(user, { ...beta, ALLOWED_EMAILS: "friend@example.com" }).ok, false);
+  assert.equal(decideAccess({ email: "owner@example.com", email_verified: false }, { ...beta, ALLOWED_EMAILS: "owner@example.com" }).ok, false);
+  assert.equal(decideAccess({ email: "owner@example.com", email_verified: true }, { ...beta, ALLOWED_EMAILS: " owner@example.com , friend@example.com " }).ok, true);
 });
 
 test("chargeDecision and quota keys stay inside the daily cap", () => {

@@ -48,15 +48,13 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device and the service worker cache is version 39", () => {
+test("sign-out clears this device and the service worker is version 32", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v39/);
-  assert.match(sw, /skip-waiting/);
-  assert.match(read("js/cloud.js"), /APP_VERSION="39"/);
-  assert.match(read("js/cloud.js"), /saveNeedsLookup/);
+  assert.match(sw, /war-box-v32/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="32"/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
   assert.match(manifest, /maskable-512\.png/);
@@ -202,8 +200,21 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("css/app.css"), /\.btn\{[^}]*min-height:44px/);
   assert.match(read("css/app.css"), /\.acct button\{[^}]*min-height:44px/);
   assert.match(read("css/app.css"), /\.detail \.lnk\{[^}]*min-height:44px/);
+  assert.doesNotMatch(read("js/security.js"), /Face ID(?! \/ fingerprint)/);
+  assert.match(read("js/security.js"), /Delete my account/);
+  assert.match(read("js/security.js"), /Re-enter your password/);
+  assert.match(read("js/cloud.js"), /\/account\/delete/);
+  assert.match(read("js/cloud.js"), /accountDeleting/);
+  assert.match(read("index.html"), /aria-label="Settings"/);
+  assert.match(read("README.md"), /BETA_ONLY/);
+  assert.match(read("README.md"), /FREE_SPEND_CAP_USD/);
+  assert.match(read("README.md"), /REVIEW_EMAILS/);
+  assert.match(read("README.md"), /FIREBASE_API_KEY/);
+  assert.doesNotMatch(read("README.md"), /AIza/);
+  assert.doesNotMatch(read("api/stub.js"), /https:\/\/identitytoolkit\.googleapis\.com/);
   const pkg = JSON.parse(read("package.json"));
   assert.equal(pkg.engines.node, ">=22");
+  assert.match(pkg.scripts.test, /test\/account\.test\.js/);
   assert.match(read("README.md"), /Node\.js 22 or newer/);
   assert.match(read("README.md"), /Java 21 or newer/);
 });

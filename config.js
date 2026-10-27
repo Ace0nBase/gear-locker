@@ -14,5 +14,5 @@ window.FIREBASE_CONFIG = {
 window.APP_CHECK_SITE_KEY = "";
 
 // Price + weight lookup service (Cloudflare Worker).
-// Lookups only run for emails the owner has approved, after that address is confirmed.
+// A confirmed email can use lookups. A beta allowlist is optional and stays off unless the lookup service asks for it.
 window.LOOKUP_URL = "https://gear-locker-api.ace0nbase.workers.dev";

@@ -5,11 +5,12 @@ import worker from "../api/worker.js";
 
 const src = fs.readFileSync(new URL("../api/worker.js", import.meta.url), "utf8");
 
-test("health says lookups use an allowlist", async () => {
-  const res = await worker.fetch(new Request("https://gear-locker-api.example/health"), {});
-  const body = await res.json();
-  assert.equal(res.status, 200);
-  assert.equal(body.access, "allowlist");
+test("health says a confirmed email can use lookups unless beta mode is on", async () => {
+  const open = await worker.fetch(new Request("https://gear-locker-api.example/health"), {});
+  assert.equal(open.status, 200);
+  assert.equal((await open.json()).access, "verified");
+  const beta = await worker.fetch(new Request("https://gear-locker-api.example/health"), { BETA_ONLY: "true" });
+  assert.equal((await beta.json()).access, "allowlist");
 });
 
 test("lookup without a sign-in token is rejected", async () => {
@@ -56,4 +57,7 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.match(src, /photoIdHardBlocked\(subject\)/);
   assert.match(src, /pricedPhotoCategories\(CATS\)/);
   assert.ok(src.indexOf("Do not look up a price") < src.indexOf("${PRICE_BACKSTOP}"));
+  const delAt = src.indexOf('url.pathname === "/account/delete"');
+  const keyAt = src.indexOf("if (!env.ANTHROPIC_API_KEY)");
+  assert.ok(delAt > 0 && keyAt > delAt);
 });
