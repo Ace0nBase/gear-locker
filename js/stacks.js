@@ -22,9 +22,9 @@ var normTxt=s=>String(s||"").toLowerCase().replace(/rounds?|rnds?|rd\b/g,"rd").r
 var twinKey=i=>[normTxt(i.name),normTxt(i.brand),i.category||"",normTxt(i.nick)].join("|");
 var colorOk=(a,b)=>!a.color||!b.color||normTxt(a.color)===normTxt(b.color);
 var isSpare=i=>!i.mountedOn&&!i.setupOn;
+var at=x=>x.mountedOn||"";
 function mergeIntoSpare(it){
   if(!it||it.deleted||it.serial||it.armId||onLoan(it.id))return it;
-  const at=x=>(x.mountedOn||"")+"|"+(x.mountedOn?"":String(x.setupOn||"").trim().toLowerCase());
   const twin=live().find(x=>x.id!==it.id&&at(x)===at(it)&&!x.serial&&!x.armId&&!onLoan(x.id)&&twinKey(x)===twinKey(it)&&colorOk(x,it));
   if(!twin)return it;
   twin.qty=(+twin.qty||0)+(+it.qty||0);if(!twin.color&&it.color)twin.color=it.color;if(!+twin.value&&+it.value)twin.value=it.value;if(!+twin.paid&&+it.paid)twin.paid=it.paid;if((twin.weight==null||twin.weight==="")&&it.weight!=null)twin.weight=it.weight;twin.updatedAt=now();
@@ -103,7 +103,6 @@ function migrateMags(){Object.keys(kits).forEach(id=>{const p=kits[id]?.picks;if
 function combineDuplicates(){let n=0;let again=true;while(again){again=false;for(const i of live()){if(i.serial||i.armId)continue;const r=mergeIntoSpare(i);if(r&&r.id!==i.id){n++;again=true;break}}}return n}
 {const _mf=maybeFirstPush;let done=false;maybeFirstPush=function(){_mf();if(!done&&cloudUser&&!firstLoad){done=true;setTimeout(async()=>{const n=combineDuplicates();if(n){render();await persist();toast(`Combined ${n} duplicate line${n>1?"s":""} into single counts`,4000)}},900)}}}
 {const _od3=openDetail;openDetail=function(i,quiet){_od3(i,quiet);if(!i||i.serial||i.armId)return;
-  const at=x=>(x.mountedOn||"")+"|"+(x.mountedOn?"":String(x.setupOn||"").trim().toLowerCase());
   const sameModel=x=>normTxt(x.name)===normTxt(i.name)&&normTxt(x.brand||"")===normTxt(i.brand||"");
   const near=live().filter(x=>x.id!==i.id&&at(x)===at(i)&&x.category===i.category&&sameModel(x)&&!x.serial&&!x.armId&&!onLoan(x.id));if(!near.length)return;
   const html=`<div class="sect"><h3>Same make and model</h3><p class="hint" style="margin:0 0 6px">These match. Combining adds their counts onto this line and removes the other line.</p><div class="links">${near.map(x=>`<button class="lnk" type="button" data-combine="${esc(x.id)}">Combine with ${esc(x.name)}${x.brand?` · ${esc(x.brand)}`:""}${x.color?` (${esc(x.color)})`:""} ×${+x.qty||1}</button>`).join("")}</div></div>`;

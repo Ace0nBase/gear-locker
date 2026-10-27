@@ -219,13 +219,6 @@ RENDER.wish=()=>{
 SAVE.wish=async d=>{if(!String(d.name||"").trim()){toast("Name the item");return}await upsertC("wish",d);ED.wish=null;toast("Saved");render()};
 DEL.wish=async d=>{await removeC("wish",d.id)};
 ACT.wish=async(act,b)=>{
-  if(act==="gaps"){
-    const gaps={};KITS.forEach(k=>{const {a}=coverage(k);k.req.forEach(s=>{if(!a[s])(gaps[s]=gaps[s]||[]).push(k.name)})});
-    let n=0,u=0;
-    for(const [s,ks] of Object.entries(gaps)){const ex=db.wish.find(w=>!w.deleted&&w.gapSlot===s&&w.status!=="got");
-      if(ex){ex.kitsNeeding=ks;ex.updatedAt=now();u++;continue}
-      db.wish.push({id:uid(),name:S[s][0],category:S[s][1][0],gapSlot:s,kitsNeeding:ks,priority:ks.length>=4?"High":ks.length>=2?"Medium":"Low",status:"want",notes:S[s][3],createdAt:now(),updatedAt:now()});n++}
-    await persist();toast(n?`Added ${n} kit gap${n>1?"s":""}`:"No new gaps to add");render();return}
   if(act==="check"||act==="checkall"){const list=(act==="check"?db.wish.filter(w=>w.id===b.dataset.id):db.wish.filter(w=>!w.deleted&&w.status!=="got"&&w.marketCheck!=="requested")).filter(w=>!GearLogic.saleRestricted(w));list.forEach(w=>{w.marketCheck="requested";w.marketCheckAt=now();w.updatedAt=now()});await persist();toast(list.length?`Queued ${list.length} for a price check`:"Nothing to queue");render();return}
   if(act==="got"){const w=db.wish.find(x=>x.id===b.dataset.id);if(!w)return;
     const restricted=GearLogic.saleRestricted(w);const est=restricted&&w.priceSource==="market"?0:+w.estPrice||0;
