@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { saleRestricted, lookupAnswerRestricted, pickModelAnswer, settleLookup, settleDeal, countedValue, csvExportField, keepManualPrice, gunMarketUrl, stripGunMarketText, publicWeightNote, applyMarketPrices } from "../js/logic.js";
+import { saleRestricted, lookupAnswerRestricted, pickModelAnswer, settleLookup, settleDeal, countedValue, csvExportField, keepManualPrice, gunMarketUrl, stripGunMarketText, publicWeightNote, applyMarketPrices, stampManualPrices, mergeByServerTime, serverRow } from "../js/logic.js";
 
 test("firearm, suppressor, ammunition, and lower-receiver shelves are weight-only", () => {
   const blocked = [
@@ -155,11 +155,13 @@ test("a firearm retailer link is removed in every category and the price stays",
       { label: "Shop", url: "https://www.silencershop.com/tube" },
       { label: "Brownells rifle", url: "https://www.brownells.com/firearms/north-line/" },
       { label: "Brownells sling", url: "https://www.brownells.com/slings/harbor-sling/" },
+      { label: "Brownells parts", url: "https://www.brownells.com/rifle-parts/" },
     ],
   });
   assert.equal(mixed.retailNew, 40);
   assert.equal(mixed.value, 28);
-  assert.equal(mixed.sources.map(s => s.label).join(","), "Local shelf,Brownells sling");
+  assert.equal(mixed.sources.map(s => s.label).join(","), "Local shelf,Brownells sling,Brownells parts");
+  assert.equal(gunMarketUrl("https://www.brownells.com/rifle-parts/"), false);
   assert.equal(mixed.priceNote.includes("luckygunner"), false);
   assert.equal(lookupAnswerRestricted({ sources: mixed.sources }), false);
   assert.equal(gunMarketUrl("https://www.brownells.com/slings/harbor-sling/"), false);
@@ -338,6 +340,83 @@ test("a typed price on ordinary gear is not replaced by a market lookup", () => 
   assert.equal(empty.value, 28);
   assert.equal(empty.priceSource, "market");
   assert.equal(empty.priceDate, "2026-10-27");
+});
+
+test("an edited retail and insured value survive the snapshot, a reload, and the next lookups", () => {
+  const before = {
+    id: "p1", category: "Pouches", name: "Parcel coat", condition: "Good",
+    retailNew: 40, value: 28, priceSource: "market", valueSource: "market",
+    updatedAt: "2026-10-26T01:00:00.000Z",
+  };
+  const draft = { ...before, retailNew: 90, value: 333, updatedAt: "2026-10-27T01:00:00.000Z" };
+  const saved = stampManualPrices(draft, before, { retail: true, value: true });
+  assert.equal(saved.retailNew, 90);
+  assert.equal(saved.value, 333);
+  assert.equal(saved.priceSource, "manual");
+  assert.equal(saved.valueSource, "manual");
+  assert.equal(saved.updatedAt, draft.updatedAt);
+  const echo = { ...saved, serverUpdatedAt: "2026-10-27T01:00:01.000Z", writeId: "w1" };
+  const merged = mergeByServerTime(saved, echo, { p1: { writeId: "w1", updatedAt: saved.updatedAt } });
+  assert.equal(merged.priceSource, "manual");
+  assert.equal(merged.valueSource, "manual");
+  assert.equal(merged.retailNew, 90);
+  assert.equal(merged.value, 333);
+  const reloaded = serverRow(JSON.parse(JSON.stringify(saved)));
+  const lookup = { retailNew: 40, usedLow: 20, usedHigh: 30, value: 28, priceNote: "Local shelf", sources: [] };
+  const checked = applyMarketPrices(reloaded, lookup, "2026-10-27");
+  const lookedUp = applyMarketPrices(checked, lookup, "2026-10-27");
+  assert.equal(lookedUp.retailNew, 90);
+  assert.equal(lookedUp.value, 333);
+  assert.equal(lookedUp.priceSource, "manual");
+  assert.equal(lookedUp.valueSource, "manual");
+});
+
+test("a typed insured value stays when the item moves to Firearms", () => {
+  const before = {
+    id: "p1", category: "Pouches", name: "Parcel coat", condition: "Good",
+    retailNew: 40, value: 333, priceSource: "market", valueSource: "manual",
+    priceNote: "Local shelf", marketSources: [{ label: "Local shelf", url: "https://example.com/gear" }],
+    link: "https://example.com/gear",
+  };
+  const saved = stampManualPrices({ ...before, category: "Firearms" }, before, { retail: false, value: false });
+  assert.equal(saved.value, 333);
+  assert.equal(saved.valueSource, "manual");
+  assert.equal(saved.retailNew, 0);
+  assert.equal(saved.priceSource, undefined);
+  assert.equal(saved.priceNote, undefined);
+  assert.equal(countedValue(saved), 333);
+  const auto = stampManualPrices(
+    { ...before, value: 28, valueSource: "market", category: "Suppressors" },
+    { ...before, value: 28, valueSource: "market" },
+    { retail: false, value: false },
+  );
+  assert.equal(auto.value, 0);
+  assert.equal(auto.valueSource, undefined);
+  assert.equal(auto.retailNew, 0);
+  assert.equal(countedValue(auto), 0);
+});
+
+test("a redirect chain deeper than three hops is dropped", () => {
+  const safe = "https://example.com/gear";
+  const wrap = url => "https://evil.example/?u=" + encodeURIComponent(url);
+  const three = wrap(wrap(wrap(safe)));
+  const four = wrap(three);
+  assert.equal(gunMarketUrl(three), false);
+  assert.equal(gunMarketUrl(four), true);
+  const gun = encodeURIComponent("https://www.gunbroker.com/item/1");
+  assert.equal(gunMarketUrl("https://evil.example/?u=" + encodeURIComponent(safe) + "&q=" + gun), true);
+  ["next", "link", "r", "goto", "out"].forEach(key => {
+    assert.equal(gunMarketUrl("https://evil.example/?" + key + "=" + gun), true, key);
+  });
+  assert.equal(gunMarketUrl("https://example.com/gear?r=1"), false);
+  assert.equal(gunMarketUrl("https://evil.example/?r=1&next=" + encodeURIComponent(safe)), false);
+});
+
+test("a file extension does not hide a firearm path segment", () => {
+  const pages = ["firearms.html", "guns.php", "nfa.htm", "silencers.aspx", "suppressor", "silencer", "silencers", "reloading", "receivers", "lower-receivers.php", "stripped-lowers"];
+  pages.forEach(seg => assert.equal(gunMarketUrl(`https://www.brownells.com/${seg}`), true, seg));
+  assert.equal(gunMarketUrl("https://www.opticsplanet.com/rifle-scopes.html"), false);
+  assert.equal(gunMarketUrl("https://www.midwayusa.com/rifle-parts/"), false);
 });
 
 test("a restricted weight note drops spelled amounts and retailer words", () => {

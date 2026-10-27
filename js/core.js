@@ -227,6 +227,10 @@ async function saveCurrent(extra){
   }
   if(rec.weight==null){const renamed=editing&&(editing.name!==rec.name||editing.brand!==rec.brand);if(rec.weightStatus!=="notfound"||renamed){rec.weightStatus="pending";delete rec.weightSource}}
   else if(!editing||+editing.weight!==+rec.weight){rec.weightSource="manual";rec.weightStatus="done"}
+  const beforeSnap=editing?{...editing}:null;
+  const stamped=GearLogic.stampManualPrices(rec,beforeSnap,{retail:!!retailDirty,value:!!valueDirty});
+  Object.keys(rec).forEach(k=>{if(!(k in stamped))delete rec[k]});
+  Object.assign(rec,stamped);
   all=all.map(i=>i.id===rec.id?rec:i);
   render();await persist();return rec;
 }

@@ -245,13 +245,14 @@ function openDetail(i,quiet){
   const wt=i.weight!=null&&i.weight!==""?esc(fmtWt(i.weight)):lookingUp.has(i.id)?"Looking up…":lookupsOn()?(i.weightStatus==="notfound"?"Not found":"Pending"):"—";
   const wnote=restricted?GearLogic.publicWeightNote(i.weightNote||""):(i.weightNote||"");
   const priceState=restricted?(i.valueSource==="manual"&&shownVal?"Entered by you":(+i.value>0&&!shownVal?"Old lookup, not counted":"")):lookingUp.has(i.id)?"Looking up…":/^estimate/i.test(i.priceNote||"")&&i.priceSource==="market"?`Estimate ${esc(i.priceDate||"")}`:(i.marketCheck==="requested"&&!window.LOOKUP_URL)?"Market check queued":i.priceSource==="market"?`Market check ${esc(i.priceDate||"")}`:i.priceSource==="manual"?"Entered by you":"";
+  const valueNote=i.valueSource==="manual"?"Entered by you":(i.priceSource==="manual"?"":priceState);
   const canLookup=lookupsOn()&&(window.LOOKUP_URL||(!restricted&&i.marketCheck!=="requested"&&!isGun));
   $("detail").innerHTML=`
    <div class="dh"><div><h2>${esc(i.name)}${i.nick?` <span class="tag" style="font-size:.8rem">${esc(i.nick)}</span>`:""}</h2><div class="dsub">${esc([i.brand,i.color,i.category].filter(Boolean).join(" · "))}</div></div>
      <div class="vbtns"><button class="btn" type="button" data-dact="edit">Edit</button><button class="btn ghost" type="button" data-dact="share">Share</button>${canLookup?(lookingUp.has(i.id)?`<button class="btn ghost" type="button" disabled>Looking up…</button>`:`<button class="btn ghost" type="button" data-dact="mkt">${restricted||isGun?"Look up weight":"Market check"}</button>`):""}</div></div>
    <dl>
      ${f("Category",esc(i.category||""))}${f("Where it is",parent?`On <button class="lnk" type="button" data-dview="${esc(parent.id)}">${esc(parent.name)}</button>`:i.setupOn?esc(i.setupOn):"Spare (not set up on anything)")}${f("Quantity",esc(String(+i.qty||0)))}${f("Condition",esc((i.condition||"").replace("-"," ")))}
-     ${f(restricted?"Insured value":"Value each",shownVal?money(shownVal):"",priceState)}${f("Total value",shownVal?money(shownVal*(+i.qty||1)):"")}${f("What I paid",i.paid?m2(i.paid):"",i.paid&&(+i.qty||1)>1?`${m2((+i.paid)*(+i.qty||1))} for all ${+i.qty}`:i.paid&&shownVal&&!restricted?(shownVal>=+i.paid?`worth ${money(shownVal-i.paid)} more now`:`worth ${money(i.paid-shownVal)} less now`):"",1)}
+     ${f(restricted?"Insured value":"Value each",shownVal?money(shownVal):"",valueNote)}${f("Total value",shownVal?money(shownVal*(+i.qty||1)):"")}${f("What I paid",i.paid?m2(i.paid):"",i.paid&&(+i.qty||1)>1?`${m2((+i.paid)*(+i.qty||1))} for all ${+i.qty}`:i.paid&&shownVal&&!restricted?(shownVal>=+i.paid?`worth ${money(shownVal-i.paid)} more now`:`worth ${money(i.paid-shownVal)} less now`):"",1)}
      ${restricted?(i.priceSource==="manual"&&i.retailNew?f("New retail",money(i.retailNew),"Entered by you"):""):f("New retail",i.retailNew?money(i.retailNew):"","",1)+f("Used range",(i.usedLow||i.usedHigh)?`${money(i.usedLow)}–${money(i.usedHigh)}`:"","",1)}
      ${f("Weight each",wt,wnote?esc(wnote):i.weightSource==="manual"?"Entered by you":"")}${f("Stored at",esc(i.location||""))}
      ${f("Goes with",gun?`<button class="lnk" type="button" data-dview="${esc(gun.id)}">${esc(gun.name)}</button>`:"","",1)}
@@ -320,23 +321,11 @@ async function runLookups(ids,quiet){
 }
 var _saveCurrent=saveCurrent;
 saveCurrent=async function(extra){
-  const before=editing?{...editing}:null;const valueTyped=valueDirty&&$("fVal").value!=="";const retailTyped=retailDirty&&$("fRetail").value!==""&&Math.round(parseFloat($("fRetail").value)||0)>0;
+  const before=editing?{...editing}:null;
   const rec=await _saveCurrent(extra);if(!rec)return rec;
-  if(retailTyped)rec.priceSource="manual";
-  else if(retailDirty&&!(+rec.retailNew>0)&&rec.priceSource==="manual"){delete rec.priceSource;delete rec.priceDate}
-  if(valueTyped&&(!before||+before.value!==+rec.value))rec.valueSource="manual";
-  else if(!valueTyped&&rec.valueSource==="manual"&&!$("fVal").value)delete rec.valueSource;
-  if(rec.priceSource!==before?.priceSource||rec.valueSource!==before?.valueSource)await persist();
   const restricted=GearLogic.saleRestricted(rec);
-  if(restricted){
-    const kept=GearLogic.keepManualPrice(rec,{retail:!!retailDirty,value:!!valueDirty,retailWasManual:!!(before&&before.priceSource==="manual"),valueWasManual:!!(before&&before.valueSource==="manual")});
-    Object.keys(rec).forEach(k=>{if(!(k in kept))delete rec[k]});
-    Object.assign(rec,kept);
-    const idx=all.findIndex(i=>i.id===rec.id);if(idx>=0)all[idx]=rec;
-    await persist();
-  }
   const changed=!before||before.name!==rec.name||before.brand!==rec.brand||before.category!==rec.category||before.arm!==rec.arm||(!restricted&&before.condition!==rec.condition);
-  const needs=restricted?(rec.weight==null||rec.weight===""):((rec.priceSource!=="market"&&rec.priceSource!=="manual")||rec.weight==null||rec.weight==="");
+  const needs=restricted?(rec.weight==null||rec.weight===""):((rec.priceSource!=="manual"&&rec.priceSource!=="market")||rec.weight==null||rec.weight==="");
   if(window.LOOKUP_URL&&cloudUser&&!extra&&(changed||needs))runLookups([rec.id],true);
   return rec;
 };

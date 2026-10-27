@@ -72,7 +72,9 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/core.js"), /GearLogic\.localDay/);
   assert.doesNotMatch(read("js/core.js"), /today=\(\)=>new Date\(\)\.toISOString\(\)\.slice\(0,\s*10\)/);
   assert.match(read("js/kits.js"), /GearLogic\.countedValue/);
-  assert.match(read("js/cloud.js"), /keepManualPrice/);
+  assert.match(read("js/core.js"), /stampManualPrices/);
+  assert.match(read("js/cloud.js"), /valueSource==="manual"\?"Entered by you"/);
+  assert.doesNotMatch(read("js/cloud.js"), /rec\.priceSource="manual"/);
   assert.match(read("js/cloud.js"), /applyMarketPrices/);
   assert.match(read("js/social.js"), /stripGunMarketText\(best\.note\)/);
   assert.match(read("js/cloud.js"), /stripGunMarketSources/);

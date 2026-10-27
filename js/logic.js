@@ -340,8 +340,12 @@ const GEAR_STORE_HOSTS = new Set([
   "sportsmans.com", "sportsmanswarehouse.com", "midwayusa.com", "opticsplanet.com", "academy.com",
   "scheels.com", "sportsmansguide.com", "eurooptic.com", "sigsauer.com", "budk.com",
 ]);
-const FIREARM_SEGMENTS = new Set(["firearms", "guns", "handguns", "rifles", "pistols", "shotguns", "ammo", "ammunition", "suppressors", "lowers"]);
-const REDIRECT_KEYS = new Set(["u", "q", "url", "uddg", "target", "dest", "redirect", "redirect_url", "to"]);
+const FIREARM_SEGMENTS = new Set([
+  "firearms", "guns", "handguns", "rifles", "pistols", "shotguns", "ammo", "ammunition",
+  "suppressors", "suppressor", "silencer", "silencers", "lowers", "nfa", "reloading",
+  "receivers", "lower-receivers", "stripped-lowers",
+]);
+const REDIRECT_KEYS = new Set(["u", "q", "url", "uddg", "target", "dest", "redirect", "redirect_url", "to", "next", "link", "r", "goto", "out"]);
 const LINK_TOKEN = /https?:\/\/[^\s<>"']+|\b(?:www\.)?(?:[a-z0-9-]+\.)+(?:com|deals|ly|gl|gd|co|at|cc|id|gy|in|ink|ae|st|ee)\b[^\s<>"']*/gi;
 
 function parsedUrl(value) {
@@ -380,7 +384,7 @@ function hostIn(host, names) {
 }
 
 function firearmSegments(url) {
-  return pathText(url).split("/").map(part => part.trim().toLowerCase()).filter(Boolean).some(part => FIREARM_SEGMENTS.has(part));
+  return pathText(url).split("/").map(part => part.trim().toLowerCase().replace(/\.(html?|aspx|php)$/i, "")).filter(Boolean).some(part => FIREARM_SEGMENTS.has(part));
 }
 
 function hostBlocked(url) {
@@ -407,22 +411,23 @@ function httpTarget(value) {
   return url && /^https?:$/i.test(url.protocol) ? url : null;
 }
 
-function redirectTarget(url) {
+function redirectTargets(url) {
+  const out = [];
   for (const [key, value] of url.searchParams) {
     if (!REDIRECT_KEYS.has(String(key).toLowerCase())) continue;
     const next = httpTarget(value);
-    if (next) return next;
+    if (next && next.href !== url.href) out.push(next);
   }
-  return null;
+  return out;
 }
 
 function chainBlocked(url, unwraps) {
   if (!url) return false;
   if (hostBlocked(url)) return true;
-  if (unwraps >= 3) return false;
-  const next = redirectTarget(url);
-  if (!next || next.href === url.href) return false;
-  return chainBlocked(next, unwraps + 1);
+  const nexts = redirectTargets(url);
+  if (!nexts.length) return false;
+  if (unwraps >= 3) return true;
+  return nexts.some(next => chainBlocked(next, unwraps + 1));
 }
 
 export function gunMarketUrl(value) {
@@ -559,6 +564,32 @@ export function keepManualPrice(item, touch) {
   }
   if (out.weightNote) out.weightNote = publicWeightNote(out.weightNote);
   return out;
+}
+
+// Price flags belong on the record before the one cloud write. A later snapshot
+// echo then has the same flags, and a typed insured value survives a move onto a blocked shelf.
+export function stampManualPrices(item, before, touch) {
+  if (!item || typeof item !== "object") return item;
+  const flags = touch && typeof touch === "object" ? touch : {};
+  const out = { ...item };
+  const retailTyped = !!flags.retail && +out.retailNew > 0;
+  const valueTyped = !!flags.value && +out.value > 0;
+  const retailWasManual = !!(before && before.priceSource === "manual");
+  const valueWasManual = !!(before && before.valueSource === "manual");
+  if (retailTyped) out.priceSource = "manual";
+  else if (flags.retail && !(+out.retailNew > 0) && out.priceSource === "manual") {
+    delete out.priceSource;
+    delete out.priceDate;
+  }
+  if (valueTyped) out.valueSource = "manual";
+  else if (!flags.value && !(+out.value > 0) && out.valueSource === "manual") delete out.valueSource;
+  if (!saleRestricted(out)) return out;
+  return keepManualPrice(out, {
+    retail: !!flags.retail,
+    value: !!flags.value,
+    retailWasManual: retailWasManual || retailTyped,
+    valueWasManual: valueWasManual || valueTyped,
+  });
 }
 
 // A market lookup fills empty and auto-filled numbers. A retail or insured value the user typed stays.
@@ -730,7 +761,7 @@ const GearLogic = {
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, publicWeightNote, lookupAnswerRestricted, localDay,
-  gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, applyMarketPrices,
+  gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
 };
 globalThis.GearLogic = GearLogic;
