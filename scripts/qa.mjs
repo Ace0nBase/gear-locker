@@ -8,11 +8,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = name => path.join(root, "node_modules", ".bin", name);
 const children = [];
 
-function start(cmd, args, extraEnv) {
+function start(cmd, args, extraEnv, stdin) {
   const child = spawn(cmd, args, {
     cwd: root,
     env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "true", ...extraEnv },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [stdin || "ignore", "pipe", "pipe"],
   });
   const label = path.basename(cmd);
   child.stdout.on("data", d => process.stdout.write("[" + label + "] " + d));
@@ -53,7 +53,7 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 start(bin("firebase"), ["emulators:start", "--only", "auth,firestore,storage", "--project", "demo-gear-locker"]);
-start(bin("wrangler"), ["dev", "--config", "api/wrangler.stub.toml", "--port", "8787", "--ip", "127.0.0.1", "--local"]);
+start(bin("wrangler"), ["dev", "--config", "api/wrangler.stub.toml", "--port", "8787", "--ip", "127.0.0.1", "--local", "--show-interactive-dev-session=false"], undefined, "pipe");
 start("python3", ["-m", "http.server", "5500", "--bind", "127.0.0.1"]);
 
 try {

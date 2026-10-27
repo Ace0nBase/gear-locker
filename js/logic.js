@@ -367,10 +367,56 @@ export function saleRestricted(item) {
   return firearmIdentity(blob);
 }
 
+// Missing or "1" keeps the signed-in session. Only an explicit "0" turns it off.
+export function keepSignedIn(storage) {
+  try { return !storage || storage.getItem("gearLocker.keep") !== "0"; }
+  catch { return true; }
+}
+
+// Keep-signed-in off uses a memory cache and drops any disk cache from an earlier session.
+export function firestoreMemoryOnly(keep) {
+  return keep === false;
+}
+
+export const SIGN_OUT_WAIT_MS = 1500;
+
+// True when the save finished, false when it timed out or failed.
+export function settleOrTimeout(promise, ms) {
+  return new Promise(resolve => {
+    let done = false;
+    const finish = v => { if (done) return; done = true; resolve(v); };
+    Promise.resolve(promise).then(() => finish(true), () => finish(false));
+    setTimeout(() => finish(false), ms);
+  });
+}
+
+export function signOutConfirmNeeded(settled) {
+  return settled === false;
+}
+
+const ARMORY_ARMS = new Set(["FA", "SU", "OP", "WL", "LA", "KN"]);
+const TOOLISH = /multi.?tool|leatherman|gerber|\bsaw\b|shovel|plier|wrench|screwdriver|sharpener|machete|e-?tool/i;
+
+// Guns, suppressors, optics, lights, lasers, NODs, and knives. A multi-tool is not one of these.
+export function armoryLookupBlocked(privateArms, item) {
+  if (!privateArms || !item || typeof item !== "object") return false;
+  const arm = String(item.arm || "").trim().toUpperCase();
+  if (ARMORY_ARMS.has(arm)) return true;
+  const category = String(item.category || "").trim().toLowerCase();
+  if (category === "firearms" || category === "suppressors") return true;
+  if (category === "nvg & optics" || category === "lights & lasers") return true;
+  if (category === "knives & tools") {
+    const blob = [item.name, item.brand].map(v => String(v || "")).join(" ");
+    return !TOOLISH.test(blob);
+  }
+  return false;
+}
+
 const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
+  keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armoryLookupBlocked,
 };
 globalThis.GearLogic = GearLogic;

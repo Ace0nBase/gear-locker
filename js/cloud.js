@@ -114,16 +114,48 @@ function initFirebase(){
 }
 function verifyContinueUrl(){return window.GEAR_QA?"http://127.0.0.1:5500/?env=emulator":"https://ace0nbase.github.io/gear-locker/"}
 function refreshVerify(){var b=$("verifyBanner");if(!b)return;var u=firebase.auth&&firebase.auth().currentUser;if(u&&!u.emailVerified){b.hidden=false;if($("verifyMsg"))$("verifyMsg").textContent="Confirm "+(u.email||"your email")+" so loans and price lookups can use this address. Check your inbox."}else b.hidden=true;var q=$("qaBanner");if(q)q.hidden=!window.GEAR_QA}
-function startCloud(){
+function useLocalFirestore(db){
+  if(!window.GEAR_QA||!db||typeof db.useEmulator!=="function")return;
+  try{db.useEmulator("127.0.0.1",8080)}catch{}
+}
+var fsdbMemory=false;
+async function openFirestore(clearDisk){
+  const memory=GearLogic.firestoreMemoryOnly(GearLogic.keepSignedIn(localStorage));
+  let db=fsdb||firebase.firestore();
+  if(clearDisk||memory){
+    try{await db.terminate()}catch{}
+    try{await db.clearPersistence()}catch{}
+    db=firebase.firestore();
+    useLocalFirestore(db);
+  }
+  if(!memory){try{const p=db.enablePersistence({synchronizeTabs:true});if(p&&p.catch)p.catch(()=>{})}catch{}}
+  fsdbMemory=memory;
+  return db;
+}
+var signingOut=false;
+async function beginSignOut(){
+  if(signingOut)return;
+  try{await pushCloud()}catch{}
+  var settled=true;
+  if(fsdb&&typeof fsdb.waitForPendingWrites==="function")settled=await GearLogic.settleOrTimeout(fsdb.waitForPendingWrites(),GearLogic.SIGN_OUT_WAIT_MS);
+  if(GearLogic.signOutConfirmNeeded(settled)&&!confirm("Some changes are still saving on this device. Sign out anyway? Those changes can be lost."))return;
+  signingOut=true;
+  cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();
+  try{GearLogic.clearUserLocal(localStorage)}catch{}
+  try{render()}catch{}
+  try{await firebase.auth().signOut()}catch{}
+  try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch{}
+  location.reload();
+}
+async function startCloud(){
   if(!initFirebase())return;
-  fsdb=firebase.firestore();
-  try{fsdb.enablePersistence({synchronizeTabs:true}).catch(()=>{})}catch{}
+  $("gate").hidden=false;$("gateFields").hidden=true;$("gateMsg").textContent="Opening your locker…";
+  fsdb=await openFirestore(false);
   const auth=firebase.auth();
   const P=firebase.auth.Auth.Persistence;
   let keep=true;try{keep=localStorage.getItem("gearLocker.keep")!=="0"}catch{}
   $("gKeep").checked=keep;
   auth.setPersistence(keep?P.LOCAL:P.SESSION).catch(()=>{});
-  $("gate").hidden=false;$("gateFields").hidden=true;$("gateMsg").textContent="Opening your locker…";
   auth.onAuthStateChanged(async u=>{
     if(!u){
       cloudUser=null;cloudUnsubs.forEach(x=>x());cloudUnsubs=[];
@@ -131,18 +163,18 @@ function startCloud(){
       return;
     }
     const switched=localStorage.getItem("gearLocker.uid")&&localStorage.getItem("gearLocker.uid")!==u.uid;
-    if(switched){try{GearLogic.clearUserLocal(localStorage)}catch{}}
+    if(switched){try{GearLogic.clearUserLocal(localStorage)}catch{};cloudUnsubs.forEach(x=>x());cloudUnsubs=[];fsdb=await openFirestore(true)}
     try{localStorage.setItem("gearLocker.uid",u.uid)}catch{}
     cloudUser=u;$("gate").hidden=true;$("acct").hidden=false;$("acctTxt").textContent=u.email;refreshVerify();setSync("","Connecting…");
     pushed={};firstLoad=true;
     await boot();
     subscribeCloud();
   });
-  const applyKeep=async()=>{const k=$("gKeep").checked;try{localStorage.setItem("gearLocker.keep",k?"1":"0")}catch{};try{await auth.setPersistence(k?P.LOCAL:P.SESSION)}catch{}};
+  const applyKeep=async()=>{const k=$("gKeep").checked;try{localStorage.setItem("gearLocker.keep",k?"1":"0")}catch{};try{await auth.setPersistence(k?P.LOCAL:P.SESSION)}catch{};const memory=GearLogic.firestoreMemoryOnly(k);if(memory!==fsdbMemory){cloudUnsubs.forEach(x=>x());cloudUnsubs=[];fsdb=await openFirestore(true)}};
   $("gateForm").onsubmit=async e=>{e.preventDefault();gateErr("");$("gIn").disabled=true;await applyKeep();try{await auth.signInWithEmailAndPassword($("gEmail").value.trim(),$("gPass").value)}catch(err){gateErr(authMsg(err))}finally{$("gIn").disabled=false}};
   $("gNew").onclick=async()=>{gateErr("");if(!$("gateForm").reportValidity())return;if(!GearLogic.newPasswordOk($("gPass").value)){gateErr("Use at least 12 characters.");return}$("gNew").disabled=true;await applyKeep();try{await auth.createUserWithEmailAndPassword($("gEmail").value.trim(),$("gPass").value);try{await auth.currentUser.sendEmailVerification({url:verifyContinueUrl(),handleCodeInApp:false})}catch(e){}}catch(err){gateErr(authMsg(err))}finally{$("gNew").disabled=false}};
   $("gReset").onclick=async()=>{const em=$("gEmail").value.trim();if(!em){gateErr("Type your email first.");return}try{await auth.sendPasswordResetEmail(em);gateErr("");$("gateMsg").textContent="Check your email for a reset link."}catch(err){gateErr(authMsg(err))}};
-  $("signOut").onclick=async()=>{await pushCloud().catch(()=>{});cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();try{GearLogic.clearUserLocal(localStorage)}catch{}render();await auth.signOut();try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch{}location.reload()};
+  $("signOut").onclick=()=>{beginSignOut()};
   $("verifySend").onclick=async()=>{try{await firebase.auth().currentUser.sendEmailVerification({url:verifyContinueUrl(),handleCodeInApp:false});toast("Confirmation email sent. Check your inbox.")}catch(e){toast(e.message||"Couldn't send the email")}};
   $("verifyDone").onclick=async()=>{try{var u=await confirmEmailNow();if(u&&u.emailVerified)toast("Email confirmed.");else toast("Not confirmed yet. Open the link in the email, then tap this again.",5000)}catch(e){toast("Couldn't check. Try again.")}};
   if($("qaVerify"))$("qaVerify").onclick=async()=>{if(!window.GEAR_QA)return;var u=firebase.auth().currentUser;if(!u){toast("Sign in on this test page first");return}try{var r=await fetch("http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:update",{method:"POST",headers:{Authorization:"Bearer owner","Content-Type":"application/json"},body:JSON.stringify({localId:u.uid,emailVerified:true})});if(!r.ok)throw new Error("emulator");u=await confirmEmailNow();toast(u&&u.emailVerified?"Marked confirmed in the local emulator":"Couldn't mark it confirmed. Is npm run qa still running?")}catch(e){toast("Couldn't mark it confirmed. Is npm run qa still running?")}};
