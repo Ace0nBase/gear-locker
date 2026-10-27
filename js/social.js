@@ -29,7 +29,7 @@ function fillArmIds(){
 }
 {const _ra=renderArms;renderArms=function(){fillArmIds();_ra()}}
 
-/* ---------- loans with friends who use Gear Locker ---------- */
+/* ---------- loans with friends who use War Box ---------- */
 var borrowed=[],lentRemote={},lendUnsubs=[];
 function tokenEmail(){return String(cloudUser&&cloudUser.email||"")}
 function lendDoc(x){const it=itemById(x.itemId)||{};let from="";try{from=localStorage.getItem("gearLocker.shareName")||""}catch{}
@@ -39,7 +39,7 @@ function lendDoc(x){const it=itemById(x.itemId)||{};let from="";try{from=localSt
 async function mirrorLend(x,removed){
   if(!fsdb||!cloudUser||!x||!x.id)return;
   const plan=GearLogic.loanSharePlan(x,{removed:!!removed,verified:!!cloudUser.emailVerified});
-  if(plan.needsVerify)toast("Confirm your email first, then this loan can show up in your friend's locker.",5000);
+  if(plan.needsVerify)toast("Confirm your email first, then this loan can show up in your friend's War Box.",5000);
   const local=(db.loans||[]).find(y=>y.id===x.id);
   const row=local||x;
   if(plan.writeLend)row.lendShared=true;
@@ -90,13 +90,13 @@ ACT.loans=async(act,b)=>{
   if(act==="iback"){const bb=borrowed.find(y=>y.id===b.dataset.id);if(!bb)return;try{await fsdb.collection("lends").doc(bb.id).update({borrowerReturned:today(),updatedAt:now()});toast(`Let ${bb.lenderName||"them"} know you gave it back`)}catch(e){toast("Couldn't update: "+e.message)}return}
 };
 function downloadIcs(x){
-  const it=itemById(x.itemId);const when=(x.remindAt||(x.due?x.due+"T09:00":""))||new Date(Date.now()+7*864e5).toISOString().slice(0,16);
+  const it=itemById(x.itemId);const when=(x.remindAt||(x.due?x.due+"T09:00":""))||localDateTime(new Date(Date.now()+7*864e5));
   const d=new Date(when);const f=t=>t.toISOString().replace(/[-:]/g,"").replace(/\.\d+/,"");
   const title=`${x.borrower} still has your ${it?.name||x.itemName||"gear"}`;
-  const ics=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Gear Locker//EN","BEGIN:VEVENT",`UID:${x.id}@gearlocker`,`DTSTAMP:${f(new Date())}`,`DTSTART:${f(d)}`,`DTEND:${f(new Date(+d+15*60e3))}`,
-    `SUMMARY:${title.replace(/[,;]/g," ")}`,`DESCRIPTION:Lent ${fmtDate(x.out)}${x.due?" · due back "+fmtDate(x.due):""}. Mark it returned in Gear Locker when you get it back.`.replace(/[,;]/g," "),
+  const ics=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//War Box//EN","BEGIN:VEVENT",`UID:${x.id}@warbox`,`DTSTAMP:${f(new Date())}`,`DTSTART:${f(d)}`,`DTEND:${f(new Date(+d+15*60e3))}`,
+    `SUMMARY:${title.replace(/[,;]/g," ")}`,`DESCRIPTION:Lent ${fmtDate(x.out)}${x.due?" · due back "+fmtDate(x.due):""}. Mark it returned in War Box when you get it back.`.replace(/[,;]/g," "),
     "BEGIN:VALARM","ACTION:DISPLAY","TRIGGER:PT0M",`DESCRIPTION:${title.replace(/[,;]/g," ")}`,"END:VALARM","END:VEVENT","END:VCALENDAR"].join("\r\n");
-  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([ics],{type:"text/calendar"}));a.download="gear-loan-reminder.ics";document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1500);
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([ics],{type:"text/calendar"}));a.download="war-box-loan-reminder.ics";document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1500);
 }
 var loanDue=x=>!x.returned&&x.remindAt&&new Date(x.remindAt)<=new Date();
 {const _bf=badgeFor;badgeFor=function(k){
@@ -105,13 +105,13 @@ var loanDue=x=>!x.returned&&x.remindAt&&new Date(x.remindAt)<=new Date();
   return _bf(k)}}
 {const _rl=RENDER.loans;RENDER.loans=()=>{
   _rl();const v=$("loansView");
-  if(cloudUser){const head0=v.querySelector(".vhead");if(head0)head0.insertAdjacentHTML("afterend",cloudUser.emailVerified?`<p class="hint">Your sign-in email is <b>${esc(cloudUser.email||"")}</b>. Loans from friends match that address. If it is all lowercase, they can type it with any capitals.</p>`:`<div class="banner"><p>Confirm <b>${esc(cloudUser.email||"your email")}</b> before loans can move between accounts. Your own loan notes stay in your locker.</p></div>`)}
+  if(cloudUser){const head0=v.querySelector(".vhead");if(head0)head0.insertAdjacentHTML("afterend",cloudUser.emailVerified?`<p class="hint">Your sign-in email is <b>${esc(cloudUser.email||"")}</b>. Loans from friends match that address. If it is all lowercase, they can type it with any capitals.</p>`:`<div class="banner"><p>Confirm <b>${esc(cloudUser.email||"your email")}</b> before loans can move between accounts. Your own loan notes stay in War Box.</p></div>`)}
   // richer form fields
   const fe=v.querySelector('form[data-ed="loans"]');
   if(fe&&!fe.querySelector('[name="friendEmail"]')){const d=ED.loans?.draft||{};const anchor=fe.querySelector('[name="out"]')?.closest(".f");
     const extra=document.createElement("div");extra.style.display="contents";
-    extra.innerHTML=fld("friendEmail","Their Gear Locker email (optional)",d.friendEmail,{type:"email",span:2,ph:"friend@email.com"})+fld("remindAt","Remind me on",d.remindAt||(d.due?d.due+"T09:00":""),{type:"datetime-local"})+
-      `<p class="hint" style="grid-column:1/-1;margin:0">With their email, the loan shows up in their Gear Locker after you both confirm your email. Type their sign-in email. "Remind me" flags it in your app; use Add to calendar on the loan for a phone alert.</p>`;
+    extra.innerHTML=fld("friendEmail","Their War Box email (optional)",d.friendEmail,{type:"email",span:2,ph:"friend@email.com"})+fld("remindAt","Remind me on",d.remindAt||(d.due?d.due+"T09:00":""),{type:"datetime-local"})+
+      `<p class="hint" style="grid-column:1/-1;margin:0">With their email, the loan shows up in their War Box after you both confirm your email. Type their sign-in email. "Remind me" flags it in your app; use Add to calendar on the loan for a phone alert.</p>`;
     anchor?anchor.before(extra):fe.querySelector(".actions").before(extra)}
   // reminder banner + per-row status + calendar button
   const due=L("loans").filter(loanDue);const said=L("loans").filter(x=>!x.returned&&lentRemote[x.id]?.borrowerReturned);
@@ -121,7 +121,7 @@ var loanDue=x=>!x.returned&&x.remindAt&&new Date(x.remindAt)<=new Date();
   if(ban.length)head.insertAdjacentHTML("afterend",`<div class="gaps"><h3>Reminders</h3><ul>${ban.join("")}</ul></div>`);
   v.querySelectorAll('tr[data-act="edit"]').forEach(tr=>{const x=L("loans").find(y=>y.id===tr.dataset.id);if(!x||x.returned)return;const td=tr.lastElementChild;
     td.insertAdjacentHTML("afterbegin",`<button class="btn ghost" type="button" data-act="ics" data-id="${esc(x.id)}">Add to calendar</button>`);
-    if(x.friendEmail){const c=tr.children[1];c.insertAdjacentHTML("beforeend",`<small>${lentRemote[x.id]?"in their Gear Locker":"sending…"}</small>`)}});
+    if(x.friendEmail){const c=tr.children[1];c.insertAdjacentHTML("beforeend",`<small>${lentRemote[x.id]?"in their War Box":"sending…"}</small>`)}});
   // gear you've borrowed
   if(borrowed.length){const open=borrowed.filter(b=>!b.returned);const done=borrowed.filter(b=>b.returned);
     v.insertAdjacentHTML("beforeend",`<div class="slotsHead">Borrowed from friends <span>${open.length}</span></div>
@@ -137,13 +137,13 @@ async function apiPost(path,body){const tok=await firebase.auth().currentUser.ge
 var watchTimer=null;
 function syncWatches(){clearTimeout(watchTimer);watchTimer=setTimeout(async()=>{if(!window.LOOKUP_URL||!cloudUser)return;
   const list=L("wish").filter(w=>w.status!=="got"&&+w.target>0&&!GearLogic.saleRestricted(w)).map(w=>({id:w.id,name:w.name,brand:w.brand||"",category:w.category||"",target:+w.target}));
-  try{const j=await apiPost("/watch/sync",{watches:list});if(j.dropped)toast(`Price alerts are limited to ${j.max} items`,4000)}catch(e){if(list.length)toast("Price alerts: "+e.message,4000)}},800)}
+  try{const j=await apiPost("/watch/sync",{watches:list});if(j.dropped)toast(`Price alerts are limited to ${j.max} items`,4000)}catch(e){if(list.length)toast(lookupFailMessage(e&&e.message,"price alerts"),4000)}},800)}
 var vapidPublic="";
 function rememberPush(j){if(j&&j.vapidPublicKey)vapidPublic=j.vapidPublicKey}
 async function watchStatus(){if(!window.LOOKUP_URL||!cloudUser)return;try{const j=await apiPost("/watch/status",{});rememberPush(j);applyWatch(j.watches||[])}catch{}}
 function showDealBanner(){var el=$("dealBanner");if(!el)return;var hits=(db.wish||[]).filter(w=>!w.deleted&&w.status!=="got"&&!GearLogic.saleRestricted(w)&&w.deal&&w.deal.hit&&w.dealSeen!==w.deal.date);if(!hits.length){el.hidden=true;return}el.hidden=false;$("dealMsg").textContent=hits.length===1?hits[0].name+" is at or under your target price.":hits.length+" wishlist prices hit your target.";$("dealGo").textContent="See wishlist";$("dealGo").onclick=()=>showTab("wish")}
 function urlB64ToUint8(s){s=String(s||"").replace(/-/g,"+").replace(/_/g,"/");while(s.length%4)s+="=";var bin=atob(s),out=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out}
-async function enablePricePush(){if(!window.isSecureContext){toast("Phone alerts need the installed site (https). You'll still see them in the app.");return}var ios=/iphone|ipad|ipod/i.test(navigator.userAgent);var standalone=navigator.standalone===true||matchMedia("(display-mode: standalone)").matches;if(ios&&!standalone){toast("On iPhone, add Gear Locker to your Home Screen, open it from the icon, then turn on alerts.",7000);return}if(!("PushManager" in window)||!("serviceWorker" in navigator)){toast("This browser can't do phone alerts. You'll still see them in the app.");return}if(!vapidPublic){toast("Phone alerts aren't switched on yet. You'll still see them in the app.",5000);return}var perm=await Notification.requestPermission();if(perm!=="granted"){toast("Notifications are blocked in the phone settings.");return}var reg=await navigator.serviceWorker.ready;var sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64ToUint8(vapidPublic)});await apiPost("/watch/push",{subscription:sub.toJSON()});toast("Phone alerts are on for price hits.")}
+async function enablePricePush(){if(!window.isSecureContext){toast("Phone alerts need the installed site (https). You'll still see them in the app.");return}var ios=/iphone|ipad|ipod/i.test(navigator.userAgent);var standalone=navigator.standalone===true||matchMedia("(display-mode: standalone)").matches;if(ios&&!standalone){toast("On iPhone, add War Box to your Home Screen, open it from the icon, then turn on alerts.",7000);return}if(!("PushManager" in window)||!("serviceWorker" in navigator)){toast("This browser can't do phone alerts. You'll still see them in the app.");return}if(!vapidPublic){toast("Phone alerts aren't switched on yet. You'll still see them in the app.",5000);return}var perm=await Notification.requestPermission();if(perm!=="granted"){toast("Notifications are blocked in the phone settings.");return}var reg=await navigator.serviceWorker.ready;var sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64ToUint8(vapidPublic)});await apiPost("/watch/push",{subscription:sub.toJSON()});toast("Phone alerts are on for price hits.")}
 function applyWatch(ws){let ch=false,news=[];ws.forEach(r=>{const w=db.wish.find(x=>x.id===r.id);if(!w||!r.best)return;if(GearLogic.saleRestricted(w))return;const best={...r.best};if(best.linksDropped||GearLogic.gunMarketUrl(best.url))best.url="";if(best.note)best.note=GearLogic.stripGunMarketText(best.note);if(JSON.stringify(w.deal)!==JSON.stringify(best)){w.deal=best;w.dealCheckedAt=r.lastCheck||"";w.updatedAt=now();ch=true;if(best.hit&&w.dealSeen!==best.date)news.push(w)}});
   if(ch){persist();if(curTab==="wish")renderExtra();updateBadges()}
   if(news.length)toast(news.length===1?`Price alert: ${news[0].name} for ${money(news[0].deal.price)} at ${news[0].deal.where}`:`${news.length} price alerts on your wishlist`,6000);if(typeof showDealBanner==="function")showDealBanner()}
@@ -154,7 +154,7 @@ function applyWatch(ws){let ch=false,news=[];ws.forEach(r=>{const w=db.wish.find
     if(GearLogic.saleRestricted(w)){toast("Price search skips firearms and ammunition.");renderExtra();return}
     try{await apiPost("/watch/sync",{watches:L("wish").filter(x=>x.status!=="got"&&+x.target>0&&!GearLogic.saleRestricted(x)).map(x=>({id:x.id,name:x.name,brand:x.brand||"",category:x.category||"",target:+x.target}))});
       const j=await apiPost("/watch/check",{id:w.id});applyWatch(j.watches||[]);const d=db.wish.find(x=>x.id===w.id)?.deal;toast(d?.price?`Lowest found: ${money(d.price)} at ${d.where}`:"No listings found right now",5000)}
-    catch(e){toast("Price search: "+e.message,5000)}renderExtra();return}
+    catch(e){toast(lookupFailMessage(e.message),5000)}renderExtra();return}
   if(act==="dealseen"){const w=db.wish.find(x=>x.id===b.dataset.id);if(w&&w.deal){w.dealSeen=w.deal.date;w.updatedAt=now();await persist();updateBadges();renderExtra()}return}
   const r=await _aw(act,b);if(act==="got")syncWatches();return r}}
 {const _rw=RENDER.wish;RENDER.wish=()=>{
@@ -162,7 +162,7 @@ function applyWatch(ws){let ch=false,news=[];ws.forEach(r=>{const w=db.wish.find
   const fe=v.querySelector('form[data-ed="wish"]');
   if(fe&&!fe.querySelector('[name="target"]')){const d=ED.wish?.draft||{};const anchor=fe.querySelector('[name="priority"]')?.closest(".f");
     const box=document.createElement("div");box.style.display="contents";
-    box.innerHTML=fld("target","Alert me at or below ($)",d.target,{type:"number",step:1,ph:"Price you'd pay"})+`<p class="hint wishAlertHint" style="grid-column:1/-1;margin:0">Gear Locker checks saved alerts about once a day and flags a price that hits your number. Phone alerts, if you turn them on, use that same check.</p><button class="btn ghost" type="button" id="pushOn">Turn on phone alerts</button>`;
+    box.innerHTML=fld("target","Alert me at or below ($)",d.target,{type:"number",step:1,ph:"Price you'd pay"})+`<p class="hint wishAlertHint" style="grid-column:1/-1;margin:0">War Box checks saved alerts about once a day and flags a price that hits your number. Phone alerts, if you turn them on, use that same check.</p><button class="btn ghost" type="button" id="pushOn">Turn on phone alerts</button>`;
     var pb=box.querySelector("#pushOn");if(pb)pb.onclick=()=>enablePricePush().catch(e=>toast(e.message||"Couldn't turn on phone alerts"));
     anchor?anchor.after(box):fe.querySelector(".actions").before(box)}
   if(fe){const applyWishSale=()=>{const g=n=>fe.querySelector(`[name="${n}"]`);const draft={name:g("name")?.value||"",brand:g("brand")?.value||"",category:g("category")?.value||""};const restricted=GearLogic.saleRestricted(draft);const link=g("link")?.closest(".f");if(link)link.hidden=restricted;const priceLab=g("estPrice")?.closest(".f")?.querySelector("label");if(priceLab)priceLab.textContent=restricted?"Insured value ($)":"Est. price ($)";const target=g("target")?.closest(".f");if(target)target.hidden=restricted;const hint=fe.querySelector(".wishAlertHint");if(hint)hint.hidden=restricted;const push=fe.querySelector("#pushOn");if(push)push.hidden=restricted};fe.addEventListener("input",applyWishSale);fe.addEventListener("change",applyWishSale);applyWishSale()}

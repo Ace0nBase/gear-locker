@@ -47,9 +47,9 @@ function openMove(id,opts={}){
 function renderMove(){
   const el=$("moveSheet");const m=moveState;if(!m){el.hidden=true;syncLock();return}
   const it=itemById(m.id);if(!it){moveState=null;renderMove();return}
-  const here=it.mountedOn&&itemById(it.mountedOn)?`on ${itemById(it.mountedOn).name}`:it.setupOn||"spare";
+  const here=it.mountedOn&&itemById(it.mountedOn)?`on ${itemById(it.mountedOn).name}`:"spare";
   const body=m.mode==="after"
-    ?`<h2>How many moved?</h2><p>You moved <b>${esc(it.name)}</b> (×${m.qty}) ${it.mountedOn&&itemById(it.mountedOn)?`onto <b>${esc(itemById(it.mountedOn).name)}</b>`:it.setupOn?`to <b>${esc(it.setupOn)}</b>`:"back to spare"}. Did all ${m.qty} go, or just some?</p>
+    ?`<h2>How many moved?</h2><p>You moved <b>${esc(it.name)}</b> (×${m.qty}) ${it.mountedOn&&itemById(it.mountedOn)?`onto <b>${esc(itemById(it.mountedOn).name)}</b>`:"back to spare"}. Did all ${m.qty} go, or just some?</p>
       <div class="qtyPick"><button class="btn ghost" type="button" data-mv="dec" aria-label="Fewer">−</button><b id="mvN">${m.n}</b><span>of ${m.qty}</span><button class="btn ghost" type="button" data-mv="inc" aria-label="More">+</button></div>
       <p class="hint">The rest stay where they were${m.fromMount&&itemById(m.fromMount)?` (on ${esc(itemById(m.fromMount).name)})`:m.fromSetup?` (${esc(m.fromSetup)})`:" (spare)"}.</p>
       <div class="actions"><span class="spacer"></span><button class="btn ghost" type="button" data-mv="all">All ${m.qty}</button><button class="btn" type="button" data-mv="go">Just ${m.n}</button></div>`
@@ -84,7 +84,7 @@ detailClickers.push(function(b){if(b.dataset.dact==="move"&&viewing){openMove(vi
 {const _od2=openDetail;openDetail=function(i,quiet){_od2(i,quiet);if(!i)return;
   const sib=live().filter(x=>twinKey(x)===twinKey(i)&&!x.serial&&!x.armId);if(sib.length<2)return;
   const tot=sib.reduce((a,x)=>a+(+x.qty||1),0);
-  const where=x=>x.mountedOn&&itemById(x.mountedOn)?`on ${itemById(x.mountedOn).name}`:x.setupOn?x.setupOn:"spare";
+  const where=x=>x.mountedOn&&itemById(x.mountedOn)?`on ${itemById(x.mountedOn).name}`:"spare";
   const html=`<div class="sect"><h3>You have ${tot} total</h3><div class="links">${sib.sort((a,b)=>where(a).localeCompare(where(b))).map(x=>x.id===i.id?`<span class="lnk cur">${+x.qty||1} ${esc(where(x))} (this)</span>`:`<button class="lnk" type="button" data-dview="${esc(x.id)}">${+x.qty||1} ${esc(where(x))}</button>`).join("")}</div></div>`;
   const dl=$("detail").querySelector("dl");if(dl)dl.insertAdjacentHTML("afterend",html)}}
 // form: moving a stack asks "all or just some?"
@@ -104,10 +104,13 @@ function combineDuplicates(){let n=0;let again=true;while(again){again=false;for
 {const _mf=maybeFirstPush;let done=false;maybeFirstPush=function(){_mf();if(!done&&cloudUser&&!firstLoad){done=true;setTimeout(async()=>{const n=combineDuplicates();if(n){render();await persist();toast(`Combined ${n} duplicate line${n>1?"s":""} into single counts`,4000)}},900)}}}
 {const _od3=openDetail;openDetail=function(i,quiet){_od3(i,quiet);if(!i||i.serial||i.armId)return;
   const at=x=>(x.mountedOn||"")+"|"+(x.mountedOn?"":String(x.setupOn||"").trim().toLowerCase());
-  const near=live().filter(x=>x.id!==i.id&&at(x)===at(i)&&x.category===i.category&&!x.serial&&!x.armId&&!onLoan(x.id));if(!near.length)return;
-  const html=`<div class="sect"><h3>Same spot, same type</h3><p class="hint" style="margin:0 0 6px">If these are the same thing, combine them into one count.</p><div class="links">${near.map(x=>`<button class="lnk" type="button" data-combine="${esc(x.id)}">Combine with ${esc(x.name)}${x.color?` (${esc(x.color)})`:""} ×${+x.qty||1}</button>`).join("")}</div></div>`;
+  const sameModel=x=>normTxt(x.name)===normTxt(i.name)&&normTxt(x.brand||"")===normTxt(i.brand||"");
+  const near=live().filter(x=>x.id!==i.id&&at(x)===at(i)&&x.category===i.category&&sameModel(x)&&!x.serial&&!x.armId&&!onLoan(x.id));if(!near.length)return;
+  const html=`<div class="sect"><h3>Same make and model</h3><p class="hint" style="margin:0 0 6px">These match. Combining adds their counts onto this line and removes the other line.</p><div class="links">${near.map(x=>`<button class="lnk" type="button" data-combine="${esc(x.id)}">Combine with ${esc(x.name)}${x.brand?` · ${esc(x.brand)}`:""}${x.color?` (${esc(x.color)})`:""} ×${+x.qty||1}</button>`).join("")}</div></div>`;
   const dl=$("detail").querySelector("dl");if(dl)dl.insertAdjacentHTML("afterend",html)}}
 detailClickers.push(async function(b){if(!b.dataset.combine||!viewing)return;const keep=all.find(x=>x.id===viewing.id&&!x.deleted),other=all.find(x=>x.id===b.dataset.combine&&!x.deleted);if(!keep||!other)return;
+  if(normTxt(keep.name)!==normTxt(other.name)||normTxt(keep.brand||"")!==normTxt(other.brand||""))return true;
+  if(b.dataset.armed!=="1"){const q=(+keep.qty||1)+(+other.qty||1);b.dataset.armed="1";b.textContent=`Merge ${+other.qty||1}× ${other.name} into ${+keep.qty||1}× ${keep.name}? That removes the ${other.name} line and leaves ${q}× ${keep.name}. Tap again.`;return true}
   keep.qty=(+keep.qty||1)+(+other.qty||1);if(!keep.color&&other.color)keep.color=other.color;if(!+keep.value&&+other.value)keep.value=other.value;if(!+keep.paid&&+other.paid)keep.paid=other.paid;keep.updatedAt=now();
   all=all.map(x=>x.id===other.id?{id:other.id,deleted:true,updatedAt:now()}:x);
   Object.values(kits).forEach(k=>{if(k&&k.picks)Object.keys(k.picks).forEach(s=>{if(k.picks[s]===other.id)k.picks[s]=keep.id});if(k&&Array.isArray(k.extras))k.extras=k.extras.map(x=>x===other.id?keep.id:x)});

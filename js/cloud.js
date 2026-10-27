@@ -86,7 +86,7 @@ function subscribeCloud(){
 }
 function maybeFirstPush(){if(cloudReady.size===CLOUD_COLS.length+1){pushCloud();if(firstLoad){firstLoad=false;render();if(window.LOOKUP_URL)setTimeout(()=>{const q=live().filter(i=>i.marketCheck==="requested").map(i=>i.id);if(q.length)runLookups(q,true)},800)}}}
 function gateErr(t){$("gErr").textContent=t||""}
-var AUTH_MSG={"auth/invalid-credential":"Email or password is wrong.","auth/wrong-password":"Email or password is wrong.","auth/user-not-found":"No account with that email.","auth/email-already-in-use":"That email already has an account. Sign in instead.","auth/weak-password":"Use at least 12 characters.","auth/invalid-email":"That email doesn't look right.","auth/too-many-requests":"Too many tries. Wait a few minutes.","auth/network-request-failed":"No connection. Check your signal and try again.","auth/operation-not-allowed":"New accounts are turned off for this locker.","auth/admin-restricted-operation":"New accounts are turned off for this locker."};
+var AUTH_MSG={"auth/invalid-credential":"Email or password is wrong.","auth/wrong-password":"Email or password is wrong.","auth/user-not-found":"No account with that email.","auth/email-already-in-use":"That email already has an account. Sign in instead.","auth/weak-password":"Use at least 12 characters.","auth/invalid-email":"That email doesn't look right.","auth/too-many-requests":"Too many tries. Wait a few minutes.","auth/network-request-failed":"No connection. Check your signal and try again.","auth/operation-not-allowed":"New accounts are turned off.","auth/admin-restricted-operation":"New accounts are turned off."};
 var authMsg=e=>AUTH_MSG[e?.code]||"Something went wrong. Try again.";
 function startAppCheck(){
   if(window.GEAR_QA||window.Capacitor)return;
@@ -149,7 +149,7 @@ async function beginSignOut(){
 }
 async function startCloud(){
   if(!initFirebase())return;
-  $("gate").hidden=false;$("gateFields").hidden=true;$("gateMsg").textContent="Opening your locker…";
+  $("gate").hidden=false;$("gateFields").hidden=true;$("gateMsg").textContent="Opening War Box…";
   fsdb=await openFirestore(false);
   const auth=firebase.auth();
   const P=firebase.auth.Auth.Persistence;
@@ -160,7 +160,7 @@ async function startCloud(){
   auth.onAuthStateChanged(async u=>{
     if(!u){
       cloudUser=null;cloudUnsubs.forEach(x=>x());cloudUnsubs=[];
-      $("gate").hidden=false;$("acct").hidden=true;$("gateFields").hidden=false;$("gateMsg").textContent="Sign in to open your locker.";refreshVerify();syncKeepNote();
+      $("gate").hidden=false;$("acct").hidden=true;$("gateFields").hidden=false;$("gateMsg").textContent="Sign in to open War Box.";refreshVerify();syncKeepNote();
       return;
     }
     const switched=localStorage.getItem("gearLocker.uid")&&localStorage.getItem("gearLocker.uid")!==u.uid;
@@ -224,7 +224,7 @@ var APP_VERSION="29";try{document.getElementById("ver").textContent="v"+APP_VERS
 if("serviceWorker" in navigator&&GearLogic.serviceWorkerAllowed(location,window.GEAR_QA)){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
-  navigator.serviceWorker.addEventListener("controllerchange",()=>{if(!hadSW||reloading)return;reloading=true;if(!anySheetOpen())location.reload();else toast("Gear Locker updated. Close and reopen to finish.",6000)});
+  navigator.serviceWorker.addEventListener("controllerchange",()=>{if(!hadSW||reloading)return;reloading=true;if(!anySheetOpen())location.reload();else toast("War Box updated. Close and reopen to finish.",6000)});
 }
 
 /* ---------- item detail ---------- */
@@ -251,7 +251,7 @@ function openDetail(i,quiet){
    <div class="dh"><div><h2>${esc(i.name)}${i.nick?` <span class="tag" style="font-size:.8rem">${esc(i.nick)}</span>`:""}</h2><div class="dsub">${esc([i.brand,i.color,i.category].filter(Boolean).join(" · "))}</div></div>
      <div class="vbtns"><button class="btn" type="button" data-dact="edit">Edit</button><button class="btn ghost" type="button" data-dact="share">Share</button>${canLookup?(lookingUp.has(i.id)?`<button class="btn ghost" type="button" disabled>Looking up…</button>`:`<button class="btn ghost" type="button" data-dact="mkt">${restricted||isGun?"Look up weight":"Market check"}</button>`):""}</div></div>
    <dl>
-     ${f("Category",esc(i.category||""))}${f("Where it is",parent?`On <button class="lnk" type="button" data-dview="${esc(parent.id)}">${esc(parent.name)}</button>`:i.setupOn?esc(i.setupOn):"Spare (not set up on anything)")}${f("Quantity",esc(String(+i.qty||0)))}${f("Condition",esc((i.condition||"").replace("-"," ")))}
+     ${f("Category",esc(i.category||""))}${f("Where it is",parent?`On <button class="lnk" type="button" data-dview="${esc(parent.id)}">${esc(parent.name)}</button>`:"Spare")}${f("Quantity",esc(String(+i.qty||0)))}${f("Condition",esc((i.condition||"").replace("-"," ")))}
      ${f(restricted?"Insured value":"Value each",shownVal?money(shownVal):"",valueNote)}${f("Total value",shownVal?money(shownVal*(+i.qty||1)):"")}${f("What I paid",i.paid?m2(i.paid):"",i.paid&&(+i.qty||1)>1?`${m2((+i.paid)*(+i.qty||1))} for all ${+i.qty}`:i.paid&&shownVal&&!restricted?(shownVal>=+i.paid?`worth ${money(shownVal-i.paid)} more now`:`worth ${money(i.paid-shownVal)} less now`):"",1)}
      ${restricted?(i.priceSource==="manual"&&i.retailNew?f("New retail",money(i.retailNew),"Entered by you"):""):f("New retail",i.retailNew?money(i.retailNew):"","",1)+f("Used range",(i.usedLow||i.usedHigh)?`${money(i.usedLow)}–${money(i.usedHigh)}`:"","",1)}
      ${f("Weight each",wt,wnote?esc(wnote):i.weightSource==="manual"?"Entered by you":"")}${f("Stored at",esc(i.location||""))}
@@ -262,10 +262,9 @@ function openDetail(i,quiet){
    </dl>
    ${!restricted&&(i.priceNote||links)?`<div class="sect"><h3>Market data</h3>${i.priceNote?`<div class="note">${esc(i.priceNote)}</div>`:""}${links?`<div class="links" style="margin-top:6px">${links}</div>`:""}</div>`:""}
    ${armDetail(i)}
-   ${i.lookupError&&!lookingUp.has(i.id)?`<div class="sect"><h3>${restricted?"Weight lookup":"Market check"}</h3><div class="note">Last lookup didn't work: ${esc(i.lookupError)}</div></div>`:""}
+   ${i.lookupError&&!lookingUp.has(i.id)?`<div class="sect"><h3>${restricted?"Weight lookup":"Market check"}</h3><div class="note">${esc(lookupFailMessage(i.lookupError))}</div></div>`:""}
    ${kids.length?`<div class="sect"><h3>Mounted on this (${kids.length})</h3><div class="links">${kids.map(k=>`<button class="lnk" type="button" data-dview="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
    ${gunGear.length?`<div class="sect"><h3>Gear for this gun (${gunGear.length})</h3><div class="links">${gunGear.map(k=>`<button class="lnk" type="button" data-dview="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
-   ${ks.length?`<div class="sect"><h3>Packed in kits (${ks.length})</h3><div class="links">${ks.map(k=>`<button class="lnk" type="button" data-dkit="${k.id}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
    ${tasks.length?`<div class="sect"><h3>Maintenance</h3>${tasks.map(r=>`<div>${esc(r.m.task)} · <span class="pill ${r.status==="over"?"gap":r.status==="soon"?"warn":"ok"}">${r.status==="over"?"Overdue":r.status==="soon"?"Due soon":"OK"}</span> <small>${esc(r.txt)}</small></div>`).join("")}</div>`:""}
    ${i.notes?`<div class="sect"><h3>Notes</h3><div class="note">${esc(i.notes)}</div></div>`:""}`;
   const wasOpen=!$("detail").hidden;$("detail").hidden=false;if(!wasOpen||!quiet)resetSheetScroll("detailSheet");syncLock();
@@ -311,13 +310,13 @@ async function runLookups(ids,quiet){
   let ok=0,fail="";
   for(let k=0;k<ids.length;k+=4){
     const chunk=ids.slice(k,k+4);
-    try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){it.lookupError=String(r.error||"No result").slice(0,160);fail=fail||it.lookupError}}})}
-    catch(e){fail=e.message||"Lookup failed";chunk.forEach(id=>{const it=all.find(x=>x.id===id);if(it&&!it.deleted)it.lookupError=fail.slice(0,160)});if(/turned off|confirm your email|daily lookup limit/i.test(fail)){ids.slice(k).forEach(id=>lookingUp.delete(id));render();break}}
+    try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){const msg=lookupFailMessage(r.error||"No result");it.lookupError=msg.slice(0,160);fail=fail||msg}}})}
+    catch(e){fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);if(it&&!it.deleted)it.lookupError=fail.slice(0,160)});if(/turned off|confirm your email|daily lookup limit/i.test(String(e&&e.message||""))){ids.slice(k).forEach(id=>lookingUp.delete(id));render();break}}
     chunk.forEach(id=>lookingUp.delete(id));render();await persist();
     if(viewing&&!$("detail").hidden&&chunk.includes(viewing.id))openDetail(all.find(i=>i.id===viewing.id),true);
   }
   if(!$("form").hidden&&editing){const busy=lookingUp.has(editing.id);$("mktBtn").disabled=busy;$("mktBtn").textContent=busy?"Looking up…":(GearLogic.saleRestricted(editing)?"Look up weight":"Market check")}
-  if(fail)toast("Market check: "+fail,6000);else if(!quiet||ids.length>1)toast(`Looked up ${ok} item${ok===1?"":"s"}`);
+  if(fail)toast(fail,6000);else if(!quiet||ids.length>1)toast(`Looked up ${ok} item${ok===1?"":"s"}`);
 }
 var _saveCurrent=saveCurrent;
 saveCurrent=async function(extra){
@@ -326,7 +325,7 @@ saveCurrent=async function(extra){
   const restricted=GearLogic.saleRestricted(rec);
   const changed=!before||before.name!==rec.name||before.brand!==rec.brand||before.category!==rec.category||before.arm!==rec.arm||(!restricted&&before.condition!==rec.condition);
   const needs=restricted?(rec.weight==null||rec.weight===""):((rec.priceSource!=="manual"&&rec.priceSource!=="market")||rec.weight==null||rec.weight==="");
-  if(window.LOOKUP_URL&&cloudUser&&!extra&&(changed||needs))runLookups([rec.id],true);
+  if(window.LOOKUP_URL&&cloudUser&&!extra&&(changed||needs))runLookups([rec.id],true).catch(()=>{});
   return rec;
 };
 if(window.LOOKUP_URL){
@@ -343,7 +342,7 @@ if(window.LOOKUP_URL){
       const chunk=list.slice(k,k+4);
       try{const res=await apiLookup(chunk.map(w=>({id:w.id,name:w.name,brand:w.brand||"",category:w.category||"",condition:"New",notes:"",kind:"wish",arm:w.arm||"",caliber:w.caliber||""})));
         res.forEach(r=>{const w=db.wish.find(x=>x.id===r.id);if(!w||!r.ok)return;if(GearLogic.saleRestricted(w))return;if(r.retailNew!=null)w.estPrice=Math.round(+r.retailNew);w.priceSource="market";w.priceDate=today();w.priceNote=GearLogic.stripGunMarketText(r.priceNote||"").slice(0,240);w.marketSources=GearLogic.stripGunMarketSources(r.sources);if(GearLogic.gunMarketUrl(w.link))w.link="";w.marketCheck="done";w.updatedAt=now()})}
-      catch(e){toast(e.message||"Pricing failed");break}
+      catch(e){toast(lookupFailMessage(e&&e.message));break}
     }
     await persist();render();
   };

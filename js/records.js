@@ -17,7 +17,7 @@ RENDER.ammo=()=>{
     fld("cpr","Cost per round ($)",d.cpr,{type:"number",step:"0.01",ph:"0.28"})+fld("lowAlert","Warn when caliber drops below",d.lowAlert,{type:"number",step:1})+fld("location","Stored at",d.location,{list:"locations",span:2})+fld("lot","Lot # / notes",d.lot,{span:4})):""}
   <section class="stats"><div class="stat"><b>${total.toLocaleString()}</b><span>Rounds on hand</span></div><div class="stat"><b>${sum.length}</b><span>Calibers</span></div><div class="stat"><b>${money(val)}</b><span>Ammo value</span></div><div class="stat"><b>${sum.filter(s=>s.low).length}</b><span>Running low</span></div></section>
   ${recs.length?`<div class="scroll"><table class="tbl"><thead><tr><th>Caliber</th><th class="n">Rounds</th><th class="n">Avg $/rd</th><th class="n">Warn below</th><th>Status</th></tr></thead><tbody>${sum.map(s=>`<tr><td><b>${esc(s.cal)}</b></td><td class="n">${s.rounds.toLocaleString()}</td><td class="n">${s.avg?"$"+s.avg.toFixed(2):"—"}</td><td class="n">${s.alert||"—"}</td><td>${s.low?`<span class="pill gap">Low</span>`:`<span class="pill ok">OK</span>`}</td></tr>`).join("")}</tbody></table></div>
-  <div class="slotsHead">Boxes &amp; lots <span>click to edit</span></div>
+  <div class="slotsHead">Boxes &amp; lots <span>tap to edit</span></div>
   <div class="scroll"><table class="tbl"><thead><tr><th>Caliber</th><th>Brand</th><th>Load</th><th class="n">Rounds</th><th class="n">$/rd</th><th>Stored</th></tr></thead><tbody>${recs.map(a=>`<tr class="click" data-act="edit" data-id="${esc(a.id)}"><td>${esc(a.caliber)}</td><td>${esc(a.brand)}</td><td>${esc(a.load)}</td><td class="n">${(+a.rounds||0).toLocaleString()}</td><td class="n">${+a.cpr?"$"+(+a.cpr).toFixed(2):"—"}</td><td>${esc(a.location||"—")}</td></tr>`).join("")}</tbody></table></div>`
   :`<div class="empty"><b>No ammo logged</b>Add each caliber and load you keep, like "9mm · Federal · 124gr FMJ · 1,000 rds".</div>`}`;
 };
@@ -29,16 +29,16 @@ var curDrill="";
 NEWREC.range=()=>({date:today(),lines:[{}],drills:[{}]});
 /* Published standards. Times are seconds; lower is better. metric "total" = beep to last shot, "first" = beep to first shot. */
 var DRILLS=[
- {name:"Bill Drill",setup:"7 yd · 6 rds · holster to 6 shots on the A-zone (8\" circle)",metric:"total",tiers:[["Novice",5.0],["Intermediate",3.0],["Advanced",2.0],["Master",1.5]],tip:"Advanced ≈ sub-1.0s draw with ~0.20s splits.",src:"RifleConfigurator drill standards"},
- {name:"Draw to first shot",setup:"7 yd · 1 rd · from concealment to a body hit",metric:"total",tiers:[["Beginner",3.0],["Intermediate",2.0],["Advanced",1.4],["Master",1.0]],tip:"Same as ASP 10-Round Skill Check, stage 1.",src:"ASP 10-Round Skill Check"},
- {name:"FAST",setup:"7 yd · 6 rds · 2 head (3×5 card), slidelock reload, 4 body (8\" plate) · from concealment",metric:"total",tiers:[["Novice",10.0],["Intermediate",9.99],["Advanced",6.99],["Expert",4.99]],tip:"Under 10 = Intermediate, under 7 = Advanced, under 5 = Expert. +0.5s for open-top retention holster.",src:"Todd Green / pistol-training.com"},
- {name:"El Presidente",setup:"10 yd · 12 rds · 3 targets 1 m apart · start facing away, holstered · 2 each, reload, 2 each",metric:"total",tiers:[["Standard",10.0]],tip:"10.00s clean is the classic reference.",src:"Jeff Cooper standard"},
- {name:"Failure to Stop",setup:"7 yd · 3 rds · 2 body + 1 head · from the holster (Mozambique)",metric:"total",tiers:[["Dark",2.9],["Light",2.25],["Turbo",1.7]],tip:"Gabe White Technical Skills Test pins.",src:"Gabe White standards"},
- {name:"Keepers' Test",setup:"7 yd · 3 rds · 3×5 card horizontal · from concealment",metric:"total",tiers:[["Pretty salty",3.0],["Really good",2.5]],tip:"",src:"Spencer Keepers"},
- {name:"5x5 Skill Test",setup:"5 yd · 5 rds · 5\" circle · from ready",metric:"total",tiers:[["Pass",5.0]],tip:"All 5 inside the circle within 5.00s.",src:"Standard 5^5 drill"},
- {name:"The Test",setup:"10 yd · 10 rds · B-8 repair center · from ready",metric:"total",tiers:[["Pass",10.0]],tip:"Score: 80% pass, 90% good, 95% excellent (Hackathorn).",src:"Larry Vickers / Ken Hackathorn"},
- {name:"Bill Drill 2",setup:"7 yd · 15 rds · strings of 1,2,3,4,5 from the holster",metric:"total",tiers:[["Goal",10.0]],tip:"10.00s total across all five strings.",src:"Published drill library"},
- {name:"Dot Torture",setup:"Starts at 3 yd · 50 rds · ten 2\" dots · untimed",metric:"none",tiers:[],tip:"Score is the farthest distance you shoot 50/50 clean. Log it in Hits/pts.",src:"David Blinder"},
+ {name:"Bill Drill",setup:"7 yd · 6 rds · holster to 6 shots on the A-zone (8\" circle)",metric:"total",rounds:6,tiers:[["Novice",5.0],["Intermediate",3.0],["Advanced",2.0],["Master",1.5]],tip:"Advanced ≈ sub-1.0s draw with ~0.20s splits."},
+ {name:"Draw to first shot",setup:"7 yd · 1 rd · from concealment to a body hit",metric:"total",tiers:[["Beginner",3.0],["Intermediate",2.0],["Advanced",1.4],["Master",1.0]],tip:"One shot from concealment to a body hit."},
+ {name:"FAST",setup:"7 yd · 6 rds · 2 head (3×5 card), slidelock reload, 4 body (8\" plate) · from concealment",metric:"total",tiers:[["Novice",10.0],["Intermediate",9.99],["Advanced",6.99],["Expert",4.99]],tip:"Under 10 = Intermediate, under 7 = Advanced, under 5 = Expert. +0.5s for open-top retention holster."},
+ {name:"El Presidente",setup:"10 yd · 12 rds · 3 targets 1 m apart · start facing away, holstered · 2 each, reload, 2 each",metric:"total",tiers:[["Standard",10.0]],tip:"10.00s clean is the classic reference."},
+ {name:"Failure to Stop",setup:"7 yd · 3 rds · 2 body + 1 head · from the holster (Mozambique)",metric:"total",tiers:[["Dark",2.9],["Light",2.25],["Turbo",1.7]],tip:"Dark, Light, and Turbo are the three pace pins."},
+ {name:"Keepers' Test",setup:"7 yd · 3 rds · 3×5 card horizontal · from concealment",metric:"total",tiers:[["Pretty salty",3.0],["Really good",2.5]],tip:""},
+ {name:"5x5 Skill Test",setup:"5 yd · 5 rds · 5\" circle · from ready",metric:"total",tiers:[["Pass",5.0]],tip:"All 5 inside the circle within 5.00s."},
+ {name:"The Test",setup:"10 yd · 10 rds · B-8 repair center · from ready",metric:"total",tiers:[["Pass",10.0]],tip:"Score: 80% pass, 90% good, 95% excellent."},
+ {name:"Bill Drill 2",setup:"7 yd · 15 rds · strings of 1,2,3,4,5 from the holster",metric:"total",tiers:[["Goal",10.0]],tip:"10.00s total across all five strings."},
+ {name:"Dot Torture",setup:"Starts at 3 yd · 50 rds · ten 2\" dots · untimed",metric:"none",tiers:[],tip:"Score is the farthest distance you shoot 50/50 clean. Log it in Hits/pts."},
 ];
 function tierFor(d,t){if(!t||!isFinite(t)||d.metric==="none")return null;let got=null;d.tiers.forEach(x=>{if(t<=x[1]+1e-9)got=x[0]});return got}
 function drillLibrary(ds){
@@ -48,7 +48,7 @@ function drillLibrary(ds){
       ${d.tiers.length?`<div class="tiers">${d.tiers.map(t=>`<span class="${lvl===t[0]?"hit":""}">${esc(t[0])} ≤ ${t[1].toFixed(2)}s</span>`).join("")}</div>`:""}
       ${d.tip?`<div class="setup">${esc(d.tip)}</div>`:""}
       <div class="you">${best!=null?`Your best: <b>${best.toFixed(2)}s</b>${lvl?` · <b>${esc(lvl)}</b>`:" · keep working"}${me&&isFinite(me.bestFirst)?` · draw ${me.bestFirst.toFixed(2)}s`:""}${me&&isFinite(me.bestSplit)?` · split ${me.bestSplit.toFixed(2)}s`:""}`:"Not logged yet"}</div>
-      <button class="btn ghost" type="button" data-act="logdrill" data-i="${k}">Log this drill</button><div class="src">Source: ${esc(d.src)}</div></article>`}).join("")}</div>`;
+      <button class="btn ghost" type="button" data-act="logdrill" data-i="${k}">Log this drill</button></article>`}).join("")}</div>`;
 }
 function drillStats(){
   const m={};
@@ -95,8 +95,8 @@ RENDER.range=()=>{
   <div class="scroll"><table class="tbl"><thead><tr><th>Drill</th><th class="n">Runs</th><th class="n">Best total</th><th class="n">Best draw / 1st</th><th class="n">Best split</th><th>Last run</th></tr></thead><tbody>${ds.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td class="n">${x.runs}</td><td class="n">${isFinite(x.best)?x.best.toFixed(2)+"s":"—"}</td><td class="n">${isFinite(x.bestFirst)?x.bestFirst.toFixed(2)+"s":"—"}</td><td class="n">${isFinite(x.bestSplit)?x.bestSplit.toFixed(2)+"s":"—"}</td><td>${esc(fmtDate(x.last))}</td></tr>`).join("")}</tbody></table></div>`:""}
   ${libHTML}
   ${guns.length?`<div class="slotsHead">Round counts</div><div class="scroll"><table class="tbl"><thead><tr><th>Firearm</th><th>Caliber</th><th class="n">Rounds fired</th></tr></thead><tbody>${guns.map(g=>`<tr><td>${esc(g.name)}</td><td>${esc(g.caliber||"—")}</td><td class="n">${roundsFired(g.id).toLocaleString()}</td></tr>`).join("")}</tbody></table></div>`:""}
-  ${sess.length?`<div class="slotsHead">Sessions <span>click to edit</span></div><div class="scroll"><table class="tbl"><thead><tr><th>Date</th><th>Type</th><th>Location</th><th class="n">Rounds</th><th>Drills</th></tr></thead><tbody>${sess.map(s=>`<tr class="click" data-act="edit" data-id="${esc(s.id)}"><td>${esc(fmtDate(s.date))}</td><td>${esc(s.type||"—")}</td><td>${esc(s.location||"—")}</td><td class="n">${(+s.rounds||0).toLocaleString()}</td><td>${esc((s.drills||[]).map(x=>x.name+(x.total?` ${(+x.total).toFixed(2)}s`:"")).join(", ")||"—")}</td></tr>`).join("")}</tbody></table></div>`
-  :`<div class="empty"><b>No sessions yet</b>Click <em>+ Log session</em> after your next range trip. Add drills with your draw time and splits to start tracking progress.</div>`}`;
+  ${sess.length?`<div class="slotsHead">Sessions <span>tap to edit</span></div><div class="scroll"><table class="tbl"><thead><tr><th>Date</th><th>Type</th><th>Location</th><th class="n">Rounds</th><th>Drills</th></tr></thead><tbody>${sess.map(s=>`<tr class="click" data-act="edit" data-id="${esc(s.id)}"><td>${esc(fmtDate(s.date))}</td><td>${esc(s.type||"—")}</td><td>${esc(s.location||"—")}</td><td class="n">${(+s.rounds||0).toLocaleString()}</td><td>${esc((s.drills||[]).map(x=>x.name+(x.total?` ${(+x.total).toFixed(2)}s`:"")).join(", ")||"—")}</td></tr>`).join("")}</tbody></table></div>`
+  :`<div class="empty"><b>No sessions yet</b>Tap <em>+ Log session</em> after your next range trip. Add drills with your draw time and splits to start tracking progress.</div>`}`;
 };
 function applyAmmo(lines,sign){(lines||[]).forEach(l=>{if(!l.ammoId||!+l.rounds)return;const a=db.ammo.find(x=>x.id===l.ammoId&&!x.deleted);if(a){a.rounds=Math.max(0,(+a.rounds||0)-sign*(+l.rounds));a.updatedAt=now()}})}
 SAVE.range=async d=>{
@@ -181,11 +181,11 @@ RENDER.maint=()=>{
     fld("everyDays","Every (days)",d.everyDays,{type:"number",step:1,ph:"90"})+fld("everyRounds","Every (rounds, guns only)",d.everyRounds,{type:"number",step:1,ph:"500"})+fld("lastDone","Last done",d.lastDone,{type:"date"})+fld("lastRounds","Round count when last done",d.lastRounds,{type:"number",step:1})+
     fld("notes","Notes",d.notes,{span:4,ph:"Parts used, what you found"})):"";
   const pill=s=>s==="over"?`<span class="pill gap">Overdue</span>`:s==="soon"?`<span class="pill warn">Due soon</span>`:`<span class="pill ok">OK</span>`;
-  $("maintView").innerHTML=`<div class="vhead"><div><h2>Maintenance</h2><p>Reminders by date and, for guns, by rounds fired from your range log. Click Done when you finish a task.</p></div><button class="btn" type="button" data-act="new">+ Add task</button></div>
+  $("maintView").innerHTML=`<div class="vhead"><div><h2>Maintenance</h2><p>Reminders for any gear you maintain, by date or by how much you use it. Mark a task Done when you finish it.</p></div><button class="btn" type="button" data-act="new">+ Add task</button></div>
   ${form}
   <section class="stats"><div class="stat"><b>${rows.filter(r=>r.status==="over").length}</b><span>Overdue</span></div><div class="stat"><b>${rows.filter(r=>r.status==="soon").length}</b><span>Due soon</span></div><div class="stat"><b>${rows.length}</b><span>Tasks tracked</span></div><div class="stat"><b>${suggCache.length}</b><span>Suggested</span></div></section>
   ${rows.length?`<div class="scroll"><table class="tbl"><thead><tr><th>Item</th><th>Task</th><th>Last done</th><th>Next</th><th>Status</th><th></th></tr></thead><tbody>${rows.map(r=>`<tr class="click" data-act="edit" data-id="${esc(r.m.id)}"><td>${esc(r.it?.name||"(deleted item)")}${r.isGun?`<small>${r.cur.toLocaleString()} rds</small>`:""}</td><td>${esc(r.m.task||"—")}</td><td>${esc(fmtDate(r.m.lastDone))}</td><td>${esc(r.txt)}</td><td>${pill(r.status)}</td><td><button class="btn ghost" type="button" data-act="done" data-id="${esc(r.m.id)}">Done</button></td></tr>`).join("")}</tbody></table></div>`
-  :`<div class="empty"><b>No tasks yet</b>Add tasks from the suggestions below, or click <em>+ Add task</em>.</div>`}
+  :`<div class="empty"><b>No tasks yet</b>Add tasks from the suggestions below, or tap <em>+ Add task</em>.</div>`}
   ${suggCache.length?`<div class="slotsHead">Suggested for your gear <span>${suggCache.length}</span></div><div class="scroll"><table class="tbl"><tbody>${suggCache.slice(0,12).map((x,k)=>`<tr><td>${esc(x.i.name)}</td><td>${esc(x.s.task)}</td><td>every ${x.s.everyDays} days${x.s.everyRounds?` or ${x.s.everyRounds} rds`:""}</td><td><button class="btn ghost" type="button" data-act="sugg" data-i="${k}">Add</button></td></tr>`).join("")}</tbody></table></div>${suggCache.length>1?`<div><button class="btn ghost" type="button" data-act="suggall">Add all ${suggCache.length} suggestions</button></div>`:""}`:""}`;
 };
 SAVE.maint=async d=>{if(!d.itemId){toast("Pick an item");return}if(!String(d.task||"").trim()){toast("Name the task");return}await upsertC("maint",d);ED.maint=null;toast("Task saved");render()};
@@ -209,11 +209,11 @@ RENDER.wish=()=>{
     fld("name","Item",d.name,{span:2,req:1,ph:"Ballistic glasses"})+fld("brand","Brand / model",d.brand,{ph:"Revision StingerHawk"})+fld("category","Category",d.category,{type:"select",opts:CATS.map(c=>[c,c])})+
     fld("estPrice",draftRestricted?"Insured value ($)":"Est. price ($)",draftRestricted&&d.priceSource==="market"?"":d.estPrice,{type:"number",step:1})+fld("priority","Priority",d.priority,{type:"select",opts:[["High","High"],["Medium","Medium"],["Low","Low"]]})+(draftRestricted?"":fld("link","Link",d.link,{type:"url",span:2,ph:"https://"}))+
     fld("notes","Notes",d.notes,{span:4})+(!draftRestricted&&d.priceSource==="market"?`<p class="hint span4" style="grid-column:1/-1">Market check ${esc(d.priceDate||"")}: ${esc(d.priceNote||"")}</p>`:"")):"";
-  $("wishView").innerHTML=`<div class="vhead"><div><h2>Wishlist</h2><p>Gear you want. <em>Add kit gaps</em> adds essentials you don't own anything for, from the kits you've packed. Market check prices ordinary gear. Firearms, suppressors, frames, and ammunition are not priced or linked.</p></div><div class="vbtns"><button class="btn ghost" type="button" data-act="gaps">Add kit gaps</button><button class="btn ghost" type="button" data-act="checkall">Market check all</button><button class="btn" type="button" data-act="new">+ Add item</button></div></div>
+  $("wishView").innerHTML=`<div class="vhead"><div><h2>Wishlist</h2><p>Gear you want. Market check prices ordinary gear. Firearms, suppressors, frames, and ammunition are not priced or linked.</p></div><div class="vbtns"><button class="btn ghost" type="button" data-act="checkall">Market check all</button><button class="btn" type="button" data-act="new">+ Add item</button></div></div>
   ${form}
   <section class="stats"><div class="stat"><b>${want.length}</b><span>On the list</span></div><div class="stat"><b>${money(cost)}</b><span>Est. total</span></div><div class="stat"><b>${want.filter(w=>w.priority==="High").length}</b><span>High priority</span></div><div class="stat"><b>${got.length}</b><span>Bought</span></div></section>
   ${want.length?`<div class="scroll"><table class="tbl"><thead><tr><th>Priority</th><th>Item</th><th>Needed for</th><th class="n">Est. price</th><th></th></tr></thead><tbody>${want.map(w=>{const restricted=GearLogic.saleRestricted(w);return `<tr class="click" data-act="edit" data-id="${esc(w.id)}"><td><span class="pill ${w.priority==="High"?"gap":w.priority==="Medium"?"warn":""}">${esc(w.priority||"Medium")}</span></td><td><b>${esc(w.name)}</b><small>${esc([w.brand,w.category].filter(Boolean).join(" · "))}${!restricted&&w.link&&/^https?:\/\//.test(w.link)?` · <a href="${esc(w.link)}" target="_blank" rel="noopener">link</a>`:""}</small></td><td>${esc((w.kitsNeeding||[]).join(", ")||"—")}</td><td class="n">${showEst(w)?money(w.estPrice):"—"}${restricted?"":(w.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag" style="display:block">check queued</span>`:w.priceSource==="market"?`<span class="tag" style="display:block">market</span>`:""}</td><td><span class="vbtns">${!restricted&&(window.LOOKUP_URL||w.marketCheck!=="requested")?`<button class="btn ghost" type="button" data-act="check" data-id="${esc(w.id)}">Price check</button>`:""}<button class="btn" type="button" data-act="got" data-id="${esc(w.id)}">Got it</button></span></td></tr>`}).join("")}</tbody></table></div>`
-  :`<div class="empty"><b>Wishlist is empty</b>Click <em>Add kit gaps</em> to fill it from what your kits are missing, or add items yourself.</div>`}
+  :`<div class="empty"><b>Wishlist is empty</b>Tap <em>+ Add item</em> to remember something you want.</div>`}
   ${got.length?`<div class="slotsHead">Bought <span>${got.length}</span></div><p class="hint">${got.map(w=>esc(w.name)).join(" · ")}</p>`:""}`;
 };
 SAVE.wish=async d=>{if(!String(d.name||"").trim()){toast("Name the item");return}await upsertC("wish",d);ED.wish=null;toast("Saved");render()};
@@ -243,10 +243,10 @@ RENDER.loans=()=>{
     fld("itemId","Item",d.itemId,{type:"select",span:2,opts:[[ "",itemBlank ],...avail.map(i=>[i.id,i.name])]})+fld("borrower","Borrowed by",d.borrower,{req:1,ph:"Name"})+fld("contact","Contact",d.contact,{ph:"Phone or email"})+
     fld("out","Lent on",d.out,{type:"date"})+fld("due","Due back",d.due,{type:"date"})+fld("returned","Returned on",d.returned,{type:"date"})+fld("cond","Condition when lent",d.cond,{ph:"Good, no marks"})+fld("notes","Notes",d.notes,{span:4})):"";
   const nm=x=>esc(itemById(x.itemId)?.name||x.itemName||"(deleted item)");
-  $("loansView").innerHTML=`<div class="vhead"><div><h2>Loans</h2><p>Who has your gear and when it's due back. Add a friend's Gear Locker email and the loan shows up in their app too.</p></div><button class="btn" type="button" data-act="new">+ Lend item</button></div>
+  $("loansView").innerHTML=`<div class="vhead"><div><h2>Loans</h2><p>Who has your gear and when it's due back. Add a friend's War Box email and the loan shows up in their app too.</p></div><button class="btn" type="button" data-act="new">+ Lend item</button></div>
   ${form}
   ${out.length?`<div class="slotsHead">Out now <span>${out.length}</span></div><div class="scroll"><table class="tbl"><thead><tr><th>Item</th><th>Borrowed by</th><th>Lent</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>${out.map(x=>{const over=x.due&&x.due<today();return `<tr class="click" data-act="edit" data-id="${esc(x.id)}"><td><b>${nm(x)}</b></td><td>${esc(x.borrower)}${x.contact?`<small>${esc(x.contact)}</small>`:""}</td><td>${esc(fmtDate(x.out))}</td><td>${esc(fmtDate(x.due))}</td><td>${over?`<span class="pill gap">Overdue</span>`:`<span class="pill warn">Out</span>`}</td><td><button class="btn ghost" type="button" data-act="returned" data-id="${esc(x.id)}">Returned</button></td></tr>`}).join("")}</tbody></table></div>`
-  :`<div class="empty"><b>Nothing on loan</b>When you lend something out, click <em>+ Lend item</em> so you know who has it.</div>`}
+  :`<div class="empty"><b>Nothing on loan</b>When you lend something out, tap <em>+ Lend item</em> so you know who has it.</div>`}
   ${back.length?`<div class="slotsHead">Returned <span>${back.length}</span></div><div class="scroll"><table class="tbl"><tbody>${back.slice(0,25).map(x=>`<tr class="click" data-act="edit" data-id="${esc(x.id)}"><td>${nm(x)}</td><td>${esc(x.borrower)}</td><td>${esc(fmtDate(x.out))} → ${esc(fmtDate(x.returned))}</td></tr>`).join("")}</tbody></table></div>`:""}`;
 };
 SAVE.loans=async d=>{
@@ -258,7 +258,7 @@ DEL.loans=async d=>{await removeC("loans",d.id)};
 ACT.loans=async(act,b)=>{if(act==="returned"){const x=L("loans").find(y=>y.id===b.dataset.id);if(!x)return;await upsertC("loans",{...x,returned:today()});toast("Marked returned");render()}};
 
 /* ---------- tabs ---------- */
-var TABS=[["inv","Inventory"],["arms","Arms Room"],["kits","Kits"],["range","Range Log"],["dope","DOPE"],["ammo","Ammo"],["comms","Comms"],["maint","Maintenance"],["wish","Wishlist"],["loans","Loans"]];
+var TABS=[["inv","Inventory"],["arms","Armory"],["range","Range Log"],["dope","DOPE"],["ammo","Ammo"],["comms","Comms"],["maint","Maintenance"],["wish","Wishlist"],["loans","Loans"]];
 var viewId=k=>k==="kits"?"kitView":k+"View";
 var curTab="inv";
 function badgeFor(k){
@@ -272,6 +272,7 @@ function updateBadges(){var el=$("tabs");if(!el)return;var x=el.scrollLeft;el.in
 $("tabs").onclick=e=>{const b=e.target.closest("[data-tab]");if(b)showTab(b.dataset.tab)};
 function afterRender(){document.body.classList.toggle("nolookups",!lookupsOn());updateBadges();if(curTab==="arms")renderArms();else if(curTab==="kits")renderKits();else if(COLOF[curTab])renderExtra()}
 function showTab(k){
+  if(k==="armory")k="arms";
   if(!TABS.some(t=>t[0]===k))k="inv";
   curTab=k;TABS.forEach(([t])=>{$(viewId(t)).hidden=t!==k});
   ["printBtn","csvBtn","addBtn"].forEach(id=>$(id).hidden=k!=="inv");

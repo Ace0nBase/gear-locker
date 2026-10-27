@@ -1,4 +1,4 @@
-// Firebase project settings for Gear Locker. These identify the project; they are not passwords.
+// Firebase project settings. These identify the project; they are not passwords.
 // Your data is protected by your login and the Firestore security rules.
 window.FIREBASE_CONFIG = {
   apiKey: "AIzaSyBexXFiQtDEnmlL2z0x4FXD7YCbeAHTGC4",

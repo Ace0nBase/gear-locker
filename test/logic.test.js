@@ -4,7 +4,8 @@ import {
   clearUserLocal, shareItemFields, decideAccess, chargeDecision, quotaKey, alertQuotaKey,
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
-  saleRestricted, countedValue, csvExportField, publicWeightNote, lookupAnswerRestricted, localDay,
+  saleRestricted, countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
+  timerShotAccepted, radioService,
   keepSignedIn, firestoreMemoryOnly, settleOrTimeout, signOutConfirmNeeded, SIGN_OUT_WAIT_MS, armorySubject, armoryLookupBlocked, photoIdBlocked,
 } from "../js/logic.js";
 
@@ -312,7 +313,7 @@ test("keep-signed-in off uses a memory cache and sign-out confirms only when a s
   assert.equal(await settleOrTimeout(Promise.reject(new Error("failed")), 50), false);
 });
 
-test("never send arms room items blocks records and weapon-mounted gear, and photo ID waits for a category", () => {
+test("never send Armory items blocks records and weapon-mounted gear, and photo ID waits for a category", () => {
   assert.equal(armoryLookupBlocked(false, { category: "Firearms", name: "Rifle" }), false);
   assert.equal(armoryLookupBlocked(true, { category: "Firearms", name: "Rifle" }), true);
   assert.equal(armoryLookupBlocked(true, { category: "Firearms", arm: "no", name: "Rifle" }), true);
@@ -354,6 +355,46 @@ test("never send arms room items blocks records and weapon-mounted gear, and pho
   assert.equal(photoIdBlocked(true, { category: "NVG & Optics", name: "Binoculars" }), false);
   assert.equal(photoIdBlocked(true, { category: "Firearms", name: "Rifle" }), true);
   assert.equal(photoIdBlocked(true, onRifle), true);
+});
+
+test("a drill stops accepting shots once it has its round count", () => {
+  assert.equal(timerShotAccepted(0, 6), true);
+  assert.equal(timerShotAccepted(5, 6), true);
+  assert.equal(timerShotAccepted(6, 6), false);
+  assert.equal(timerShotAccepted(7, 6), false);
+  assert.equal(timerShotAccepted(3, 0), true);
+  assert.equal(timerShotAccepted(3, ""), true);
+});
+
+test("462 and 467 MHz channels follow the shared FRS/GMRS plan", () => {
+  assert.equal(radioService(462.5625), "FRS/GMRS");
+  assert.equal(radioService(462.7125), "FRS/GMRS");
+  assert.equal(radioService(467.5625), "FRS/GMRS");
+  assert.equal(radioService(467.7125), "FRS/GMRS");
+  assert.equal(radioService(462.55), "FRS/GMRS");
+  assert.equal(radioService(462.725), "FRS/GMRS");
+  assert.equal(radioService("467.5500"), "GMRS");
+  assert.equal(radioService(467.725), "GMRS");
+  assert.equal(radioService(467.6), "GMRS");
+  assert.equal(radioService(151.82), "MURS");
+  assert.equal(radioService(151.88), "MURS");
+  assert.equal(radioService(151.94), "MURS");
+  assert.equal(radioService(154.57), "MURS");
+  assert.equal(radioService(154.6), "MURS");
+  assert.equal(radioService(146.52), "Ham");
+  assert.equal(radioService(162.55), "NOAA weather");
+});
+
+test("csv cells neutralize spreadsheet formulas and stay quoted", () => {
+  for (const ch of ["=", "+", "-", "@", "\t", "\r"]) {
+    assert.equal(csvCell(ch + "1+1"), `"'${ch}1+1"`);
+  }
+  assert.equal(csvCell('=say "hi", there'), `"'=say ""hi"", there"`);
+  assert.equal(csvCell("plain"), '"plain"');
+  assert.equal(csvCell("a=b"), '"a=b"');
+  assert.equal(csvCell("a,b\nline"), '"a,b\nline"');
+  assert.equal(csvCell(null), '""');
+  assert.equal(csvCell(12), '"12"');
 });
 
 test("kit merge uses the server stamp and keeps a pending local edit", () => {

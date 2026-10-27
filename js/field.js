@@ -70,7 +70,7 @@ function battGuess(i){
 function battInfo(i){
   const g=battGuess(i);if(!g&&!i.battType)return null;if(i.battNone)return null;
   let type=i.battType||(i.battery&&String(i.battery))||g?.type||"";type=type.replace(/^\s*cr ?123a?\s*$/i,"CR123A").replace(/^\s*cr ?2032\s*$/i,"CR2032").replace(/^\s*(aa|aaa)\s*$/i,m=>m.trim().toUpperCase());const months=+i.battMonths||g?.months||6;
-  const changed=i.battChanged||"";const next=changed?new Date(new Date(changed+"T12:00:00").getTime()+months*30.44*864e5).toISOString().slice(0,10):"";
+  const changed=i.battChanged||"";const next=changed?localISODate(new Date(new Date(changed+"T12:00:00").getTime()+months*30.44*864e5)):"";
   const daysLeft=next?Math.round((new Date(next+"T12:00:00")-new Date())/864e5):null;
   const status=!changed?"unknown":daysLeft<0?"over":daysLeft<=14?"soon":"ok";
   return {type,count:+i.battCount||g?.count||1,months,life:i.battLife||g?.life||"",kind:g?.kind||"",charge:!!(g?.charge||/recharg/i.test(type)),changed,next,daysLeft,status,looked:!!i.battLooked};
@@ -110,9 +110,9 @@ $("battSheet").addEventListener("click",async e=>{const b=e.target.closest("[dat
   const i=b?.dataset?.id&&all.find(x=>x.id===b.dataset.id&&!x.deleted);
   if(act==="battnow"&&i){i.battChanged=today();if(!i.battType){const g=battGuess(i);if(g){i.battType=g.type;i.battCount=g.count}}i.updatedAt=now();await persist();toast(`${i.name}: logged`);renderExtra();updateBadges();return}
   if(act==="battedit"&&i){battEdit=i.id;renderBattSheet();return}
-  if(act==="battlook"&&i){if(GearLogic.armoryLookupBlocked(!!kits._settings?.privateArms,GearLogic.armorySubject(i,i.mountedOn&&itemById(i.mountedOn)))){toast("Battery lookup skips Arms Room items.");renderExtra();return}b.disabled=true;b.textContent="Looking…";try{const j=await apiPost("/battery",{name:i.name,brand:i.brand||"",category:i.category||"",type:i.armType||""});const r=j.result||{};
+  if(act==="battlook"&&i){if(GearLogic.armoryLookupBlocked(!!kits._settings?.privateArms,GearLogic.armorySubject(i,i.mountedOn&&itemById(i.mountedOn)))){toast("Battery lookup skips Armory items.");renderExtra();return}b.disabled=true;b.textContent="Looking…";try{const j=await apiPost("/battery",{name:i.name,brand:i.brand||"",category:i.category||"",type:i.armType||""});const r=j.result||{};
       if(r.none){i.battNone=true;toast(`${i.name} doesn't use batteries`)}else{if(r.battery)i.battType=r.battery;if(+r.count)i.battCount=+r.count;if(+r.swapMonths)i.battMonths=+r.swapMonths;if(r.life)i.battLife=r.life;toast(`${i.name}: ${r.count||1}× ${r.battery||"?"}, change every ${r.swapMonths||"?"} months`,5000)}
-      i.battLooked=true;i.updatedAt=now();await persist()}catch(err){toast("Battery lookup: "+err.message,5000)}renderExtra();return}
+      i.battLooked=true;i.updatedAt=now();await persist()}catch(err){toast(lookupFailMessage(err&&err.message,"the battery lookup"),5000)}renderExtra();return}
   return _am?_am(act,b):undefined}}
 // item screen: battery line
 {const _od=openDetail;openDetail=function(i,quiet){_od(i,quiet);const b=i&&battInfo(i);if(!b)return;const dl=$("detail").querySelector("dl");if(!dl)return;
@@ -132,8 +132,7 @@ drillLibrary=function(ds){
       ${d.tiers.length?`<div class="tiers">${d.tiers.map(t=>`<span class="${lvl===t[0]?"hit":""}">${esc(t[0])} ≤ ${(+t[1]).toFixed(2)}s</span>`).join("")}</div>`:""}
       ${d.tip?`<div class="setup">${esc(d.tip)}</div>`:""}
       <div class="you">${best!=null?`Your best: <b>${best.toFixed(2)}s</b>${lvl?` · <b>${esc(lvl)}</b>`:""}${me&&isFinite(me.bestFirst)?` · draw ${me.bestFirst.toFixed(2)}s`:""}${me&&isFinite(me.bestSplit)?` · split ${me.bestSplit.toFixed(2)}s`:""}`:"Not logged yet"}</div>
-      <div class="vbtns"><button class="btn" type="button" data-act="timerdrill" data-k="${esc(key)}">Run with timer</button><button class="btn ghost" type="button" data-act="logdrill2" data-k="${esc(key)}">Log by hand</button>${d.mine?`<button class="btn ghost" type="button" data-act="editdrill" data-k="${esc(key)}">Edit</button>`:""}</div>
-      <div class="src">${d.mine?"":"Source: "+esc(d.src)}</div></article>`};
+      <div class="vbtns"><button class="btn" type="button" data-act="timerdrill" data-k="${esc(key)}">Run with timer</button><button class="btn ghost" type="button" data-act="logdrill2" data-k="${esc(key)}">Log by hand</button>${d.mine?`<button class="btn ghost" type="button" data-act="editdrill" data-k="${esc(key)}">Edit</button>`:""}</div></article>`};
   return `<div class="slotsHead">Drills <span>${myDrills().length?`${myDrills().length} of yours + `:""}published standards</span></div>
    <div class="vbtns" style="margin:8px 0"><button class="btn" type="button" data-act="timer">Shot timer</button><button class="btn ghost" type="button" data-act="newdrill">+ Add your own drill</button></div>
    <div class="drills">${myDrills().map(d=>card(allDrills().find(x=>x.id===d.id),"m:"+d.id)).join("")}${DRILLS.map((d,k)=>card(d,"p:"+k)).join("")}</div>`;
@@ -196,15 +195,15 @@ async function micOn(){
       sp.onaudioprocess=ev=>{const c=ev.inputBuffer.getChannelData(0);const t0=TM.ctx.currentTime-c.length/TM.ctx.sampleRate;const th=dbToLin(TM.set.th);for(let i=0;i<c.length;i++){const v=Math.abs(c[i]);if(v>pk)pk=v;const t=t0+i/TM.ctx.sampleRate;if(v>=th&&t>=arm&&!(t>=TM.fb.mf&&t<=TM.fb.mt)&&t-last>TM.set.hold){last=t;onDet({shot:t,lvl:v})}}n+=c.length;if(n>=TM.ctx.sampleRate*0.04){onDet({peak:pk});pk=0;n=0}};
       TM.node=sp;sp.connect(TM.ctx.destination)}
     TM.src.connect(TM.node);pushTm();return true;
-  }catch(err){toast(err.name==="NotAllowedError"?"Allow microphone access for Gear Locker in Settings to use the timer":"Mic error: "+err.message,6000);return false}
+  }catch(err){toast(err.name==="NotAllowedError"?"Allow microphone access for War Box in Settings to use the timer":"Mic error: "+err.message,6000);return false}
 }
 function micOff(){try{TM.stream?.getTracks().forEach(t=>t.stop())}catch{}try{TM.ctx?.close()}catch{}TM.ctx=TM.stream=TM.node=TM.src=null;try{TM.wake?.release()}catch{}TM.wake=null}
 function pushTm(m){const msg={th:dbToLin(TM.set.th),hold:TM.set.hold,...(m||{})};if(TM.useWorklet)TM.node?.port.postMessage(msg);else TM.fb?.set(msg)}
 function beep(at,ms=220,hz=2600){const o=TM.ctx.createOscillator(),g=TM.ctx.createGain();o.type="square";o.frequency.value=hz;g.gain.setValueAtTime(0,at);g.gain.linearRampToValueAtTime(0.9,at+0.005);g.gain.setValueAtTime(0.9,at+ms/1000-0.01);g.gain.linearRampToValueAtTime(0,at+ms/1000);o.connect(g).connect(TM.ctx.destination);o.start(at);o.stop(at+ms/1000+0.02)}
 function onDet(m){
   if(m.peak!=null){TM.peak=m.peak;if(TM.cal)TM.calPeak=Math.max(TM.calPeak,m.peak);drawMeter();return}
-  if(m.shot!=null&&TM.running){const t=m.shot-TM.beepAt;if(t<0)return;TM.shots.push({t,lvl:m.lvl});clearTimeout(TM.autoStop);
-    const need=+tmDrill?.rounds||0;if(need&&TM.shots.length>=need)TM.autoStop=setTimeout(()=>stopTimer(),1500);renderTimerShots();navigator.vibrate?.(15)}
+  if(m.shot!=null&&TM.running){const need=+tmDrill?.rounds||0;if(!GearLogic.timerShotAccepted(TM.shots.length,need))return;const t=m.shot-TM.beepAt;if(t<0)return;TM.shots.push({t,lvl:m.lvl});
+    if(need&&TM.shots.length>=need){clearTimeout(TM.autoStop);TM.autoStop=setTimeout(()=>stopTimer(),1500)}renderTimerShots();navigator.vibrate?.(15)}
 }
 function drawMeter(){const bar=$("tmLvl");if(!bar)return;const db=Math.max(-60,linToDb(TM.peak));bar.style.width=`${Math.max(0,(db+60)/60*100)}%`;bar.classList.toggle("hot",db>=TM.set.th)}
 function openTimer(key){tmDrill=key?drillByKey(key):null;TM.shots=[];TM.running=false;renderTimer()}

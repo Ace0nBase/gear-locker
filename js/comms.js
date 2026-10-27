@@ -8,7 +8,7 @@ all.forEach(i=>{try{delete i._kinds}catch{}});
 var ammoName=a=>[a.caliber,a.brand,a.load].filter(Boolean).join(" ");
 {const _r=RENDER.ammo;RENDER.ammo=()=>{_r();const v=$("ammoView");const recs=L("ammo");
   const st=v.querySelector(".stats");if(st){const paidStat=[...st.querySelectorAll(".stat")].find(s=>/Ammo value/.test(s.textContent));if(paidStat)paidStat.querySelector("span").textContent="What I paid"}
-  const head=v.querySelector(".vhead > div");head?.insertAdjacentHTML("beforeend",`<p class="hint" style="margin:4px 0 0">Ammo stays out of your inventory total. Cost per round is what you paid for that line. Gear Locker does not look up ammo prices or stores.</p>`);
+  const head=v.querySelector(".vhead > div");head?.insertAdjacentHTML("beforeend",`<p class="hint" style="margin:4px 0 0">Ammo stays out of your inventory total. Cost per round is what you paid for that line. War Box does not look up ammo prices or stores.</p>`);
   if(!recs.length)return;
   const cards=recs.slice().sort((a,b)=>(a.caliber||"").localeCompare(b.caliber||"")).map(a=>{const paid=+a.cpr&&+a.rounds?(+a.cpr)*(+a.rounds):0;
     return `<div class="ammoP"><div class="apTop"><b>${esc(ammoName(a)||"Ammo")}</b><small>${(+a.rounds||0).toLocaleString()} rds${a.location?" · "+esc(a.location):""}</small></div>
@@ -31,7 +31,7 @@ var ammoName=a=>[a.caliber,a.brand,a.load].filter(Boolean).join(" ");
 /* ---------- v27: Comms — frequencies, CHIRP export/import, PACE plans ---------- */
 var MODES=[["FM","FM (wide)"],["NFM","NFM (narrow)"],["AM","AM"]];
 var TONES=["67.0","69.3","71.9","74.4","77.0","79.7","82.5","85.4","88.5","91.5","94.8","97.4","100.0","103.5","107.2","110.9","114.8","118.8","123.0","127.3","131.8","136.5","141.3","146.2","151.4","156.7","159.8","162.2","165.5","167.9","171.3","173.8","177.3","179.9","183.5","186.2","189.9","192.8","196.6","199.5","203.5","206.5","210.7","218.1","225.7","229.1","233.6","241.8","250.3","254.1"];
-var SERVICES=["Ham","GMRS","FRS","MURS","Marine","Aviation","NOAA weather","Public safety (listen)","Business","Other"];
+var SERVICES=["Ham","GMRS","FRS","FRS/GMRS","MURS","Marine","Aviation","NOAA weather","Public safety (listen)","Business","Other"];
 // what a Baofeng can legally transmit on: ham (with your license). Everything else exports as receive-only.
 var TX_OK=s=>!s||s==="Ham"||s==="Other";
 var fnum=v=>{const n=parseFloat(String(v||"").replace(/[^\d.]/g,""));return isFinite(n)&&n>0?n:0};
@@ -54,7 +54,7 @@ function chirpRows(list,start){return list.map((f,k)=>{
   const off=dup==="split"?fnum(f.tx).toFixed(6):dup==="+"||dup==="-"?fnum(f.offset).toFixed(6):"0.000000";
   const tm=f.toneMode||"";const t=f.txTone||"88.5",r=f.toneMode==="TSQL"?(f.txTone||"88.5"):(f.rxTone||t);
   return [start+k,(f.short||f.name||"").replace(/[^\w\- ./]/g,"").slice(0,7).toUpperCase(),fnum(f.rx).toFixed(6),dup,off,tm,t,r,f.dcs||"023","NN",f.dcs||"023","Tone->Tone",f.mode||"FM","5.00",f.skip?"S":"",f.power==="Low"?"1.0W":"5.0W",(f.notes||f.name||"").slice(0,60),"","","",""]})}
-function chirpCsv(list,start){return [CHIRP_HEAD,...chirpRows(list,start)].map(r=>r.map(csvCell).join(",")).join("\r\n")+"\r\n"}
+function chirpCsv(list,start){const head=CHIRP_HEAD.map(csvCell).join(",");const body=chirpRows(list,start).map(r=>r.map((v,i)=>i===16?GearLogic.csvCell(v):csvCell(v)).join(","));return [head,...body].join("\r\n")+"\r\n"}
 function parseCsv(t){const rows=[];let row=[],cur="",q=false;for(let i=0;i<t.length;i++){const c=t[i];if(q){if(c==='"'){if(t[i+1]==='"'){cur+='"';i++}else q=false}else cur+=c}else if(c==='"')q=true;else if(c===","){row.push(cur);cur=""}else if(c==="\n"||c==="\r"){if(c==="\r"&&t[i+1]==="\n")i++;row.push(cur);rows.push(row);row=[];cur=""}else cur+=c}if(cur||row.length){row.push(cur);rows.push(row)}return rows.filter(r=>r.some(x=>x.trim()))}
 function fromChirp(text){const rows=parseCsv(text);if(!rows.length)return[];const h=rows[0].map(x=>x.trim());const ix=k=>h.indexOf(k);if(ix("Frequency")<0)throw new Error("That isn't a CHIRP .csv (no Frequency column)");
   return rows.slice(1).map(r=>{const g=k=>(r[ix(k)]??"").trim();const rx=fnum(g("Frequency"));if(!rx)return null;let dup=g("Duplex");const tm=g("Tone");
@@ -62,7 +62,7 @@ function fromChirp(text){const rows=parseCsv(text);if(!rows.length)return[];cons
     return {ch:g("Location"),name:g("Name")||mhz(rx),short:g("Name"),rx:mhz(rx),duplex:dup,offset:dup==="+"||dup==="-"?mhz(g("Offset")):"",tx:dup==="split"?mhz(g("Offset")):"",
       toneMode:["Tone","TSQL","DTCS"].includes(tm)?tm:"",txTone:g("rToneFreq")||"",rxTone:g("cToneFreq")||"",dcs:g("DtcsCode")||"",mode:["FM","NFM","AM"].includes(g("Mode"))?g("Mode"):"FM",
       power:/^(1|low)/i.test(g("Power"))?"Low":"High",notes:g("Comment"),service:svc,group:"Imported",skip:g("Skip")==="S"}}).filter(Boolean)}
-function guessService(rx){if((rx>=144&&rx<=148)||(rx>=420&&rx<=450)||(rx>=222&&rx<=225)||(rx>=50&&rx<=54))return rx>=462.55&&rx<=467.725?"GMRS":"Ham";if(rx>=462.55&&rx<=467.725)return "GMRS";if(rx>=151.82&&rx<=154.6)return "MURS";if(rx>=156&&rx<=162.025)return "Marine";if(rx>=162.4&&rx<=162.55)return "NOAA weather";if(rx>=108&&rx<=137)return "Aviation";return "Other"}
+function guessService(rx){return GearLogic.radioService(rx)}
 async function saveFile(name,text,type){const blob=new Blob([text],{type});
   try{const file=new File([blob],name,{type});if(navigator.canShare&&navigator.canShare({files:[file]})&&/iphone|ipad|android/i.test(navigator.userAgent)){await navigator.share({files:[file],title:name});return}}catch(e){if(e.name==="AbortError")return}
   const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},2000)}
@@ -72,7 +72,8 @@ var COMMON={
  "Ham calling":[["2MCALL","146.520","Ham","National 2 m FM simplex calling"],["70CALL","446.000","Ham","National 70 cm FM simplex calling"],["2M 55","146.550","Ham","2 m simplex"],["2M 58","146.580","Ham","2 m simplex"],["70 500","446.500","Ham","70 cm simplex"]],
  "NOAA weather":[["WX1","162.550","NOAA weather"],["WX2","162.400","NOAA weather"],["WX3","162.475","NOAA weather"],["WX4","162.425","NOAA weather"],["WX5","162.450","NOAA weather"],["WX6","162.500","NOAA weather"],["WX7","162.525","NOAA weather"]],
  "MURS":[["MURS1","151.820","MURS"],["MURS2","151.880","MURS"],["MURS3","151.940","MURS"],["MURS4","154.570","MURS"],["MURS5","154.600","MURS"]],
- "FRS / GMRS 1–22":[...[462.5625,462.5875,462.6125,462.6375,462.6625,462.6875,462.7125,467.5625,467.5875,467.6125,467.6375,467.6625,467.6875,467.7125,462.55,462.575,462.6,462.625,462.65,462.675,462.7,462.725].map((f,k)=>[`FRS${k+1}`,f.toFixed(4),k<7||k>=14?"GMRS":"FRS"])],
+ "FRS/GMRS 1–22":[...[462.5625,462.5875,462.6125,462.6375,462.6625,462.6875,462.7125,467.5625,467.5875,467.6125,467.6375,467.6625,467.6875,467.7125,462.55,462.575,462.6,462.625,462.65,462.675,462.7,462.725].map((f,k)=>[`FRS/GMRS ${k+1}`,f.toFixed(4),"FRS/GMRS",k<7?"FRS 2 W, GMRS up to 5 W":k<14?"0.5 W for both FRS and GMRS":"FRS 2 W, GMRS up to 50 W","","","FG"+(k+1)])],
+ "GMRS repeaters":[...[462.55,462.575,462.6,462.625,462.65,462.675,462.7,462.725].map((f,k)=>[`GMRS repeater ${k+15}`,f.toFixed(4),"GMRS",`Repeater output. Input is +5 MHz (${(f+5).toFixed(3)}).`,"+","5","RPT"+(k+15)])],
  "Marine":[["MAR16","156.800","Marine","Distress / calling"],["MAR9","156.450","Marine","Boater calling"],["MAR22A","157.100","Marine","Coast Guard liaison"]],
 };
 
@@ -98,8 +99,8 @@ RENDER.comms=()=>{
   if(commsTab==="freqs"){
     body=`<section class="stats"><div class="stat"><b>${all_.length}</b><span>Frequencies</span></div><div class="stat"><b>${groups.length-1}</b><span>Groups</span></div><div class="stat"><b>${rs.length}</b><span>Radios</span></div><div class="stat"><b>${L("pace").length}</b><span>PACE plans</span></div></section>
     <div class="cBar"><select id="cGroup" aria-label="Group">${optList(groups.map(g=>[g,g]),commsGroup)}</select><button class="btn ghost" type="button" data-act="cimport">Import CHIRP .csv</button><button class="btn ghost" type="button" data-act="ccommon">Add common channels</button></div>
-    ${list.length?`<div class="scroll"><table class="tbl"><thead><tr><th class="n">Ch</th><th>Name</th><th class="n">RX</th><th>TX</th><th>Tone</th><th>Mode</th><th>Group</th></tr></thead><tbody>${list.map(f=>{const tx=txFreq(f);const ro=f.duplex==="off"||!TX_OK(f.service);
-      return `<tr class="click" data-act="edit" data-id="${esc(f.id)}"><td class="n">${esc(f.ch||"")}</td><td><b>${esc(f.name)}</b>${f.short&&f.short.toUpperCase()!==String(f.name).toUpperCase()?`<small class="mono"> ${esc(f.short)}</small>`:""}<br><small>${esc(f.service||"")}${f.notes?" · "+esc(f.notes):""}</small></td><td class="n mono">${esc(mhz(f.rx))}</td><td class="mono">${ro?"<small>RX only</small>":tx&&Math.abs(tx-fnum(f.rx))>1e-6?esc(mhz(tx)):"simplex"}</td><td class="mono">${esc(toneTxt(f)||"—")}</td><td>${esc(f.mode||"FM")}${f.power==="Low"?" · L":""}</td><td>${esc(f.group||"—")}</td></tr>`}).join("")}</tbody></table></div>`
+    ${list.length?`<div class="scroll"><table class="tbl"><thead><tr><th class="n">Ch</th><th>Name</th><th class="n">RX</th><th>TX</th><th>Tone</th><th>Mode</th><th>Group</th></tr></thead><tbody>${list.map(f=>{const lab=txLabel(f);
+      return `<tr class="click" data-act="edit" data-id="${esc(f.id)}"><td class="n">${esc(f.ch||"")}</td><td><b>${esc(f.name)}</b>${f.short&&f.short.toUpperCase()!==String(f.name).toUpperCase()?`<small class="mono"> ${esc(f.short)}</small>`:""}<br><small>${esc(f.service||"")}${f.notes?" · "+esc(f.notes):""}</small></td><td class="n mono">${esc(mhz(f.rx))}</td><td class="mono">${lab==="RX only"?"<small>RX only</small>":esc(lab)}</td><td class="mono">${esc(toneTxt(f)||"—")}</td><td>${esc(f.mode||"FM")}${f.power==="Low"?" · L":""}</td><td>${esc(f.group||"—")}</td></tr>`}).join("")}</tbody></table></div>`
      :`<div class="empty"><b>No frequencies yet</b>Tap <em>+</em> to add one, <em>Import CHIRP .csv</em> to pull in what's already on your radio, or <em>Add common channels</em> for calling, weather, MURS and FRS/GMRS.</div>`}`;
   }else if(commsTab==="pace"){
     const plans=L("pace").sort((a,b)=>(a.name||"").localeCompare(b.name||""));
@@ -146,11 +147,11 @@ ACT.comms=async(act,b,e)=>{
   if(act==="ctab"){commsTab=b.dataset.k;renderExtra();return}
   if(act==="cimport"){$("chirpFile").click();return}
   if(act==="ccommon"){const v=$("commsView");v.querySelector(".cBar").insertAdjacentHTML("afterend",`<div class="secBlock" id="commonBox"><h3>Add common channels</h3>${Object.keys(COMMON).map(k=>`<label class="keep"><input type="checkbox" value="${esc(k)}"${k==="Ham calling"||k==="NOAA weather"?" checked":""}> ${esc(k)} (${COMMON[k].length})</label>`).join("")}<p class="hint">Only ham channels are set to transmit. Weather, MURS, FRS/GMRS and marine are added receive-only, because Baofengs aren't approved to transmit on them.</p><div class="cBar"><button class="btn" type="button" data-act="ccommonadd">Add</button></div></div>`);b.disabled=true;return}
-  if(act==="ccommonadd"){const picks=[...$("commonBox").querySelectorAll("input:checked")].map(x=>x.value);const have=new Set(L("freqs").map(f=>mhz(f.rx)));let n=0;
-    for(const g of picks)for(const [nm,fr,svc,note] of COMMON[g]){if(have.has(mhz(fr)))continue;await upsertC("freqs",{name:nm,short:nm,rx:mhz(fr),duplex:TX_OK(svc)?"":"off",mode:svc==="Ham"||svc==="NOAA weather"||svc==="Marine"?"FM":"NFM",power:"High",service:svc,group:g,notes:note||""});n++}
+  if(act==="ccommonadd"){const picks=[...$("commonBox").querySelectorAll("input:checked")].map(x=>x.value);const freqKey=(rx,dup)=>mhz(rx)+(dup==="+"||dup==="-"||dup==="split"?dup:"");const have=new Set(L("freqs").map(f=>freqKey(f.rx,f.duplex)));let n=0;
+    for(const g of picks)for(const [nm,fr,svc,note,duplex,offset,short] of COMMON[g]){const dup=duplex!=null&&duplex!==""?duplex:(TX_OK(svc)?"":"off");if(have.has(freqKey(fr,dup)))continue;have.add(freqKey(fr,dup));await upsertC("freqs",{name:nm,short:short||nm,rx:mhz(fr),duplex:dup,offset:dup==="+"||dup==="-"?(offset||"5"):"",mode:svc==="Ham"||svc==="NOAA weather"||svc==="Marine"?"FM":"NFM",power:"High",service:svc,group:g,notes:note||""});n++}
     toast(n?`Added ${n} channels`:"You already have those");render();return}
   if(act==="cexport"){const rid=b.dataset.r;const r=rid&&itemById(rid);const list=freqsSorted().filter(f=>!rid||(f.radios||{})[rid]);if(!list.length){toast("No frequencies to export");return}
-    const cs=commsSet();const name=`${(r?r.name:"gear-locker-freqs").replace(/[^\w\-]+/g,"_")}_${today()}.csv`;await saveFile(name,chirpCsv(list,+cs.start||0),"text/csv");toast(`Exported ${list.length} channel${list.length>1?"s":""} for CHIRP`,4000);return}
+    const cs=commsSet();const name=`${(r?r.name:"war-box-freqs").replace(/[^\w\-]+/g,"_")}_${today()}.csv`;await saveFile(name,chirpCsv(list,+cs.start||0),"text/csv");toast(`Exported ${list.length} channel${list.length>1?"s":""} for CHIRP`,4000);return}
   if(act==="cprint"){printFreqs();return}
   if(act==="pnew"){paceEd={};renderExtra();return}
   if(act==="pedit"){const p=L("pace").find(x=>x.id===b.dataset.id);if(p){paceEd=JSON.parse(JSON.stringify(p));renderExtra()}return}
@@ -159,7 +160,8 @@ ACT.comms=async(act,b,e)=>{
   if(act==="pdel"){paceCollect();if(!paceEd._armed){paceEd._armed=true;renderExtra();return}await removeC("pace",paceEd.id);paceEd=null;toast("Deleted");render();return}
   if(act==="pprint"){const p=L("pace").find(x=>x.id===b.dataset.id);if(p)printPace(p);return}
 };
-function freqTable(list){return `<table><thead><tr><th>Ch</th><th>Name</th><th>RX MHz</th><th>TX</th><th>Tone</th><th>Mode</th><th>Notes</th></tr></thead><tbody>${list.map(f=>{const tx=txFreq(f);const ro=f.duplex==="off"||!TX_OK(f.service);return `<tr><td>${esc(f.ch||"")}</td><td><b>${esc(f.name)}</b></td><td>${esc(mhz(f.rx))}</td><td>${ro?"RX only":tx&&Math.abs(tx-fnum(f.rx))>1e-6?esc(mhz(tx)):"simplex"}</td><td>${esc(toneTxt(f)||"—")}</td><td>${esc(f.mode||"FM")}</td><td>${esc(f.notes||"")}</td></tr>`}).join("")}</tbody></table>`}
+function txLabel(f){const tx=txFreq(f);const offset=tx&&Math.abs(tx-fnum(f.rx))>1e-6;const rxOnly=f.duplex==="off"||!TX_OK(f.service);if((f.duplex==="+"||f.duplex==="-"||f.duplex==="split")&&offset)return mhz(tx);if(rxOnly)return "RX only";return "simplex"}
+function freqTable(list){return `<table><thead><tr><th>Ch</th><th>Name</th><th>RX MHz</th><th>TX</th><th>Tone</th><th>Mode</th><th>Notes</th></tr></thead><tbody>${list.map(f=>{const lab=txLabel(f);return `<tr><td>${esc(f.ch||"")}</td><td><b>${esc(f.name)}</b></td><td>${esc(mhz(f.rx))}</td><td>${esc(lab)}</td><td>${esc(toneTxt(f)||"—")}</td><td>${esc(f.mode||"FM")}</td><td>${esc(f.notes||"")}</td></tr>`}).join("")}</tbody></table>`}
 function printFreqs(){const cs=commsSet();const list=freqsSorted();const gs=[...new Set(list.map(f=>f.group||"Ungrouped"))];
   $("printSheet").innerHTML=`<div class="ph"><div><h1>FREQUENCY CARD</h1><small>${cs.callsign?esc(cs.callsign)+" · ":""}Printed ${new Date().toLocaleDateString()}</small></div></div>${gs.map(g=>`<h3>${esc(g)}</h3>${freqTable(list.filter(f=>(f.group||"Ungrouped")===g))}`).join("")}${L("pace").map(p=>paceCard(p,true)).join("")}`;window.print()}
 function printPace(p){const ids=PSTEP.map(([k])=>p[k]?.freq).filter(Boolean);const list=L("freqs").filter(f=>ids.includes(f.id));
@@ -211,10 +213,7 @@ function pgSheet(){const g=paceGen,v=g.in;const sel=(n,arr)=>`<select name="${n}
   }
   return `<div class="sheetWrap"><div class="sheetBg" data-act="pgclose"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Build a PACE plan"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-act="pgclose" aria-label="Close">✕</button></div><form class="panel" id="pgForm">${body}</form></div></div>`}
 var pgGroup=()=>paceGen?.in?.location?("Local — "+paceGen.in.location).slice(0,40):"Local";
-{const _r=RENDER.comms;RENDER.comms=()=>{_r();const v=$("commsView");
-  if(commsTab==="pace"){const h=v.querySelector(".vhead");h?.insertAdjacentHTML("afterend",`<div class="cBar"><button class="btn" type="button" data-act="pgopen">Build a plan for me</button><span class="hint">from your area, situation and saved frequencies</span></div>`)}
-  if(paceGen)v.insertAdjacentHTML("beforeend",pgSheet());
-}}
+{const _r=RENDER.comms;RENDER.comms=()=>{_r();if(paceGen)$("commsView").insertAdjacentHTML("beforeend",pgSheet())}}
 {const _c=collect;collect=function(view){if(view==="comms"&&paceGen&&paceGen.stage!=="result")pgCollect();return _c(view)}}
 async function pgSaveNew(){const r=paceGen.res;const keep=new Set([...document.querySelectorAll("#pgForm [data-nf]:checked")].map(x=>+x.dataset.nf));const map={};
   const have=L("freqs");for(const [k,n] of r.newFreqs.entries()){if(!keep.has(k))continue;const dup=have.find(f=>mhz(f.rx)===mhz(n.rx)&&(f.duplex||"")===(n.duplex||""));if(dup){map[k]=dup.id;continue}
@@ -234,7 +233,7 @@ function pgPlanRec(map){const r=paceGen.res,fs=paceGen.sent;const rec={name:r.na
     const sent=freqsSorted().slice(0,150);
     try{const j=await apiPost("/pace",{...v,freqs:sent.map(f=>({name:f.name,rx:mhz(f.rx),duplex:f.duplex||"",offset:f.offset||"",tx:f.tx||"",tone:toneTxt(f),mode:f.mode||"FM",service:f.service||"",group:f.group||"",notes:f.notes||"",onRadio:onRadio(f)}))});
       if(!paceGen)return;paceGen.res=j.result;paceGen.sent=sent.map(f=>({id:f.id}));paceGen.stage="result"}
-    catch(err){if(!paceGen)return;paceGen.stage="form";paceGen.err="Couldn't build it: "+err.message}renderExtra();return}
+    catch(err){if(!paceGen)return;paceGen.stage="form";paceGen.err=lookupFailMessage(err&&err.message,"the plan")}renderExtra();return}
   if(act==="pgsave"){const map=await pgSaveNew();const rec=pgPlanRec(map);await upsertC("pace",rec);const n=Object.keys(map).length;paceGen=null;commsTab="pace";toast(`PACE plan saved${n?` · ${n} new frequenc${n>1?"ies":"y"} added`:""}`,4000);render();return}
   if(act==="pgedit"){const map=await pgSaveNew();paceEd=pgPlanRec(map);paceGen=null;commsTab="pace";render();return}
   return _a(act,b,e)}}

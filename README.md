@@ -1,8 +1,12 @@
-# Gear Locker
+# War Box
 
-Gear Locker is a private inventory for the gear you already own. This copy of the site is the one that gets published. The checks below use a separate practice locker on your computer. They cannot open the live locker or spend the live lookup key.
+War Box is a private inventory for the gear you already own. This copy of the site is the one that gets published. The checks below use a separate practice locker on your computer. They cannot open the live locker or spend the live lookup key.
 
-Questions about this project go to the Gear Locker team. A public support address is not chosen yet: support@&lt;brand-domain&gt; (TODO).
+War Box is operated by Six Ridge Labs LLC. The site is [getwarbox.com](https://getwarbox.com). Questions go to support@getwarbox.com.
+
+## Later iPhone wrap
+
+Capacitor is not in this project yet. When the iPhone app is added, use bundle id `com.sixridgelabs.warbox` and target iPhone only. Copy `design/warbox-icon/ios/AppIcon.appiconset/` over `ios/App/App/Assets.xcassets/AppIcon.appiconset/` after `npx cap add ios`.
 
 ## Run the local privacy check
 

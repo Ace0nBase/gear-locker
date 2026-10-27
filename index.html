@@ -6,29 +6,33 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://www.gstatic.com https://www.google.com; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://gear-locker-api.ace0nbase.workers.dev https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://www.google.com https://www.gstatic.com https://*.firebaseapp.com http://127.0.0.1:8787 http://127.0.0.1:8080 http://127.0.0.1:9099 http://127.0.0.1:9199 http://localhost:8787 http://localhost:8080 http://localhost:9099 http://localhost:9199 ws://127.0.0.1:8080 ws://localhost:8080; frame-src https://www.google.com https://www.recaptcha.net https://*.firebaseapp.com; worker-src 'self'; manifest-src 'self'; form-action 'self'">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Gear Locker</title>
-<link rel="icon" href="icon-192.png">
+<title>War Box</title>
+<meta name="application-name" content="War Box">
+<meta name="description" content="War Box is a private inventory for the gear you already own.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="favicon-16.png" sizes="16x16" type="image/png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Gear Locker">
+<meta name="apple-mobile-web-app-title" content="War Box">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#4a572e">
+<meta name="theme-color" content="#A8865A">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
 <div class="gate" id="gate" hidden>
   <form id="gateForm" autocomplete="on">
-    <h1>Gear Locker</h1>
-    <p id="gateMsg">Sign in to open your locker.</p>
+    <h1>War Box</h1>
+    <p id="gateMsg">Sign in to open War Box.</p>
     <div id="gateFields" hidden>
     <div class="f"><label for="gEmail">Email</label><input id="gEmail" type="email" autocomplete="username" required></div>
     <div class="f"><label for="gPass">Password</label><input id="gPass" type="password" autocomplete="current-password" required></div>
     <div class="err" id="gErr" role="alert"></div>
     <div class="row2"><button class="btn" type="submit" id="gIn">Sign in</button><button class="btn ghost" type="button" id="gNew">Create account</button></div>
     <label class="keep"><input type="checkbox" id="gKeep" checked> Keep me signed in on this device</label>
-    <p class="hint" id="gKeepNote" hidden>With this off, the locker on this device only works while you are online.</p>
+    <p class="hint" id="gKeepNote" hidden>With this off, War Box on this device only works while you are online.</p>
     <button class="link" type="button" id="gReset">Forgot password?</button>
     </div>
   </form>
@@ -38,7 +42,7 @@
 <div class="wrap">
   <header>
     <div>
-      <h1>Gear Locker</h1>
+      <h1>War Box</h1>
       <div class="sub" id="sub">KIT INVENTORY</div>
       <div class="acct" id="acct" hidden><span class="sync" id="syncDot"></span><span id="acctTxt"></span><button type="button" id="signOut">Sign out</button><span class="ver" id="ver"></span><span class="ver" id="keepLive" hidden>Online only on this device</span></div>
     </div>
@@ -52,7 +56,7 @@
   <nav class="tabs" id="tabs" role="tablist"></nav>
 
   <div class="banner" id="connect" hidden>
-    <p id="connectMsg">Choose where Gear Locker saves your gear. Pick the <b>Gear Locker</b> folder (Desktop › FOLDERS › Gear Locker). Market checks read and update the file there.</p>
+    <p id="connectMsg">Choose where War Box saves a backup of your gear. Pick the <b>War Box</b> folder. Market checks read and update the file there.</p>
     <span class="vbtns"><button class="btn" id="connectBtn" type="button">Choose folder</button><button class="later" id="connectLater" type="button">Not now</button></span>
   </div>
 
@@ -78,16 +82,15 @@
   </section>
 
   <datalist id="colors"><option>Black</option><option>Coyote</option><option>Ranger Green</option><option>Multicam</option><option>Wolf Grey</option><option>FDE</option><option>Tan 499</option></datalist>
-  <datalist id="loadouts"></datalist>
   <datalist id="locations"></datalist>
   <datalist id="calibers"><option>9mm</option><option>5.56 NATO</option><option>.223 Rem</option><option>300 BLK</option><option>7.62x39</option><option>.308 Win</option><option>7.62x51</option><option>6.5 Creedmoor</option><option>.45 ACP</option><option>.40 S&amp;W</option><option>10mm</option><option>.380 ACP</option><option>.22 LR</option><option>12 Gauge</option><option>.300 Win Mag</option></datalist>
   <datalist id="drills"><option>Bill Drill</option><option>El Presidente</option><option>FAST</option><option>Draw to first shot</option><option>Dot Torture</option><option>5x5 Skill Test</option><option>Mozambique</option><option>1-Reload-1</option><option>Failure to Stop</option><option>Casino</option><option>Doubles</option><option>Box Drill</option><option>Ready-Up</option><option>Transition drill</option></datalist>
   <datalist id="maintTasks"><option>Clean &amp; lube</option><option>Detail strip &amp; inspect</option><option>Replace battery</option><option>Swap battery / function check</option><option>Inspect tourniquet</option><option>Check med expirations</option><option>Charge &amp; check battery</option><option>Inspect plates for damage</option><option>Check optic zero &amp; screws</option><option>Check helmet pads &amp; retention</option><option>Replace recoil spring</option><option>Replace gas rings</option></datalist>
 
   <div class="tools">
-    <input id="q" type="search" placeholder="Search items, brands, loadouts, locations" aria-label="Search">
+    <input id="q" type="search" placeholder="Search name, brand, place" aria-label="Search">
     <button class="btn ghost" id="bulkMktBtn" type="button">Market check all</button>
-    <select id="sort" aria-label="Sort" style="width:auto"><option value="name">Sort: name</option><option value="val">Sort: value</option><option value="on">Sort: loadout</option><option value="loc">Sort: location</option></select>
+    <select id="sort" aria-label="Sort" style="width:auto"><option value="name">Sort: name</option><option value="val">Sort: value</option><option value="loc">Sort: location</option></select>
   </div>
   <div class="chips" id="chips" role="group" aria-label="Filter by category"></div>
 
@@ -108,7 +111,6 @@
     <div class="f"><label for="fRetail">New retail price ($)</label><input id="fRetail" type="number" min="0" step="1" placeholder="What it costs new"></div>
     <div class="f"><label for="fVal">Value each ($)</label><input id="fVal" type="number" min="0" step="1" placeholder="Auto from retail"></div>
     <div class="f"><label for="fPaid">What I paid each ($)</label><input id="fPaid" type="number" min="0" step="0.01" placeholder="If you remember"></div>
-    <div class="f"><label for="fOn">Set up on / loadout</label><input id="fOn" list="loadouts" placeholder="Plate carrier"></div>
     <div class="f span2"><label for="fLoc">Stored at</label><input id="fLoc" list="locations" placeholder="Gear closet, bin 2"></div>
     <div class="f"><label for="fWt">Weight each (oz)</label><input id="fWt" type="number" min="0" step="0.1" placeholder="Blank = auto lookup"></div>
     <div class="f"><label for="fNick">Nickname (to tell twins apart)</label><input id="fNick" placeholder="Belt #1 – plate setup"></div>
@@ -116,7 +118,7 @@
     <div class="f span2 nogun"><label for="fGun">Goes with firearm</label><select id="fGun"></select></div>
     <div class="f fire"><label for="fCal">Caliber</label><input id="fCal" list="calibers" placeholder="5.56 NATO"></div>
     <div class="f fire"><label for="fBase">Rounds fired before tracking</label><input id="fBase" type="number" min="0" step="1" placeholder="0"></div>
-    <div class="f span2"><label for="fArm">Serial record (Arms Room)</label><select id="fArm"><option value="no">Not on the record</option><option value="FA">Firearm</option><option value="SU">Suppressor</option><option value="OP">Optic / sight</option><option value="WL">Weapon light</option><option value="LA">Laser / NVG / thermal</option><option value="KN">Knife</option></select></div>
+    <div class="f span2"><label for="fArm">Serial record (Armory)</label><select id="fArm"><option value="no">Not on the record</option><option value="FA">Firearm</option><option value="SU">Suppressor</option><option value="OP">Optic / sight</option><option value="WL">Weapon light</option><option value="LA">Laser / NVG / thermal</option><option value="KN">Knife</option></select></div>
     <div class="f rec" data-recs="FA SU OP WL LA"><label for="fSerial">Serial number</label><input id="fSerial" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Exactly as stamped"></div>
     <div class="f rec"><label for="fArmId">Record ID</label><input id="fArmId" autocapitalize="characters" placeholder="Auto"></div>
     <div class="f rec"><label for="fArmType" id="fArmTypeL">Type</label><input id="fArmType" placeholder="Rifle, pistol, RD, 1-6x…"></div>

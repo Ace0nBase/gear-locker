@@ -1,4 +1,4 @@
-/* ---------- Arms Room: serial records ---------- */
+/* ---------- Armory: serial records ---------- */
 var ARM={
   FA:{label:"Firearms",one:"Firearm",cat:"Firearms",type:"Type / action"},
   SU:{label:"Suppressors",one:"Suppressor",cat:"Suppressors",type:"Caliber rating"},
@@ -27,12 +27,12 @@ function renderArms(){
   const secs=ARM_KEYS.map(k=>({k,rows:armRows(k)}));
   const n=secs.reduce((a,s)=>a+s.rows.length,0),val=secs.reduce((a,s)=>a+s.rows.reduce((b,i)=>b+GearLogic.countedValue(i)*(+i.qty||1),0),0);
   const noSer=secs.reduce((a,s)=>a+s.rows.filter(i=>!i.serial&&s.k!=="KN").length,0);
-  v.innerHTML=`<div class="vhead"><div><h2>Arms Room</h2><p>Serial numbers and records for your guns, suppressors, optics, lights, lasers and knives, for insurance and theft reports. Only you can see this when signed in.</p></div>
+  v.innerHTML=`<div class="vhead"><div><h2>Armory</h2><p>Serial numbers and records for your guns, suppressors, optics, lights, lasers and knives, for insurance and theft reports. Only you can see this when signed in.</p></div>
     <div class="vbtns"><button class="btn ghost" type="button" data-arm="ser">${showSer?"Hide serials":"Show serials"}</button><button class="btn ghost" type="button" data-arm="import">Import record</button><button class="btn ghost" type="button" data-arm="print">Print record</button><button class="btn" type="button" data-arm="new" id="armAdd">+ Add</button></div></div>
   <section class="stats armsStats"><div class="stat"><b>${noSer}</b><span>Missing serial</span></div><div class="stat"><b>${n}</b><span>On record</span></div><div class="stat"><b>${money(val)}</b><span>Value</span></div><div class="stat"><b>${(()=>{const pd=secs.reduce((a,s)=>a+s.rows.reduce((b,i)=>b+(+i.paid||0)*(+i.qty||1),0),0);return pd?money(pd):"—"})()}</b><span>What I paid</span></div></section>
   ${n?secs.filter(s=>s.rows.length).map(s=>{const sv=s.rows.reduce((b,i)=>b+GearLogic.countedValue(i)*(+i.qty||1),0);
     return `<section class="group"><div class="ghead"><h3>${esc(ARM[s.k].label)}</h3><span>${s.rows.length}${sv?` · ${money(sv)}`:""}</span></div>
-    ${s.rows.map(i=>{const on=itemById(i.mountedOn);const sub=[i.brand,i.armType,i.caliber,on?"on "+on.name:i.setupOn].filter(Boolean).join(" · ");
+    ${s.rows.map(i=>{const on=itemById(i.mountedOn);const sub=[i.brand,i.armType,i.caliber,on?"on "+on.name:""].filter(Boolean).join(" · ");
       return `<button type="button" class="row armRow" data-id="${esc(i.id)}"><span class="qty armId">${esc(i.armId||"—")}</span>
       <span class="nm">${esc(i.name)}${i.nick?` <span class="tag">${esc(i.nick)}</span>`:""}<small>${esc(sub)}</small></span>
       <span class="ser">${s.k==="KN"?esc(i.markings||""):i.serial?`<span class="mono">${esc(maskSer(i.serial))}</span>`:`<span class="tag">no serial</span>`}</span>
@@ -86,7 +86,7 @@ function docxTables(xml){
   }));
 }
 var MON={JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,SEPT:9,OCT:10,NOV:11,DEC:12};
-function recDate(s){const m=String(s||"").toUpperCase().replace(/\s/g,"").match(/^(\d{1,2})([A-Z]{3,4})(\d{4})$/);if(m&&MON[m[2]])return `${m[3]}-${String(MON[m[2]]).padStart(2,"0")}-${m[1].padStart(2,"0")}`;const d=new Date(s);return s&&!isNaN(d)&&/\d{4}/.test(s)?d.toISOString().slice(0,10):""}
+function recDate(s){const raw=String(s||"").trim();const iso=raw.match(/^(\d{4})-(\d{2})-(\d{2})/);if(iso)return iso[1]+"-"+iso[2]+"-"+iso[3];const m=raw.toUpperCase().replace(/\s/g,"").match(/^(\d{1,2})([A-Z]{3,4})(\d{4})$/);if(m&&MON[m[2]])return `${m[3]}-${String(MON[m[2]]).padStart(2,"0")}-${m[1].padStart(2,"0")}`;const d=new Date(raw);return raw&&!isNaN(d)&&/\d{4}/.test(raw)?localISODate(d):""}
 var unk=s=>/^(UK|UNK|UNKNOWN|N\/?A|NONE|-+)$/i.test(String(s||"").trim())?"":String(s||"").trim();
 function recMoney(s){const v=parseFloat(String(s||"").replace(/[$,\s]/g,""));return isFinite(v)&&v>0?Math.round(v*100)/100:0}
 function parseRecord(tables){
@@ -170,7 +170,7 @@ async function doImport(){
     }
   });
   p.rows.forEach(r=>{if(!r.gun||!r.id)return;const it=all.find(i=>i.id===r.id);const gid=idMap[r.gun]||r.gun;if(it&&gid&&gid!==it.id){it.mountedOn=gid;it.updatedAt=t}});
-  const n=p.rows.length;armImport=null;render();renderArms();await persist();toast(`Imported ${n} items into the Arms Room`,4000);
+  const n=p.rows.length;armImport=null;render();renderArms();await persist();toast(`Imported ${n} items into the Armory`,4000);
 }
 $("armsView").addEventListener("click",async e=>{
   const row=e.target.closest(".armRow[data-id]");if(row){openDetail(all.find(i=>i.id===row.dataset.id));return}
@@ -239,7 +239,7 @@ readForm=function(){
 /* printable record */
 function buildArmsPrint(){
   const m2=n=>"$"+(+n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-  const on=i=>{const g=itemById(i.mountedOn);return g?(g.armId||g.name):(i.setupOn||"")};
+  const on=i=>{const g=itemById(i.mountedOn);return g?(g.armId||g.name):""};
   const COLS={
     FA:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Type / Action","armType"],["Caliber","caliber"],["Serial Number","serial"],["Bbl. Len.","bbl"],["Date Acquired",i=>fmtD(i.acquired)],["Acquired From","acquiredFrom"],["Value",i=>{const n=GearLogic.countedValue(i);return n?m2(n):""}],["Notes / Status","notes"]],
     SU:[["Item ID","armId"],["Manufacturer","brand"],["Model","name"],["Caliber","caliber"],["Serial Number","serial"],["Form","nfaForm"],["Stamp / Approval",i=>fmtD(i.stampDate)],["Dealer","acquiredFrom"],["Mount / Adapter","adapter"],["Value",i=>{const n=GearLogic.countedValue(i);return n?m2(n):""}],["Notes / Status","notes"]],
@@ -317,11 +317,11 @@ $("swapSheet").addEventListener("click",async e=>{
 
 /* identify unknown gear from a photo */
 function shrinkImage(file,max=1024){return new Promise((res,rej)=>{const img=new Image();img.onload=()=>{const s=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement("canvas");c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);c.getContext("2d").drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(img.src);res(c.toDataURL("image/jpeg",0.82).split(",")[1])};img.onerror=()=>rej(new Error("Couldn't open that photo"));img.src=URL.createObjectURL(file)})}
-$("idBtn").onclick=()=>{const draft=photoDraft();if(GearLogic.photoIdBlocked(!!kits._settings?.privateArms,draft)){toast(String(draft.category||"").trim()? "Photo ID stays off for Arms Room items.":"Choose a category before photo ID.");return}if(!window.LOOKUP_URL||!cloudUser){toast("Sign in to use photo ID");return}$("idFile").click()};
+$("idBtn").onclick=()=>{const draft=photoDraft();if(GearLogic.photoIdBlocked(!!kits._settings?.privateArms,draft)){toast(String(draft.category||"").trim()?"Photo ID stays off for Armory items.":"Choose a category before photo ID.");return}if(!window.LOOKUP_URL||!cloudUser){toast("Sign in to use photo ID");return}$("idFile").click()};
 $("idFile").addEventListener("change",async e=>{
   const f=e.target.files[0];e.target.value="";if(!f)return;
   const draft=photoDraft();
-  if(GearLogic.photoIdBlocked(!!kits._settings?.privateArms,draft)){toast(String(draft.category||"").trim()?"Photo ID stays off for Arms Room items.":"Choose a category before photo ID.");return}
+  if(GearLogic.photoIdBlocked(!!kits._settings?.privateArms,draft)){toast(String(draft.category||"").trim()?"Photo ID stays off for Armory items.":"Choose a category before photo ID.");return}
   const out=$("idOut");out.hidden=false;out.innerHTML=`<span class="tag">Looking at your photo…</span>`;$("idBtn").disabled=true;
   try{
     const img=await shrinkImage(f);const tok=await firebase.auth().currentUser.getIdToken();
@@ -335,7 +335,7 @@ $("idFile").addEventListener("change",async e=>{
     $("fName").dispatchEvent(new Event("input"));
     const photoRestricted=GearLogic.saleRestricted(saleDraft());
     out.innerHTML=`<span class="tag">Photo ID · ${esc(g.confidence||"low")} confidence</span><br>${esc(g.summary||"")}${g.brand?"":photoRestricted?" Look up weight does not search stores.":" Brand unknown, so prices and weight will be estimated for a typical one."}`;
-  }catch(err){out.innerHTML=`<span class="tag">Photo ID</span><br>${esc(err.message||"Didn't work")}`}
+  }catch(err){out.innerHTML=`<span class="tag">Photo ID</span><br>${esc(lookupFailMessage(err&&err.message,"photo ID"))}`}
   finally{$("idBtn").disabled=false}
 });
 
@@ -380,7 +380,7 @@ async function publishShare(){
   try{await fsdb.collection("shares").doc(sid).set(doc)}catch(e){toast("Couldn't create the link: "+(e.code==="permission-denied"?"sharing isn't switched on yet":e.message),6000);return}
   kits={...kits,_shares:{...(kits._shares||{}),[s.kind+":"+s.id]:sid}};await persist();
   s.sid=sid;s.link=shareUrl(sid);renderShare();
-  try{if(navigator.share){await navigator.share({title:s.title+" · Gear Locker",text:`${s.from?s.from+"'s ":""}${s.title}`,url:s.link});return}}catch(e){if(e.name==="AbortError")return}
+  try{if(navigator.share){await navigator.share({title:s.title+" · War Box",text:`${s.from?s.from+"'s ":""}${s.title}`,url:s.link});return}}catch(e){if(e.name==="AbortError")return}
   try{await navigator.clipboard.writeText(s.link);toast("Link copied. Paste it in a text.")}catch{$("shLink")?.select();toast("Copy the link and send it")}
 }
 $("shareSheet").addEventListener("click",async e=>{
@@ -406,11 +406,11 @@ async function showSharedPage(){
     const val=items.reduce((a,i)=>a+(+i.value||0)*(+i.qty||1),0),paid=items.reduce((a,i)=>a+(+i.paid||0)*(+i.qty||1),0);
     const line=(i,depth)=>`<div class="shItem" style="margin-left:${Math.min(depth,4)*18}px">${depth?`<span class="shOn">on ${esc(items.find(x=>x.id===i.parent)?.name||"")}</span>`:""}<b>${i.qty>1?i.qty+"× ":""}${esc(i.name)}${i.nick?` <span class="tag">${esc(i.nick)}</span>`:""}</b><small>${esc([i.brand,i.color,i.caliber,i.weight!=null?fmtWt(i.weight):"",d.prices&&i.value?"worth "+money(i.value):"",d.prices&&i.paid?"paid "+money(i.paid):""].filter(Boolean).join(" · "))}</small></div>`+kids(i.id).map(k=>line(k,depth+1)).join("");
     const roots=items.filter(i=>!i.parent||!items.some(x=>x.id===i.parent));
-    v.innerHTML=`<header><div><div class="sub">GEAR LOCKER · SHARED${d.from?" BY "+esc(d.from.toUpperCase()):""}</div><h1>${esc(d.title||"Gear")}</h1></div></header>
+    v.innerHTML=`<header><div><div class="sub">WAR BOX · SHARED${d.from?" BY "+esc(d.from.toUpperCase()):""}</div><h1>${esc(d.title||"Gear")}</h1></div></header>
      <section class="stats"><div class="stat"><b>${items.length}</b><span>Items</span></div><div class="stat"><b>${wt?fmtWt(wt):"—"}</b><span>Weight${wn<items.length&&wt?` (${wn}/${items.length})`:""}</span></div>${d.prices?`<div class="stat"><b>${money(val)}</b><span>Value</span></div><div class="stat"><b>${paid?money(paid):"—"}</b><span>Paid</span></div>`:""}</section>
      <div class="shList">${roots.map(r=>line(r,0)).join("")}</div>
-     <p class="hint" style="margin-top:28px">Updated ${esc(new Date(d.updatedAt||Date.now()).toLocaleDateString())}. <a href="${esc(location.pathname)}">Make your own Gear Locker</a></p>`;
-    document.title=(d.title||"Gear")+" · Gear Locker";
+     <p class="hint" style="margin-top:28px">Updated ${esc(new Date(d.updatedAt||Date.now()).toLocaleDateString())}. <a href="${esc(location.pathname)}">Make your own War Box</a></p>`;
+    document.title=(d.title||"Gear")+" · War Box";
   }catch(e){v.innerHTML=`<div class="empty"><b>Can't open this link</b>${esc(e.code==="permission-denied"?"This link was turned off or doesn't exist.":e.message||"")}</div>`}
 }
 

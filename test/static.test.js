@@ -26,12 +26,25 @@ test("the page has a content security policy and no inline app script", () => {
   assert.match(html, /css\/app\.css/);
 });
 
-test("published files do not contain a personal name, the future app name, or a live test override", () => {
+test("published files do not contain a personal name or a retired product name", () => {
   const blob = html + config + sw + manifest + appJs + read("README.md") + read("js/logic.js") + read("js/qa-guard.js") + read("api/worker.js");
   assert.doesNotMatch(blob, /Blake/);
-  assert.doesNotMatch(blob, /Kit Cage|kitcage|War Box|getwarbox/i);
+  assert.doesNotMatch(blob, /Kit Cage|kitcage/i);
+  assert.match(html, /<title>War Box<\/title>/);
+  assert.match(manifest, /"name": "War Box"/);
+  assert.match(manifest, /"short_name": "War Box"/);
+  assert.match(read("README.md"), /support@getwarbox\.com/);
+  assert.match(read("README.md"), /Six Ridge Labs LLC/);
+  assert.match(read("README.md"), /com\.sixridgelabs\.warbox/);
+  assert.match(read("README.md"), /iPhone only/);
+  assert.doesNotMatch(html, /Gear Locker|Arms Room/);
+  assert.doesNotMatch(manifest, /Gear Locker|Arms Room/);
+  assert.match(read("js/records.js"), /\["arms","Armory"\]/);
+  assert.match(read("js/records.js"), /if\(k==="armory"\)k="arms"/);
+  assert.match(read("css/app.css"), /--accent:#A8865A/);
+  assert.match(read("css/app.css"), /--accent:#BC9A6C/);
   const emails = blob.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
-  const allowed = new Set(["friend@email.com", "securetoken@system.gserviceaccount.com"]);
+  const allowed = new Set(["friend@email.com", "securetoken@system.gserviceaccount.com", "support@getwarbox.com"]);
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
@@ -40,9 +53,10 @@ test("sign-out clears this device and the service worker is version 29", () => {
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /gear-locker-v29/);
+  assert.match(sw, /war-box-v30/);
+  assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
-  assert.match(manifest, /icon-maskable-512\.png/);
+  assert.match(manifest, /maskable-512\.png/);
   assert.match(manifest, /"purpose": "maskable"/);
   assert.doesNotMatch(manifest, /icon-512\.png".*"purpose": "maskable"/);
 });
@@ -86,11 +100,22 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.doesNotMatch(read("js/social.js"), /modelRestricted/);
   assert.doesNotMatch(read("api/worker.js"), /normalizeGearLabel/);
   assert.match(read("js/social.js"), /!GearLogic\.saleRestricted\(w\)&&w\.deal/);
-  assert.match(read("js/security.js"), /caliber, load, and Arms Room type/);
+  assert.match(read("js/security.js"), /caliber, load, and Armory type/);
   assert.match(read("js/security.js"), /Headlamps, flashlights, and binoculars still look up/);
   assert.match(read("js/security.js"), /Firearms, suppressors, frames, and ammunition get a weight-only lookup with no prices or stores/);
   assert.match(read("js/security.js"), /gear mounted on a weapon/);
   assert.match(read("js/comms.js"), /<span>I paid<\/span>/);
+  assert.match(read("js/comms.js"), /GearLogic\.csvCell/);
+  assert.match(read("js/comms.js"), /FRS 2 W, GMRS up to 5 W/);
+  assert.match(read("js/comms.js"), /0\.5 W for both FRS and GMRS/);
+  assert.match(read("js/comms.js"), /FRS 2 W, GMRS up to 50 W/);
+  assert.match(read("js/comms.js"), /Input is \+5 MHz/);
+  assert.doesNotMatch(read("js/comms.js"), /k<7\|\|k>=14\?"GMRS":"FRS"/);
+  assert.doesNotMatch(html, /open your locker/);
+  assert.match(html, /theme-color" content="#A8865A"/);
+  assert.match(manifest, /"theme_color": "#A8865A"/);
+  assert.doesNotMatch(read("js/records.js"), /Add kit gaps/);
+  assert.doesNotMatch(read("js/core.js"), /Set up on/);
   assert.match(read("css/app.css"), /\.apShot\[hidden\]\{display:none\}/);
   assert.match(read("api/worker.js"), /publicWeightNote/);
   assert.match(read("js/cloud.js"), /marketSourceText\(i\)/);
@@ -132,5 +157,8 @@ test("production config stays on the live project and the default alias does not
   assert.match(config, /APP_CHECK_SITE_KEY = ""/);
   assert.match(firebaserc, /"default": "demo-gear-locker"/);
   assert.doesNotMatch(firebaserc, /gear-locker-c248c/);
-  assert.equal(fs.existsSync(new URL("../icon-maskable-512.png", import.meta.url)), true);
+  assert.equal(fs.existsSync(new URL("../maskable-512.png", import.meta.url)), true);
+  assert.equal(fs.existsSync(new URL("../icon-192.png", import.meta.url)), true);
+  assert.equal(fs.existsSync(new URL("../favicon.svg", import.meta.url)), true);
+  assert.equal(fs.existsSync(new URL("../apple-touch-icon.png", import.meta.url)), true);
 });
