@@ -48,13 +48,13 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device and the service worker is version 35", () => {
+test("sign-out clears this device and the service worker is version 36", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v35/);
-  assert.match(read("js/cloud.js"), /APP_VERSION="35"/);
+  assert.match(sw, /war-box-v36/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="36"/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
   assert.match(manifest, /maskable-512\.png/);
@@ -72,7 +72,11 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/social.js"), /loanSharePlan/);
   assert.match(read("js/social.js"), /lendNeedsWrite/);
   assert.match(read("js/social.js"), /hasPendingWrites/);
-  assert.match(read("js/social.js"), /deletedEmails/);
+  assert.doesNotMatch(read("js/social.js"), /deletedEmails/);
+  assert.doesNotMatch(read("js/social.js"), /loan sharing isn't switched on yet/);
+  const mirror = read("js/social.js").slice(read("js/social.js").indexOf("async function mirrorLend"), read("js/social.js").indexOf("async function recoverOrphanLends"));
+  assert.doesNotMatch(mirror, /batch\.delete/);
+  assert.ok(mirror.indexOf("batch.commit()") < mirror.indexOf("ref.delete()"));
   assert.match(read("js/security.js"), /item name, brand, color and category, dates, your name and your email/);
   assert.doesNotMatch(read("js/core.js"), /gearLocker\.offline/);
   assert.doesNotMatch(read("js/core.js"), /stashOffline|offlinePending/);
@@ -210,7 +214,10 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/cloud.js"), /accountDeleteError/);
   assert.match(read("js/cloud.js"), /if\(accountDeleteError\)/);
   assert.match(read("js/cloud.js"), /deletedUsers/);
-  assert.match(read("js/cloud.js"), /deletedEmails/);
+  assert.doesNotMatch(read("js/cloud.js"), /deletedEmails/);
+  assert.doesNotMatch(read("js/logic.js"), /deletedEmails/);
+  assert.doesNotMatch(read("firestore.rules"), /deletedEmails/);
+  assert.doesNotMatch(read("firestore.rules"), /emailBuried/);
   assert.match(read("js/cloud.js"), /serverTimestamp\(\)/);
   assert.match(read("js/cloud.js"), /where\("owner","=="/);
   assert.match(read("js/cloud.js"), /deleteRetryRoute/);

@@ -8,7 +8,9 @@ import {
   clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, priciestRates, spendRates, applyReserve, applyReconcile,
   SEARCH_RESULT_TOKENS, roundFits, roundInputTokens, loanTargetsFromLends, loanRedactTargets, loansToMirror,
   deleteRetryRoute, runDeleteAttempt, SERVER_DELETE_STEPS, LOOKUPS_PAUSED,
-  ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, REDACT_LIMIT, emailHash, lendMirrorOps,
+  ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
+  CLEANUP_MAX_ATTEMPTS, CLEANUP_MAX_AGE_MS, CLEANUP_RECORD_MAX_BYTES, orderRedactions,
+  REDACT_LIMIT, lendMirrorOps,
   ROUND_INPUT_TOKEN_CAP,
 } from "../js/logic.js";
 import { UsageLedger } from "../api/usage-ledger.js";
@@ -466,10 +468,7 @@ test("a borrowed lend clears the lender loan, and a query error is not an empty 
   assert.ok(loanPatch.body.updateTransforms.some(t => t.fieldPath === "updatedAt" && t.setToServerValue === "REQUEST_TIME"));
   assert.ok(patches.some(p => p.url.includes("lends/loan1")));
   assert.equal(patches.some(p => p.url.includes("/loans/") && !p.url.includes("users/owner/loans/loan1")), false);
-  const buried = patches.find(p => p.url.includes("/deletedEmails/"));
-  assert.ok(buried);
-  assert.equal(buried.body.update.name.endsWith("/" + await emailHash("a@b.co")), true);
-  assert.equal(JSON.stringify(buried.body.update.fields).includes("@"), false);
+  assert.equal(patches.some(p => p.url.includes("/deletedEmails/")), false);
 
   const none = [];
   const empty = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, async (url, opts) => {
@@ -660,18 +659,61 @@ test("the deleted-account note survives sign-out, and both cleanup failures are 
   const kept = deletedAccountGate("", loaded.shown);
   assert.equal(kept.text, "Your account is deleted.");
   assert.equal(kept.clearStored, false);
+  assert.equal(deleteCleanupResult(true, true).status, 200);
   assert.equal(deleteCleanupResult(true, true).body.cleanup, "done");
+  assert.equal(deleteCleanupResult(false, true).status, 200);
   assert.equal(deleteCleanupResult(false, true).body.cleanup, "pending");
   assert.equal(deleteCleanupResult(false, false).status, 502);
-  assert.equal(deleteCleanupResult(true, true).body.cleanup, "done");
-  assert.equal(deleteCleanupResult(true, false).status, 200);
-  assert.equal(deleteCleanupResult(true, false).body.cleanup, "done");
-  assert.equal(deleteCleanupResult(true, true, true).body.cleanup, "done");
-  const followUp = cleanupRetryPlan({ uid: "abc", at: "t", redactPending: [{ reason: "capped", loanId: "L1" }] });
-  assert.equal(followUp.action, "keep");
-  assert.equal(followUp.body.usageCleared, true);
-  assert.equal(followUp.body.redactPending.length, 1);
-  assert.equal(cleanupRetryPlan({ uid: "abc", at: "t" }).action, "delete");
+  assert.equal(deleteCleanupResult(true, false).status, 502);
+  assert.match(deleteCleanupResult(true, false).body.error, /Couldn't finish deleting the account/);
+  const now = Date.parse("2026-10-27T00:00:00.000Z");
+  const fresh = cleanupRetryPlan({
+    uid: "abc",
+    at: "2026-10-27T00:00:00.000Z",
+    attempts: 0,
+    redactPending: [{ reason: "capped", loanId: "L1" }],
+  }, now);
+  assert.equal(fresh.action, "retry");
+  assert.equal(fresh.body.attempts, 1);
+  assert.equal(fresh.body.redactPending, undefined);
+  assert.ok(fresh.raw.length <= CLEANUP_RECORD_MAX_BYTES);
+  const waiting = cleanupRetryPlan({
+    uid: "abc",
+    at: "2026-10-27T00:00:00.000Z",
+    attempts: 1,
+    lastTry: "2026-10-27T00:00:00.000Z",
+  }, now + 60 * 1000);
+  assert.equal(waiting.action, "wait");
+  const due = cleanupRetryPlan({
+    uid: "abc",
+    at: "2026-10-26T00:00:00.000Z",
+    attempts: 1,
+    lastTry: "2026-10-26T22:00:00.000Z",
+  }, now);
+  assert.equal(due.action, "retry");
+  assert.equal(due.body.attempts, 2);
+  assert.equal(cleanupRetryPlan({ uid: "abc", at: "2026-10-27T00:00:00.000Z", attempts: CLEANUP_MAX_ATTEMPTS }, now).action, "delete");
+  assert.equal(cleanupRetryPlan({ uid: "abc", at: "2026-10-19T00:00:00.000Z", attempts: 1 }, now).action, "delete");
+  assert.ok(now - Date.parse("2026-10-19T00:00:00.000Z") > CLEANUP_MAX_AGE_MS);
+  assert.equal(cleanupRetryPlan({ uid: "abc", at: "t", usageCleared: true }, now).action, "delete");
+  assert.equal(cleanupRetryPlan({ uid: "abc", at: "t" }, now).action, "delete");
+  const queued = cleanupQueueBody("abc", "2026-10-27T00:00:00.000Z");
+  assert.ok(queued && queued.length <= CLEANUP_RECORD_MAX_BYTES);
+  assert.equal(JSON.parse(queued).attempts, 0);
+  assert.equal(JSON.parse(queued).redactPending, undefined);
+  assert.equal(cleanupQueueBody("a b", "t"), null);
+  assert.equal(cleanupQueueBody("a/b", "t"), null);
+  assert.equal(cleanupQueueBody("", "t"), null);
+  assert.equal(cleanupQueueBody("x".repeat(129), "t"), null);
+  const huge = cleanupRetryPlan({
+    uid: "abc",
+    at: "2026-10-27T00:00:00.000Z",
+    attempts: 0,
+    redactPending: Array.from({ length: 500 }, (_, i) => ({ reason: "capped", loanId: "loan" + i, lend: "x".repeat(200) })),
+  }, now);
+  assert.equal(huge.action, "retry");
+  assert.equal(huge.body.redactPending, undefined);
+  assert.ok(huge.raw.length <= CLEANUP_RECORD_MAX_BYTES);
   const mirrored = loansToMirror([
     { id: "loan1", friendEmail: "QA-B@Example.test" },
     { id: "plain", friendEmail: "" },
@@ -684,7 +726,7 @@ test("the deleted-account note survives sign-out, and both cleanup failures are 
   assert.deepEqual(loansToMirror([{ id: "loan1", friendEmail: "QA-B@Example.test" }], false), []);
 });
 
-test("a second lend repair writes nothing, and a buried address is cleared instead", () => {
+test("a second lend repair writes nothing, and a missing lend is not deleted", () => {
   const desired = {
     lender: "owner",
     borrowerEmail: "QA-B@Example.test",
@@ -697,10 +739,9 @@ test("a second lend repair writes nothing, and a buried address is cleared inste
   const stored = { ...desired, updatedAt: "t2", serverUpdatedAt: "t2", borrowerReturned: "2026-10-01" };
   assert.deepEqual(lendMirrorOps(jobs, { L1: { ...desired, updatedAt: "t3" } }, { L1: stored }), []);
   assert.deepEqual(lendMirrorOps(jobs, { L1: { ...desired, borrowerEmail: "other@example.com" } }, { L1: stored }), [{ id: "L1", op: "set" }]);
-  assert.deepEqual(lendMirrorOps(jobs, { L1: desired }, { L1: stored }, ["L1"]), [
-    { id: "L1", op: "delete" },
-    { id: "L1", op: "clear" },
-  ]);
+  const drop = [{ id: "L1", writeLend: false, deleteLend: true }];
+  assert.deepEqual(lendMirrorOps(drop, {}, {}), []);
+  assert.deepEqual(lendMirrorOps(drop, {}, { L1: stored }), [{ id: "L1", op: "delete" }]);
 });
 
 test("the first round of every AI op fits its hold, and the input cap applies after a search", () => {
@@ -766,8 +807,65 @@ test("redaction stops at the cap and queues the rest", async () => {
   };
   const out = await deleteUserFirestore({ FIREBASE_PROJECT: "demo" }, "token", { sub: "abc", email: "a@b.co" }, fetchImpl);
   assert.equal(out.ok, true);
-  assert.equal(loanGets, REDACT_LIMIT);
+  assert.equal(loanGets, REDACT_LIMIT + 1);
   assert.equal(loanCommits, 0);
   assert.equal(out.redactPending.filter(row => row.reason === "capped").length, 1);
   assert.equal(out.redactPending.some(row => row.loanId === "loan" + REDACT_LIMIT), true);
+});
+
+test("a real lender loan is redacted before forged lends fill the cap", async () => {
+  const forged = Array.from({ length: REDACT_LIMIT }, (_, i) => ({
+    id: "fake" + i, match: false, clearLoan: false,
+  }));
+  const real = { id: "realLoan", match: true, clearLoan: true };
+  const ordered = orderRedactions([...forged, real], REDACT_LIMIT);
+  assert.equal(ordered.now[0].id, "realLoan");
+  assert.equal(ordered.now.some(row => row.id === "realLoan"), true);
+  assert.equal(ordered.later.some(row => row.id === "realLoan"), false);
+  assert.equal(ordered.later.length, 1);
+
+  const docs = [
+    ...forged.map(row => ({
+      name: "projects/demo/databases/(default)/documents/lends/" + row.id,
+      fields: { lender: { stringValue: "owner" }, borrowerEmail: { stringValue: "a@b.co" } },
+    })),
+    {
+      name: "projects/demo/databases/(default)/documents/lends/realLoan",
+      fields: { lender: { stringValue: "owner" }, borrowerEmail: { stringValue: "a@b.co" } },
+    },
+  ];
+  const loanCommits = [];
+  let loanGets = 0;
+  const fetchImpl = async (url, opts) => {
+    const method = (opts && opts.method) || "GET";
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    const json = (status, data) => ({ status, json: async () => data });
+    if (String(url).includes(":commit")) {
+      const name = body.writes[0].update.name || "";
+      if (name.includes("/loans/")) loanCommits.push(name);
+      return json(200, {});
+    }
+    if (String(url).includes(":runQuery")) {
+      const q = body.structuredQuery;
+      if (q.from[0].collectionId === "lends" && q.where.fieldFilter.field.fieldPath === "borrowerEmail") {
+        return json(200, docs.map(document => ({ document })));
+      }
+      return json(200, [{}]);
+    }
+    if (method === "GET" && String(url).includes("/loans/")) {
+      loanGets += 1;
+      if (String(url).includes("/loans/realLoan")) {
+        return json(200, { fields: { lender: { stringValue: "owner" }, friendEmail: { stringValue: "a@b.co" } } });
+      }
+      return json(404, {});
+    }
+    return json(200, { documents: [] });
+  };
+  const out = await deleteUserFirestore({ FIREBASE_PROJECT: "demo" }, "token", { sub: "abc", email: "a@b.co" }, fetchImpl);
+  assert.equal(out.ok, true);
+  assert.equal(loanGets, REDACT_LIMIT + 1);
+  assert.deepEqual(loanCommits.filter(name => name.includes("/loans/realLoan")).length, 1);
+  assert.equal(loanCommits.some(name => name.includes("/loans/fake")), false);
+  assert.equal(out.redactPending.some(row => row.loanId === "realLoan"), false);
+  assert.equal(out.redactPending.filter(row => row.reason === "capped").length, 1);
 });

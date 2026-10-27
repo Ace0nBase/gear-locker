@@ -14,7 +14,7 @@
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan } from "../js/logic.js";
+import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
 
@@ -381,15 +381,16 @@ async function clearUsageCounters(env, uid) {
   await deleteUserKv(env, uid);
 }
 const CLEANUP_PREFIX = "cleanup:";
-async function queueUsageCleanup(env, uid, redactPending) {
+async function queueUsageCleanup(env, uid) {
   if (!env.WATCH || !uid) throw new Error("cleanup");
-  const body = { uid, at: new Date().toISOString() };
-  if (Array.isArray(redactPending) && redactPending.length) body.redactPending = redactPending;
-  await env.WATCH.put(CLEANUP_PREFIX + uid, JSON.stringify(body));
+  const raw = cleanupQueueBody(uid, new Date().toISOString());
+  if (!raw) throw new Error("cleanup");
+  await env.WATCH.put(CLEANUP_PREFIX + uid, raw);
 }
 async function retryQueuedCleanups(env) {
   if (!env.WATCH) return 0;
   let cursor, done = 0;
+  const now = Date.now();
   do {
     const page = await env.WATCH.list({ prefix: CLEANUP_PREFIX, cursor });
     for (const k of page.keys || []) {
@@ -400,13 +401,23 @@ async function retryQueuedCleanups(env) {
       let record = {};
       try { record = raw ? JSON.parse(raw) : {}; }
       catch { record = {}; }
+      const plan = cleanupRetryPlan(record && record.uid ? record : { ...record, uid }, now);
+      if (plan.action === "wait") continue;
+      if (plan.action === "delete") {
+        try { await env.WATCH.delete(k.name); done++; }
+        catch { /* the next hourly run tries again */ }
+        continue;
+      }
       try {
         await clearUsageCounters(env, uid);
-        const plan = cleanupRetryPlan(record && record.uid ? record : { ...record, uid });
-        if (plan.action === "keep") await env.WATCH.put(k.name, JSON.stringify(plan.body));
-        else await env.WATCH.delete(k.name);
+        await env.WATCH.delete(k.name);
         done++;
-      } catch { /* the next hourly run tries again */ }
+      } catch {
+        try {
+          if (plan.raw) await env.WATCH.put(k.name, plan.raw);
+          else await env.WATCH.delete(k.name);
+        } catch { /* the next hourly run tries again */ }
+      }
     }
     cursor = page.list_complete ? null : page.cursor;
   } while (cursor);
@@ -690,10 +701,8 @@ export default {
         const removed = await deleteAuthUser(env, idToken);
         if (!removed.ok) return json({ error: removed.error }, 502, h);
         const countersGone = await retryOnce(() => clearUsageCounters(env, accountUser.sub));
-        const redactLeft = Array.isArray(cleaned.redactPending) && cleaned.redactPending.length > 0;
-        let queueSaved = countersGone && !redactLeft;
-        if (!countersGone || redactLeft) queueSaved = await retryOnce(() => queueUsageCleanup(env, accountUser.sub, cleaned.redactPending));
-        const cleanup = deleteCleanupResult(countersGone, queueSaved, redactLeft);
+        const queueSaved = countersGone ? true : await retryOnce(() => queueUsageCleanup(env, accountUser.sub));
+        const cleanup = deleteCleanupResult(countersGone, queueSaved);
         if (cleanup.status !== 200) return json(cleanup.body, cleanup.status, h);
         deleteRevenueCatCustomer(env, accountUser.sub);
         return json(cleanup.body, 200, h);

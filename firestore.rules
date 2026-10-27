@@ -27,11 +27,6 @@ service cloud.firestore {
     function tombstoned() {
       return signedIn() && exists(/databases/$(database)/documents/deletedUsers/$(request.auth.uid));
     }
-    function emailBuried(addr) {
-      return addr is string
-        && addr.size() > 0
-        && exists(/databases/$(database)/documents/deletedEmails/$(hashing.sha256(addr.lower()).toHexString()));
-    }
     function itemOk(m) {
       return m is map
         && m.keys().hasOnly(['id','name','brand','color','category','nick','qty','weight','parent','caliber','value','paid']);
@@ -177,13 +172,9 @@ service cloud.firestore {
         && request.resource.data.borrowerEmail is string
         && request.resource.data.borrowerEmailLower is string
         && request.resource.data.borrowerEmail.size() > 3
-        && request.resource.data.borrowerEmailLower.size() > 3
-        && !emailBuried(request.resource.data.borrowerEmail)
-        && !emailBuried(request.resource.data.borrowerEmailLower);
+        && request.resource.data.borrowerEmailLower.size() > 3;
       allow update: if !tombstoned() && ((isLender()
-          && request.resource.data.lender == resource.data.lender
-          && !emailBuried(request.resource.data.borrowerEmail)
-          && !emailBuried(request.resource.data.borrowerEmailLower))
+          && request.resource.data.lender == resource.data.lender)
         || (borrowerMatch()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['borrowerReturned','updatedAt','serverUpdatedAt'])));
       allow update: if emailOk()
@@ -194,19 +185,6 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['borrowerEmail','borrowerEmailLower','updatedAt','serverUpdatedAt']);
       allow delete: if isLender();
-    }
-
-    match /deletedEmails/{hash} {
-      allow get: if signedIn();
-      allow list: if false;
-      allow create: if signedIn()
-        && request.auth.token.email is string
-        && request.auth.token.email.size() > 3
-        && hash == hashing.sha256(request.auth.token.email.lower()).toHexString()
-        && !exists(/databases/$(database)/documents/deletedEmails/$(hash))
-        && request.resource.data.keys().hasOnly(['at'])
-        && request.resource.data.at == request.time;
-      allow update, delete: if false;
     }
 
     match /deletedUsers/{uid} {

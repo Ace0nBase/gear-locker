@@ -36,19 +36,12 @@ function lendDoc(x){const it=itemById(x.itemId)||{};let from="";try{from=localSt
   var email=String(x.friendEmail||"").trim();
   return {lender:cloudUser.uid,lenderName:from||String(cloudUser.email||"").split("@")[0],lenderEmail:tokenEmail(),borrowerEmail:email,borrowerEmailLower:email.toLowerCase(),borrowerName:x.borrower||"",
     item:{name:it.name||x.itemName||"",brand:it.brand||x.itemBrand||"",color:it.color||x.itemColor||"",category:it.category||x.itemCategory||""},out:x.out||"",due:x.due||"",returned:x.returned||"",updatedAt:now()}}
-async function friendEmailBuried(email){
-  const hash=await GearLogic.emailHash(email);
-  if(!hash||!fsdb)return false;
-  try{const snap=await fsdb.collection("deletedEmails").doc(hash).get();return !!(snap&&snap.exists)}catch(e){return false}
-}
 async function mirrorLend(x,removed){
   if(!fsdb||!cloudUser||!x||!x.id)return;
-  let plan=GearLogic.loanSharePlan(x,{removed:!!removed,verified:!!cloudUser.emailVerified});
+  const plan=GearLogic.loanSharePlan(x,{removed:!!removed,verified:!!cloudUser.emailVerified});
   if(plan.needsVerify)toast("Confirm your email first, then this loan can show up in your friend's War Box.",5000);
   const local=(db.loans||[]).find(y=>y.id===x.id);
   const row=local||x;
-  let buried=false;
-  if(plan.writeLend&&await friendEmailBuried(row.friendEmail)){buried=true;row.friendEmail="";row.lendShared=false;plan=GearLogic.loanSharePlan(row,{removed:!!removed,verified:!!cloudUser.emailVerified})}
   if(plan.writeLend)row.lendShared=true;
   else if(plan.deleteLend&&!row.deleted)row.lendShared=false;
   const batch=fsdb.batch();
@@ -56,10 +49,10 @@ async function mirrorLend(x,removed){
   const ref=fsdb.collection("lends").doc(x.id);
   const desired=lendDoc(row);
   if(plan.writeLend&&GearLogic.lendNeedsWrite(desired,lentRemote[x.id]))batch.set(ref,desired,{merge:true});
-  if(buried||(plan.deleteLend&&lentRemote[x.id]))batch.delete(ref);
   pushed["loans/"+x.id]=row.updatedAt;
   try{await batch.commit()}
-  catch(e){delete pushed["loans/"+x.id];toast("Couldn't send the loan to your friend's app: "+(e.code==="permission-denied"?"loan sharing isn't switched on yet":e.message),5000)}
+  catch(e){delete pushed["loans/"+x.id];toast("Couldn't send the loan to your friend's app: "+(e.message||"try again"),5000);return}
+  if(plan.deleteLend&&lentRemote[x.id]){try{await ref.delete()}catch(e){}}
 }
 async function recoverOrphanLends(){
   if(!fsdb||!cloudUser||!cloudUser.emailVerified)return;
@@ -97,26 +90,22 @@ async function repairLoanMirrors(){
   const loans=db.loans||[];
   const jobs=GearLogic.loansToMirror(loans,!!cloudUser.emailVerified);
   const desired={};
-  const blocked=[];
   for(const job of jobs){
     const loan=loans.find(function(y){return y&&y.id===job.id});
     if(!loan||!job.writeLend)continue;
-    if(await friendEmailBuried(loan.friendEmail))blocked.push(job.id);
-    else desired[job.id]=lendDoc(loan);
+    desired[job.id]=lendDoc(loan);
   }
-  const plan=GearLogic.lendMirrorOps(jobs,desired,lentRemote,blocked);
-  if(!plan.length)return;
-  for(let i=0;i<plan.length;i+=400){
+  const plan=GearLogic.lendMirrorOps(jobs,desired,lentRemote);
+  const sets=plan.filter(function(op){return op.op==="set"});
+  const dels=plan.filter(function(op){return op.op==="delete"});
+  for(let i=0;i<sets.length;i+=400){
     const batch=fsdb.batch();
-    plan.slice(i,i+400).forEach(function(op){
-      const loan=loans.find(function(y){return y&&y.id===op.id});
-      const ref=fsdb.collection("lends").doc(op.id);
-      if(op.op==="set"&&desired[op.id])batch.set(ref,desired[op.id],{merge:true});
-      if(op.op==="delete")batch.delete(ref);
-      if(op.op==="clear"&&loan){loan.friendEmail="";loan.lendShared=false;loan.updatedAt=now();batch.set(userRef().collection("loans").doc(loan.id),stampRow(loan))}
+    sets.slice(i,i+400).forEach(function(op){
+      if(desired[op.id])batch.set(fsdb.collection("lends").doc(op.id),desired[op.id],{merge:true});
     });
     try{await batch.commit()}catch(e){}
   }
+  for(const op of dels){try{await fsdb.collection("lends").doc(op.id).delete()}catch(e){}}
 }
 {const _save=SAVE.loans;SAVE.loans=async d=>{
   if(d.friendEmail&&!/^\S+@\S+\.\S+$/.test(String(d.friendEmail).trim())){toast("That email doesn't look right");return}

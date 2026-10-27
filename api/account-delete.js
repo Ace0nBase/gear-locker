@@ -2,7 +2,7 @@
 // Rules allow that owner to list and delete their shares, locker, and lends, and to clear their email.
 // 404 means the row is already gone. The auth user is deleted only after this returns ok.
 
-import { USER_COLLECTIONS, loanRedactTargets, REDACT_LIMIT, emailHash } from "../js/logic.js";
+import { USER_COLLECTIONS, loanRedactTargets, REDACT_LIMIT, orderRedactions } from "../js/logic.js";
 
 const GEAR_STILL_HERE = "Couldn't finish removing your gear. Your sign-in is still here. Try again.";
 
@@ -128,18 +128,6 @@ async function patchFields(fetchImpl, idToken, project, name, stringFields, time
   return commitWrite(fetchImpl, idToken, project, write);
 }
 
-async function buryDeletedEmail(fetchImpl, idToken, project, email) {
-  const hash = await emailHash(email);
-  if (!hash) return;
-  const name = "projects/" + project + "/databases/(default)/documents/deletedEmails/" + hash;
-  await commitWrite(fetchImpl, idToken, project, {
-    update: { name, fields: {} },
-    updateMask: { fieldPaths: ["at"] },
-    updateTransforms: [{ fieldPath: "at", setToServerValue: "REQUEST_TIME" }],
-    currentDocument: { exists: false },
-  });
-}
-
 function stringField(doc, field) {
   const value = doc && doc.fields && doc.fields[field];
   return value && typeof value.stringValue === "string" ? value.stringValue : "";
@@ -197,13 +185,16 @@ async function redactBorrowed(fetchImpl, idToken, project, root, email, user) {
     pending.push({ reason: "lends-query" });
     return pending;
   }
-  const overflow = docs.slice(REDACT_LIMIT);
-  const batchDocs = docs.slice(0, REDACT_LIMIT);
-  for (const doc of overflow) {
-    pending.push({ reason: "capped", lend: doc.name, lender: stringField(doc, "lender"), loanId: docId(doc) });
-  }
-  const plan = loanRedactTargets(batchDocs.map(doc => ({ id: docId(doc), lender: stringField(doc, "lender") })));
-  for (const path of plan.paths) {
+  const ranked = [];
+  for (const doc of docs) {
+    const loanId = docId(doc);
+    const lender = stringField(doc, "lender");
+    const targets = loanRedactTargets([{ id: loanId, lender }]);
+    if (!targets.paths.length) {
+      ranked.push({ doc, match: false, clearLoan: false, path: null });
+      continue;
+    }
+    const path = targets.paths[0];
     const name = loanDocName(project, path.lender, path.loanId);
     let got;
     try {
@@ -211,19 +202,32 @@ async function redactBorrowed(fetchImpl, idToken, project, root, email, user) {
     } catch {
       got = { status: 0, data: {} };
     }
-    if (got.status === 404) continue;
-    if (got.status === 200) {
+    let match = false;
+    let clearLoan = false;
+    if (got.status === 404) {
+      match = false;
+    } else if (got.status === 200) {
       const lenderOnLoan = stringField(got.data, "lender");
-      if (lenderOnLoan && lenderOnLoan !== path.lender) continue;
-      if (hasField(got.data, "friendEmail") && stringField(got.data, "friendEmail").trim().toLowerCase() !== want) continue;
+      const lenderOk = !lenderOnLoan || lenderOnLoan === path.lender;
+      const emailOk = !hasField(got.data, "friendEmail") || stringField(got.data, "friendEmail").trim().toLowerCase() === want;
+      match = lenderOk;
+      clearLoan = lenderOk && emailOk;
+    } else {
+      clearLoan = true;
     }
-    const patched = await patchFields(fetchImpl, idToken, project, name, ["friendEmail"], ["updatedAt", "serverUpdatedAt"], true);
-    if (patched === "missing") continue;
-    if (patched !== "ok") pending.push({ lender: path.lender, loanId: path.loanId, reason: "loan" });
+    ranked.push({ doc, match, clearLoan, path, name });
   }
-  for (const doc of batchDocs) {
-    const cleared = await patchFields(fetchImpl, idToken, project, doc.name, ["borrowerEmail", "borrowerEmailLower"], ["updatedAt", "serverUpdatedAt"], false);
-    if (cleared === "failed") pending.push({ lend: doc.name, reason: "lend" });
+  const ordered = orderRedactions(ranked, REDACT_LIMIT);
+  for (const row of ordered.later) {
+    pending.push({ reason: "capped", lend: row.doc.name, lender: stringField(row.doc, "lender"), loanId: docId(row.doc) });
+  }
+  for (const row of ordered.now) {
+    if (row.clearLoan && row.path) {
+      const patched = await patchFields(fetchImpl, idToken, project, row.name, ["friendEmail"], ["updatedAt", "serverUpdatedAt"], true);
+      if (patched !== "ok" && patched !== "missing") pending.push({ lender: row.path.lender, loanId: row.path.loanId, reason: "loan" });
+    }
+    const cleared = await patchFields(fetchImpl, idToken, project, row.doc.name, ["borrowerEmail", "borrowerEmailLower"], ["updatedAt", "serverUpdatedAt"], false);
+    if (cleared === "failed") pending.push({ lend: row.doc.name, reason: "lend" });
   }
   return pending;
 }
@@ -250,8 +254,6 @@ export async function deleteUserFirestore(env, idToken, user, fetchImpl) {
   } catch {
     return { ok: false, error: GEAR_STILL_HERE, redactPending: [] };
   }
-  try { await buryDeletedEmail(fetchFn, idToken, project, email); }
-  catch { /* the hash is also written from the signed-in app */ }
   let redactPending = [];
   try {
     redactPending = await redactBorrowed(fetchFn, idToken, project, root, email, user);

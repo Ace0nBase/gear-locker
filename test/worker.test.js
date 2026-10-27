@@ -76,6 +76,12 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.ok(delBody.indexOf("clearUsageCounters") < delBody.indexOf("queueUsageCleanup"));
   assert.ok(delBody.indexOf("queueUsageCleanup") < delBody.indexOf("deleteCleanupResult"));
   assert.match(delBody, /deleteCleanupResult/);
+  const queueFn = src.slice(src.indexOf("async function queueUsageCleanup"), src.indexOf("async function retryQueuedCleanups"));
+  assert.match(queueFn, /CLEANUP_PREFIX \+ uid/);
+  assert.doesNotMatch(queueFn, /redactPending/);
+  const retryFn = src.slice(src.indexOf("async function retryQueuedCleanups"), src.indexOf("async function retryOnce"));
+  assert.match(retryFn, /plan\.action === "wait"/);
+  assert.ok(retryFn.indexOf('plan.action === "wait"') < retryFn.indexOf("env.WATCH.put"));
   assert.match(src, /roundInputTokens/);
   assert.match(src, /retryQueuedCleanups/);
   const authFn = src.slice(src.indexOf("async function deleteAuthUser"), src.indexOf("async function listWatchUsers"));

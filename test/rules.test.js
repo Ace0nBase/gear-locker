@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { assertFails, assertSucceeds, initializeTestEnvironment } from "@firebase/rules-unit-testing";
 import { collection, collectionGroup, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
-import { emailHash } from "../js/logic.js";
 
 let env;
 
@@ -189,31 +188,11 @@ test("a capitalized friend email can be cleared, and a missing loan is not creat
   assert.equal(typeof left.data().updatedAt.toDate, "function");
 });
 
-test("a deleted address is stored as a hash and cannot be published on a lend", async () => {
+test("a deleted-address record cannot be written, and a missing lend delete is denied", async () => {
   await env.clearFirestore();
-  const email = "gone@example.com";
-  const hash = await emailHash(email);
-  const borrower = as("gone", email, true);
-  await assertFails(setDoc(doc(borrower, "deletedEmails/" + hash), { at: serverTimestamp(), email }));
-  await assertSucceeds(setDoc(doc(borrower, "deletedEmails/" + hash), { at: serverTimestamp() }));
-  await assertFails(updateDoc(doc(borrower, "deletedEmails/" + hash), { at: serverTimestamp() }));
-  const stranger = as("stranger", "stranger@example.com", true);
-  await assertFails(setDoc(doc(stranger, "deletedEmails/" + hash), { at: serverTimestamp() }));
-  const unverified = as("uv", "uv@example.com", false);
-  await assertSucceeds(setDoc(doc(unverified, "deletedEmails/" + await emailHash("uv@example.com")), { at: serverTimestamp() }));
-  const lender = as("owner", "owner@example.com", true);
-  await assertFails(setDoc(doc(lender, "lends/buried"), {
-    ...loan(),
-    borrowerEmail: "Gone@Example.com",
-    borrowerEmailLower: "gone@example.com",
-  }));
-  await assertSucceeds(setDoc(doc(lender, "lends/open"), {
-    ...loan(),
-    borrowerEmail: "still@example.com",
-    borrowerEmailLower: "still@example.com",
-  }));
-  await assertFails(updateDoc(doc(lender, "lends/open"), {
-    borrowerEmail: email,
-    borrowerEmailLower: email,
-  }));
+  const owner = as("owner", "owner@example.com", true);
+  await assertFails(setDoc(doc(owner, "deletedEmails/abc"), { at: serverTimestamp() }));
+  await assertFails(deleteDoc(doc(owner, "lends/missing")));
+  await assertSucceeds(setDoc(doc(owner, "lends/open"), loan()));
+  await assertSucceeds(deleteDoc(doc(owner, "lends/open")));
 });

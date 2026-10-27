@@ -736,32 +736,68 @@ export function deletedAccountGate(loadedWith, shown) {
   };
 }
 
-// Usage counters are the only cleanup the hourly job can finish. A leftover loan redaction
-// stays on the record for follow-up, and the response does not call that "pending".
+// A failed queue write is an error. Pending means the hourly job still has usage counters to clear.
 export function deleteCleanupResult(countersCleared, queueSaved) {
-  if (!countersCleared && !queueSaved) {
+  if (!queueSaved) {
     return { status: 502, body: { error: "Couldn't finish deleting the account. Try again." } };
   }
-  const pending = !countersCleared && !!queueSaved;
-  return { status: 200, body: { ok: true, deleted: true, cleanup: pending ? "pending" : "done" } };
-}
-
-// The hourly job can clear usage counters. It keeps a record that still names loans to redact.
-export function cleanupRetryPlan(record) {
-  const pending = record && Array.isArray(record.redactPending) ? record.redactPending.filter(Boolean) : [];
-  if (!pending.length) return { action: "delete" };
   return {
-    action: "keep",
-    body: {
-      uid: String((record && record.uid) || ""),
-      at: String((record && record.at) || ""),
-      redactPending: pending,
-      usageCleared: true,
-    },
+    status: 200,
+    body: { ok: true, deleted: true, cleanup: countersCleared ? "done" : "pending" },
   };
 }
 
-// One delete request redacts this many lends. The rest stay on the cleanup record.
+// One small record per uid. The hourly job can clear usage counters and then drops the record.
+export const CLEANUP_MAX_ATTEMPTS = 24;
+export const CLEANUP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+export const CLEANUP_RECORD_MAX_BYTES = 256;
+
+export function cleanupQueueBody(uid, nowIso) {
+  const id = String(uid || "").trim();
+  if (!id || id.length > 128 || /[\s/]/.test(id)) return null;
+  const raw = JSON.stringify({ uid: id, at: String(nowIso || ""), attempts: 0 });
+  if (raw.length > CLEANUP_RECORD_MAX_BYTES) return null;
+  return raw;
+}
+
+// Redaction entries are dropped. The record expires after 24 attempts or 7 days, with backoff between tries.
+export function cleanupRetryPlan(record, nowMs) {
+  const now = nowMs == null ? Date.now() : +nowMs;
+  if (!record || typeof record !== "object") return { action: "delete" };
+  if (record.usageCleared) return { action: "delete" };
+  const atMs = Date.parse(record.at);
+  const attempts = Math.max(0, Math.floor(+record.attempts || 0));
+  const age = Number.isFinite(atMs) ? now - atMs : CLEANUP_MAX_AGE_MS + 1;
+  if (attempts >= CLEANUP_MAX_ATTEMPTS || age > CLEANUP_MAX_AGE_MS) return { action: "delete" };
+  const lastMs = Date.parse(record.lastTry);
+  const basis = Number.isFinite(lastMs) ? lastMs : (Number.isFinite(atMs) ? atMs : now);
+  const waitHours = attempts <= 0 ? 0 : Math.min(24, 2 ** (attempts - 1));
+  if (attempts > 0 && now < basis + waitHours * 60 * 60 * 1000) return { action: "wait" };
+  const body = {
+    uid: String(record.uid || "").slice(0, 128),
+    at: Number.isFinite(atMs) ? record.at : new Date(now).toISOString(),
+    attempts: attempts + 1,
+    lastTry: new Date(now).toISOString(),
+  };
+  const raw = JSON.stringify(body);
+  if (raw.length > CLEANUP_RECORD_MAX_BYTES) return { action: "delete" };
+  return { action: "retry", body, raw };
+}
+
+// Confirmed lender loans go first, so forged lends do not fill the redaction cap.
+export function orderRedactions(candidates, limit) {
+  const n = Math.max(0, Math.floor(limit == null ? REDACT_LIMIT : +limit));
+  const ranked = (candidates || []).map((row, index) => ({
+    row,
+    index,
+    rank: row && row.match ? (row.clearLoan ? 2 : 1) : 0,
+  }));
+  ranked.sort((a, b) => (b.rank - a.rank) || (a.index - b.index));
+  const ordered = ranked.map(item => item.row);
+  return { now: ordered.slice(0, n), later: ordered.slice(n) };
+}
+
+// One delete request writes this many redactions. Real lender loans are ordered first. The rest are reported as capped and are not stored.
 export const REDACT_LIMIT = 40;
 
 // A searching round can carry this much input. The loop applies it only after a round that searched,
@@ -773,15 +809,6 @@ export function roundInputTokens(estimated, searches, searchedAlready) {
   const n = Math.max(0, Math.floor(+searches || 0));
   if (!n || !searchedAlready) return est;
   return Math.max(est, ROUND_INPUT_TOKEN_CAP);
-}
-
-// Lowercase SHA-256 hex. Rules use hashing.sha256 of the same letters. The address itself is not stored.
-export async function emailHash(email) {
-  const norm = String(email || "").trim().toLowerCase();
-  if (!norm || !globalThis.crypto || !crypto.subtle) return "";
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(norm));
-  // Rules hashing.sha256().toHexString() is uppercase.
-  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("").toUpperCase();
 }
 
 function sameJson(a, b) {
@@ -809,21 +836,15 @@ export function lendNeedsWrite(desired, existing) {
 }
 
 // Missing or different lends are written. A second pass over the stored doc, with a new updatedAt, is empty.
-export function lendMirrorOps(jobs, desiredById, remoteById, blockedIds) {
+export function lendMirrorOps(jobs, desiredById, remoteById) {
   const remote = remoteById || {};
   const desired = desiredById || {};
-  const blocked = new Set(blockedIds || []);
   const ops = [];
   for (const job of jobs || []) {
     const id = String((job && job.id) || "");
     if (!id) continue;
     const has = Object.prototype.hasOwnProperty.call(remote, id);
     const existing = has ? remote[id] : undefined;
-    if (blocked.has(id)) {
-      if (existing) ops.push({ id, op: "delete" });
-      ops.push({ id, op: "clear" });
-      continue;
-    }
     if (job.writeLend) {
       const doc = desired[id];
       if (!doc) continue;
@@ -1868,7 +1889,9 @@ const GearLogic = {
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, LOOKUPS_PAUSED,
   reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
-  ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, REDACT_LIMIT, emailHash, lendNeedsWrite, lendMirrorOps,
+  ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
+  CLEANUP_MAX_ATTEMPTS, CLEANUP_MAX_AGE_MS, CLEANUP_RECORD_MAX_BYTES, orderRedactions,
+  REDACT_LIMIT, lendNeedsWrite, lendMirrorOps,
   ROUND_INPUT_TOKEN_CAP, roundInputTokens, flooredSearchRoundMicro,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
