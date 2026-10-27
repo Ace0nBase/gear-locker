@@ -303,19 +303,35 @@ function categoryKey(value) {
 
 export const LEGACY_STORAGE_CATEGORY = "Mags & Ammo Storage";
 export const STORAGE_CATEGORY = "Ammo Storage & Loaders";
+export const MAGAZINES_CATEGORY = "Magazines";
+export const LEGACY_MAGAZINES_CATEGORY = "Magazines & Belts";
+export const BELTS_CATEGORY = "Belts";
+export const LEGACY_BELTS_CATEGORY = "Belts & Rigs";
+export const ARMOR_CATEGORY = "Armor & Carriers";
 const LEGACY_STORAGE_KEY = categoryKey(LEGACY_STORAGE_CATEGORY);
 const STORAGE_KEY = categoryKey(STORAGE_CATEGORY);
+const LEGACY_MAGAZINES_KEY = categoryKey(LEGACY_MAGAZINES_CATEGORY);
+const MAGAZINES_KEY = categoryKey(MAGAZINES_CATEGORY);
+const LEGACY_BELTS_KEY = categoryKey(LEGACY_BELTS_CATEGORY);
+// Magazines is weight-only. The previous shelf id stays in the block list as an alias.
 const WEIGHT_ONLY_CATEGORY_KEYS = new Set([
-  categoryKey("Magazines & Belts"),
+  MAGAZINES_KEY,
+  LEGACY_MAGAZINES_KEY,
   categoryKey("Triggers & Parts"),
 ]);
 
-// The old shelf name becomes Ammo Storage & Loaders. Matching is the whole category, not a word inside it.
+// Whole-category renames. A word inside a different shelf does not match, and the item name is never read.
+const CATEGORY_RENAMES = new Map([
+  [LEGACY_STORAGE_KEY, STORAGE_CATEGORY],
+  [LEGACY_MAGAZINES_KEY, MAGAZINES_CATEGORY],
+  [LEGACY_BELTS_KEY, BELTS_CATEGORY],
+]);
+
 export function migrateCategoryName(category) {
   if (category == null) return category;
   const raw = String(category);
-  if (raw && categoryKey(raw) === LEGACY_STORAGE_KEY) return STORAGE_CATEGORY;
-  return raw;
+  if (!raw) return raw;
+  return CATEGORY_RENAMES.get(categoryKey(raw)) || raw;
 }
 
 export function migrateRecordCategories(records, stamp) {
@@ -326,7 +342,11 @@ export function migrateRecordCategories(records, stamp) {
     const category = migrateCategoryName(row.category);
     if (category === row.category) return row;
     changed = true;
-    return { ...row, category, migratedFromMagShelf: true, updatedAt: stamp || row.updatedAt || "" };
+    const from = categoryKey(row.category);
+    const copy = { ...row, category, updatedAt: stamp || row.updatedAt || "" };
+    if (from === LEGACY_STORAGE_KEY) copy.migratedFromMagShelf = true;
+    if (from === LEGACY_BELTS_KEY) copy.migratedFromBeltRig = true;
+    return copy;
   });
   return { records: changed ? next : list, changed };
 }
@@ -351,7 +371,7 @@ export function answerMagShelf(records, action, id, stamp) {
       return copy;
     }
     const moved = keepManualPrice(
-      { ...row, category: "Magazines & Belts" },
+      { ...row, category: MAGAZINES_CATEGORY },
       { retailWasManual: row.priceSource === "manual", valueWasManual: row.valueSource === "manual" },
     );
     delete moved.migratedFromMagShelf;
@@ -361,8 +381,32 @@ export function answerMagShelf(records, action, id, stamp) {
   return { records: changed ? next : list, changed };
 }
 
+// True only for a row the Belts & Rigs rename marked. The item name is never read.
+export function beltRigPending(item) {
+  return !!(item && item.migratedFromBeltRig === true);
+}
+
+// Move sends that one row to Armor & Carriers. Dismiss leaves every pending row on Belts, with its price and links.
+// There is no move-all: a battle belt and a chest rig share this shelf until the owner picks.
+export function answerBeltRig(records, action, id, stamp) {
+  const list = Array.isArray(records) ? records : [];
+  let changed = false;
+  const next = list.map(row => {
+    if (!beltRigPending(row)) return row;
+    const move = action === "move" && row.id === id;
+    if (action !== "dismiss" && !move) return row;
+    changed = true;
+    const copy = { ...row, updatedAt: stamp || row.updatedAt || "" };
+    delete copy.migratedFromBeltRig;
+    if (move) copy.category = ARMOR_CATEGORY;
+    return copy;
+  });
+  return { records: changed ? next : list, changed };
+}
+
 // Automatic prices stop at the firearm, suppressor, ammunition, lower-receiver,
-// magazine-and-belt, and trigger-part shelves, and at a firearm or suppressor record.
+// magazine, and trigger-part shelves, and at a firearm or suppressor record.
+// The old Magazines & Belts id is an alias for Magazines. Belts and armor stay priced.
 // Ammo storage and loaders stay priced. The item name is not checked.
 export function saleRestricted(item) {
   if (!item || typeof item !== "object") return false;
@@ -370,17 +414,25 @@ export function saleRestricted(item) {
   if (kind === "ammo") return true;
   const arm = String(item.arm || "").trim().toUpperCase();
   if (arm === "FA" || arm === "SU") return true;
+  const rawKey = categoryKey(item.category);
   const c = categoryKey(migrateCategoryName(item.category));
   if (!c) return false;
   if (c === STORAGE_KEY) return false;
-  if (WEIGHT_ONLY_CATEGORY_KEYS.has(c)) return true;
+  if (WEIGHT_ONLY_CATEGORY_KEYS.has(c) || WEIGHT_ONLY_CATEGORY_KEYS.has(rawKey)) return true;
   if (/\b(firearms?|handguns?|rifles?|shotguns?|suppressors?|silencers?|nfa)\b/.test(c)) return true;
   if (/\b(ammunitions?|ammo|cartridges?|reloading)\b/.test(c)) return true;
   if (/\b(lowers?|frames?|receivers?)\b/.test(c)) return true;
   return false;
 }
 
-export const GEAR_CATEGORIES = ["Firearms","Suppressors","Magazines & Belts","Triggers & Parts","Armor & Carriers","Belts & Rigs","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Ammo Storage & Loaders","Cleaning & Maintenance","Misc"];
+export const GEAR_CATEGORIES = ["Firearms","Suppressors","Magazines","Triggers & Parts","Armor & Carriers","Belts","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Ammo Storage & Loaders","Cleaning & Maintenance","Misc"];
+
+// Shown under the category picker. Magazines are magazines only. Belts are belts. Rigs and carriers are armor.
+export const CATEGORY_HINTS = {
+  Magazines: "Magazines only, such as a PMAG or a Glock mag. Weight lookup only. No prices or stores.",
+  Belts: "Battle belts, duty belts, and rigger's belts. A chest rig or plate carrier belongs in Armor & Carriers.",
+  "Armor & Carriers": "Plate carriers, chest rigs, and armor plates.",
+};
 
 // Categories Photo ID may fill in. Restricted shelves are left blank so they are not offered as priced.
 export function pricedPhotoCategories(categories) {
@@ -947,8 +999,8 @@ const GearLogic = {
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
-  LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, GEAR_CATEGORIES, PRICE_BACKSTOP,
-  migrateCategoryName, migrateRecordCategories, magShelfPending, answerMagShelf, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, photoIdBlockReason,
+  LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, MAGAZINES_CATEGORY, LEGACY_MAGAZINES_CATEGORY, BELTS_CATEGORY, LEGACY_BELTS_CATEGORY, ARMOR_CATEGORY, GEAR_CATEGORIES, CATEGORY_HINTS, PRICE_BACKSTOP,
+  migrateCategoryName, migrateRecordCategories, magShelfPending, answerMagShelf, beltRigPending, answerBeltRig, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, photoIdBlockReason,
   timerShotAccepted, radioService, radioTxLabel, mergeFieldConflict,
 };
 globalThis.GearLogic = GearLogic;

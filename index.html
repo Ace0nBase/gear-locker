@@ -104,7 +104,7 @@
     <div class="f span2"><label for="fName">Item</label><input id="fName" required placeholder="Double M4 mag pouch"></div>
     <div class="f span4 idRow"><button class="btn ghost" type="button" id="idBtn">Identify from a photo</button><p class="hint" id="idReason" hidden></p><input type="file" id="idFile" accept="image/*" hidden><div class="priceOut" id="idOut" hidden></div></div>
     <div class="f"><label for="fBrand">Brand / model</label><input id="fBrand" placeholder="Blank if you don't know"></div>
-    <div class="f"><label for="fCat">Category</label><select id="fCat"></select></div>
+    <div class="f"><label for="fCat">Category</label><select id="fCat"></select><p class="hint" id="fCatHint" hidden></p></div>
     <div class="f"><label for="fQty">Qty</label><input id="fQty" type="number" min="0" step="1" value="1"></div>
     <div class="f"><label for="fColorSel">Color</label><select id="fColorSel"></select><input id="fColor" hidden autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Type the color" style="margin-top:6px"></div>
     <div class="f"><label for="fCond">Condition</label><select id="fCond"><option>New</option><option selected>Good</option><option>Used</option><option>Worn</option><option value="Needs-repair">Needs repair</option></select></div>
@@ -150,6 +150,7 @@
   <div class="view" id="armsView" hidden></div>
   <div class="sheetWrap" id="swapSheet" hidden><div class="sheetBg" data-swap="keep"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Swap gear"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-swap="keep" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
   <div class="sheetWrap" id="magSheet" hidden><div class="sheetBg"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Old magazine shelf"><div class="sheetTop"><span class="grab"></span></div><div class="panel imp"></div></div></div>
+  <div class="sheetWrap" id="beltSheet" hidden><div class="sheetBg"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Belts that may be rigs"><div class="sheetTop"><span class="grab"></span></div><div class="panel imp"></div></div></div>
   <div class="sheetWrap" id="secSheet" hidden><div class="sheetBg"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Security"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-sec="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
   <div class="sheetWrap" id="timerSheet" hidden><div class="sheetBg" data-tm="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Shot timer"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-tm="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
   <div class="sheetWrap" id="drillSheet" hidden><div class="sheetBg" data-de="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Drill"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-de="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>

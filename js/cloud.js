@@ -354,7 +354,7 @@ if(window.LOOKUP_URL){
 
 /* ---------- sheets, scroll lock, add button ---------- */
 var lockY=0;
-function anySheetOpen(){return !$("secSheet").hidden||!$("magSheet").hidden||!$("timerSheet").hidden||!$("drillSheet").hidden||!$("battSheet").hidden||!$("buildSheet").hidden||!$("moveSheet").hidden||!$("form").hidden||!$("detail").hidden||!$("swapSheet").hidden||!$("shareSheet").hidden||!!document.querySelector(".view:not([hidden]) .edSheet")}
+function anySheetOpen(){return !$("secSheet").hidden||!$("magSheet").hidden||($("beltSheet")&&!$("beltSheet").hidden)||!$("timerSheet").hidden||!$("drillSheet").hidden||!$("battSheet").hidden||!$("buildSheet").hidden||!$("moveSheet").hidden||!$("form").hidden||!$("detail").hidden||!$("swapSheet").hidden||!$("shareSheet").hidden||!!document.querySelector(".view:not([hidden]) .edSheet")}
 function syncLock(){
   const want=anySheetOpen(),has=document.body.classList.contains("locked");
   if(want&&!has){lockY=window.scrollY;document.body.style.top=`-${lockY}px`;document.body.classList.add("locked")}
