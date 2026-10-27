@@ -29,16 +29,16 @@ var curDrill="";
 NEWREC.range=()=>({date:today(),lines:[{}],drills:[{}]});
 /* Published standards. Times are seconds; lower is better. metric "total" = beep to last shot, "first" = beep to first shot. */
 var DRILLS=[
- {name:"Bill Drill",setup:"7 yd · 6 rds · holster to 6 shots on the A-zone (8\" circle)",metric:"total",tiers:[["Novice",5.0],["Intermediate",3.0],["Advanced",2.0],["Master",1.5]],tip:"Advanced ≈ sub-1.0s draw with ~0.20s splits.",src:"RifleConfigurator drill standards"},
- {name:"Draw to first shot",setup:"7 yd · 1 rd · from concealment to a body hit",metric:"total",tiers:[["Beginner",3.0],["Intermediate",2.0],["Advanced",1.4],["Master",1.0]],tip:"Same as ASP 10-Round Skill Check, stage 1.",src:"ASP 10-Round Skill Check"},
- {name:"FAST",setup:"7 yd · 6 rds · 2 head (3×5 card), slidelock reload, 4 body (8\" plate) · from concealment",metric:"total",tiers:[["Novice",10.0],["Intermediate",9.99],["Advanced",6.99],["Expert",4.99]],tip:"Under 10 = Intermediate, under 7 = Advanced, under 5 = Expert. +0.5s for open-top retention holster.",src:"Todd Green / pistol-training.com"},
- {name:"El Presidente",setup:"10 yd · 12 rds · 3 targets 1 m apart · start facing away, holstered · 2 each, reload, 2 each",metric:"total",tiers:[["Standard",10.0]],tip:"10.00s clean is the classic reference.",src:"Jeff Cooper standard"},
- {name:"Failure to Stop",setup:"7 yd · 3 rds · 2 body + 1 head · from the holster (Mozambique)",metric:"total",tiers:[["Dark",2.9],["Light",2.25],["Turbo",1.7]],tip:"Gabe White Technical Skills Test pins.",src:"Gabe White standards"},
- {name:"Keepers' Test",setup:"7 yd · 3 rds · 3×5 card horizontal · from concealment",metric:"total",tiers:[["Pretty salty",3.0],["Really good",2.5]],tip:"",src:"Spencer Keepers"},
- {name:"5x5 Skill Test",setup:"5 yd · 5 rds · 5\" circle · from ready",metric:"total",tiers:[["Pass",5.0]],tip:"All 5 inside the circle within 5.00s.",src:"Standard 5^5 drill"},
- {name:"The Test",setup:"10 yd · 10 rds · B-8 repair center · from ready",metric:"total",tiers:[["Pass",10.0]],tip:"Score: 80% pass, 90% good, 95% excellent (Hackathorn).",src:"Larry Vickers / Ken Hackathorn"},
- {name:"Bill Drill 2",setup:"7 yd · 15 rds · strings of 1,2,3,4,5 from the holster",metric:"total",tiers:[["Goal",10.0]],tip:"10.00s total across all five strings.",src:"Published drill library"},
- {name:"Dot Torture",setup:"Starts at 3 yd · 50 rds · ten 2\" dots · untimed",metric:"none",tiers:[],tip:"Score is the farthest distance you shoot 50/50 clean. Log it in Hits/pts.",src:"David Blinder"},
+ {name:"Bill Drill",setup:"7 yd · 6 rds · holster to 6 shots on the A-zone (8\" circle)",metric:"total",rounds:6,tiers:[["Novice",5.0],["Intermediate",3.0],["Advanced",2.0],["Master",1.5]],tip:"Advanced ≈ sub-1.0s draw with ~0.20s splits."},
+ {name:"Draw to first shot",setup:"7 yd · 1 rd · from concealment to a body hit",metric:"total",tiers:[["Beginner",3.0],["Intermediate",2.0],["Advanced",1.4],["Master",1.0]],tip:"One shot from concealment to a body hit."},
+ {name:"FAST",setup:"7 yd · 6 rds · 2 head (3×5 card), slidelock reload, 4 body (8\" plate) · from concealment",metric:"total",tiers:[["Novice",10.0],["Intermediate",9.99],["Advanced",6.99],["Expert",4.99]],tip:"Under 10 = Intermediate, under 7 = Advanced, under 5 = Expert. +0.5s for open-top retention holster."},
+ {name:"El Presidente",setup:"10 yd · 12 rds · 3 targets 1 m apart · start facing away, holstered · 2 each, reload, 2 each",metric:"total",tiers:[["Standard",10.0]],tip:"10.00s clean is the classic reference."},
+ {name:"Failure to Stop",setup:"7 yd · 3 rds · 2 body + 1 head · from the holster (Mozambique)",metric:"total",tiers:[["Dark",2.9],["Light",2.25],["Turbo",1.7]],tip:"Dark, Light, and Turbo are the three pace pins."},
+ {name:"Keepers' Test",setup:"7 yd · 3 rds · 3×5 card horizontal · from concealment",metric:"total",tiers:[["Pretty salty",3.0],["Really good",2.5]],tip:""},
+ {name:"5x5 Skill Test",setup:"5 yd · 5 rds · 5\" circle · from ready",metric:"total",tiers:[["Pass",5.0]],tip:"All 5 inside the circle within 5.00s."},
+ {name:"The Test",setup:"10 yd · 10 rds · B-8 repair center · from ready",metric:"total",tiers:[["Pass",10.0]],tip:"Score: 80% pass, 90% good, 95% excellent."},
+ {name:"Bill Drill 2",setup:"7 yd · 15 rds · strings of 1,2,3,4,5 from the holster",metric:"total",tiers:[["Goal",10.0]],tip:"10.00s total across all five strings."},
+ {name:"Dot Torture",setup:"Starts at 3 yd · 50 rds · ten 2\" dots · untimed",metric:"none",tiers:[],tip:"Score is the farthest distance you shoot 50/50 clean. Log it in Hits/pts."},
 ];
 function tierFor(d,t){if(!t||!isFinite(t)||d.metric==="none")return null;let got=null;d.tiers.forEach(x=>{if(t<=x[1]+1e-9)got=x[0]});return got}
 function drillLibrary(ds){
@@ -48,7 +48,7 @@ function drillLibrary(ds){
       ${d.tiers.length?`<div class="tiers">${d.tiers.map(t=>`<span class="${lvl===t[0]?"hit":""}">${esc(t[0])} ≤ ${t[1].toFixed(2)}s</span>`).join("")}</div>`:""}
       ${d.tip?`<div class="setup">${esc(d.tip)}</div>`:""}
       <div class="you">${best!=null?`Your best: <b>${best.toFixed(2)}s</b>${lvl?` · <b>${esc(lvl)}</b>`:" · keep working"}${me&&isFinite(me.bestFirst)?` · draw ${me.bestFirst.toFixed(2)}s`:""}${me&&isFinite(me.bestSplit)?` · split ${me.bestSplit.toFixed(2)}s`:""}`:"Not logged yet"}</div>
-      <button class="btn ghost" type="button" data-act="logdrill" data-i="${k}">Log this drill</button><div class="src">Source: ${esc(d.src)}</div></article>`}).join("")}</div>`;
+      <button class="btn ghost" type="button" data-act="logdrill" data-i="${k}">Log this drill</button></article>`}).join("")}</div>`;
 }
 function drillStats(){
   const m={};
@@ -258,7 +258,7 @@ DEL.loans=async d=>{await removeC("loans",d.id)};
 ACT.loans=async(act,b)=>{if(act==="returned"){const x=L("loans").find(y=>y.id===b.dataset.id);if(!x)return;await upsertC("loans",{...x,returned:today()});toast("Marked returned");render()}};
 
 /* ---------- tabs ---------- */
-var TABS=[["inv","Inventory"],["arms","Armory"],["kits","Kits"],["range","Range Log"],["dope","DOPE"],["ammo","Ammo"],["comms","Comms"],["maint","Maintenance"],["wish","Wishlist"],["loans","Loans"]];
+var TABS=[["inv","Inventory"],["arms","Armory"],["range","Range Log"],["dope","DOPE"],["ammo","Ammo"],["comms","Comms"],["maint","Maintenance"],["wish","Wishlist"],["loans","Loans"]];
 var viewId=k=>k==="kits"?"kitView":k+"View";
 var curTab="inv";
 function badgeFor(k){

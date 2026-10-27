@@ -82,16 +82,15 @@
   </section>
 
   <datalist id="colors"><option>Black</option><option>Coyote</option><option>Ranger Green</option><option>Multicam</option><option>Wolf Grey</option><option>FDE</option><option>Tan 499</option></datalist>
-  <datalist id="loadouts"></datalist>
   <datalist id="locations"></datalist>
   <datalist id="calibers"><option>9mm</option><option>5.56 NATO</option><option>.223 Rem</option><option>300 BLK</option><option>7.62x39</option><option>.308 Win</option><option>7.62x51</option><option>6.5 Creedmoor</option><option>.45 ACP</option><option>.40 S&amp;W</option><option>10mm</option><option>.380 ACP</option><option>.22 LR</option><option>12 Gauge</option><option>.300 Win Mag</option></datalist>
   <datalist id="drills"><option>Bill Drill</option><option>El Presidente</option><option>FAST</option><option>Draw to first shot</option><option>Dot Torture</option><option>5x5 Skill Test</option><option>Mozambique</option><option>1-Reload-1</option><option>Failure to Stop</option><option>Casino</option><option>Doubles</option><option>Box Drill</option><option>Ready-Up</option><option>Transition drill</option></datalist>
   <datalist id="maintTasks"><option>Clean &amp; lube</option><option>Detail strip &amp; inspect</option><option>Replace battery</option><option>Swap battery / function check</option><option>Inspect tourniquet</option><option>Check med expirations</option><option>Charge &amp; check battery</option><option>Inspect plates for damage</option><option>Check optic zero &amp; screws</option><option>Check helmet pads &amp; retention</option><option>Replace recoil spring</option><option>Replace gas rings</option></datalist>
 
   <div class="tools">
-    <input id="q" type="search" placeholder="Search items, brands, loadouts, locations" aria-label="Search">
+    <input id="q" type="search" placeholder="Search name, brand, place" aria-label="Search">
     <button class="btn ghost" id="bulkMktBtn" type="button">Market check all</button>
-    <select id="sort" aria-label="Sort" style="width:auto"><option value="name">Sort: name</option><option value="val">Sort: value</option><option value="on">Sort: loadout</option><option value="loc">Sort: location</option></select>
+    <select id="sort" aria-label="Sort" style="width:auto"><option value="name">Sort: name</option><option value="val">Sort: value</option><option value="loc">Sort: location</option></select>
   </div>
   <div class="chips" id="chips" role="group" aria-label="Filter by category"></div>
 
@@ -112,7 +111,6 @@
     <div class="f"><label for="fRetail">New retail price ($)</label><input id="fRetail" type="number" min="0" step="1" placeholder="What it costs new"></div>
     <div class="f"><label for="fVal">Value each ($)</label><input id="fVal" type="number" min="0" step="1" placeholder="Auto from retail"></div>
     <div class="f"><label for="fPaid">What I paid each ($)</label><input id="fPaid" type="number" min="0" step="0.01" placeholder="If you remember"></div>
-    <div class="f"><label for="fOn">Set up on / loadout</label><input id="fOn" list="loadouts" placeholder="Plate carrier"></div>
     <div class="f span2"><label for="fLoc">Stored at</label><input id="fLoc" list="locations" placeholder="Gear closet, bin 2"></div>
     <div class="f"><label for="fWt">Weight each (oz)</label><input id="fWt" type="number" min="0" step="0.1" placeholder="Blank = auto lookup"></div>
     <div class="f"><label for="fNick">Nickname (to tell twins apart)</label><input id="fNick" placeholder="Belt #1 – plate setup"></div>

@@ -70,7 +70,7 @@ function battGuess(i){
 function battInfo(i){
   const g=battGuess(i);if(!g&&!i.battType)return null;if(i.battNone)return null;
   let type=i.battType||(i.battery&&String(i.battery))||g?.type||"";type=type.replace(/^\s*cr ?123a?\s*$/i,"CR123A").replace(/^\s*cr ?2032\s*$/i,"CR2032").replace(/^\s*(aa|aaa)\s*$/i,m=>m.trim().toUpperCase());const months=+i.battMonths||g?.months||6;
-  const changed=i.battChanged||"";const next=changed?new Date(new Date(changed+"T12:00:00").getTime()+months*30.44*864e5).toISOString().slice(0,10):"";
+  const changed=i.battChanged||"";const next=changed?localISODate(new Date(new Date(changed+"T12:00:00").getTime()+months*30.44*864e5)):"";
   const daysLeft=next?Math.round((new Date(next+"T12:00:00")-new Date())/864e5):null;
   const status=!changed?"unknown":daysLeft<0?"over":daysLeft<=14?"soon":"ok";
   return {type,count:+i.battCount||g?.count||1,months,life:i.battLife||g?.life||"",kind:g?.kind||"",charge:!!(g?.charge||/recharg/i.test(type)),changed,next,daysLeft,status,looked:!!i.battLooked};
@@ -132,8 +132,7 @@ drillLibrary=function(ds){
       ${d.tiers.length?`<div class="tiers">${d.tiers.map(t=>`<span class="${lvl===t[0]?"hit":""}">${esc(t[0])} ≤ ${(+t[1]).toFixed(2)}s</span>`).join("")}</div>`:""}
       ${d.tip?`<div class="setup">${esc(d.tip)}</div>`:""}
       <div class="you">${best!=null?`Your best: <b>${best.toFixed(2)}s</b>${lvl?` · <b>${esc(lvl)}</b>`:""}${me&&isFinite(me.bestFirst)?` · draw ${me.bestFirst.toFixed(2)}s`:""}${me&&isFinite(me.bestSplit)?` · split ${me.bestSplit.toFixed(2)}s`:""}`:"Not logged yet"}</div>
-      <div class="vbtns"><button class="btn" type="button" data-act="timerdrill" data-k="${esc(key)}">Run with timer</button><button class="btn ghost" type="button" data-act="logdrill2" data-k="${esc(key)}">Log by hand</button>${d.mine?`<button class="btn ghost" type="button" data-act="editdrill" data-k="${esc(key)}">Edit</button>`:""}</div>
-      <div class="src">${d.mine?"":"Source: "+esc(d.src)}</div></article>`};
+      <div class="vbtns"><button class="btn" type="button" data-act="timerdrill" data-k="${esc(key)}">Run with timer</button><button class="btn ghost" type="button" data-act="logdrill2" data-k="${esc(key)}">Log by hand</button>${d.mine?`<button class="btn ghost" type="button" data-act="editdrill" data-k="${esc(key)}">Edit</button>`:""}</div></article>`};
   return `<div class="slotsHead">Drills <span>${myDrills().length?`${myDrills().length} of yours + `:""}published standards</span></div>
    <div class="vbtns" style="margin:8px 0"><button class="btn" type="button" data-act="timer">Shot timer</button><button class="btn ghost" type="button" data-act="newdrill">+ Add your own drill</button></div>
    <div class="drills">${myDrills().map(d=>card(allDrills().find(x=>x.id===d.id),"m:"+d.id)).join("")}${DRILLS.map((d,k)=>card(d,"p:"+k)).join("")}</div>`;

@@ -262,10 +262,9 @@ function openDetail(i,quiet){
    </dl>
    ${!restricted&&(i.priceNote||links)?`<div class="sect"><h3>Market data</h3>${i.priceNote?`<div class="note">${esc(i.priceNote)}</div>`:""}${links?`<div class="links" style="margin-top:6px">${links}</div>`:""}</div>`:""}
    ${armDetail(i)}
-   ${i.lookupError&&!lookingUp.has(i.id)?`<div class="sect"><h3>${restricted?"Weight lookup":"Market check"}</h3><div class="note">Last lookup didn't work: ${esc(i.lookupError)}</div></div>`:""}
+   ${i.lookupError&&!lookingUp.has(i.id)?`<div class="sect"><h3>${restricted?"Weight lookup":"Market check"}</h3><div class="note">${esc(lookupFailMessage(i.lookupError))}</div></div>`:""}
    ${kids.length?`<div class="sect"><h3>Mounted on this (${kids.length})</h3><div class="links">${kids.map(k=>`<button class="lnk" type="button" data-dview="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
    ${gunGear.length?`<div class="sect"><h3>Gear for this gun (${gunGear.length})</h3><div class="links">${gunGear.map(k=>`<button class="lnk" type="button" data-dview="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
-   ${ks.length?`<div class="sect"><h3>Packed in kits (${ks.length})</h3><div class="links">${ks.map(k=>`<button class="lnk" type="button" data-dkit="${k.id}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
    ${tasks.length?`<div class="sect"><h3>Maintenance</h3>${tasks.map(r=>`<div>${esc(r.m.task)} · <span class="pill ${r.status==="over"?"gap":r.status==="soon"?"warn":"ok"}">${r.status==="over"?"Overdue":r.status==="soon"?"Due soon":"OK"}</span> <small>${esc(r.txt)}</small></div>`).join("")}</div>`:""}
    ${i.notes?`<div class="sect"><h3>Notes</h3><div class="note">${esc(i.notes)}</div></div>`:""}`;
   const wasOpen=!$("detail").hidden;$("detail").hidden=false;if(!wasOpen||!quiet)resetSheetScroll("detailSheet");syncLock();
@@ -311,13 +310,13 @@ async function runLookups(ids,quiet){
   let ok=0,fail="";
   for(let k=0;k<ids.length;k+=4){
     const chunk=ids.slice(k,k+4);
-    try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){it.lookupError=String(r.error||"No result").slice(0,160);fail=fail||it.lookupError}}})}
-    catch(e){fail=e.message||"Lookup failed";chunk.forEach(id=>{const it=all.find(x=>x.id===id);if(it&&!it.deleted)it.lookupError=fail.slice(0,160)});if(/turned off|confirm your email|daily lookup limit/i.test(fail)){ids.slice(k).forEach(id=>lookingUp.delete(id));render();break}}
+    try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){const msg=lookupFailMessage(r.error||"No result");it.lookupError=msg.slice(0,160);fail=fail||msg}}})}
+    catch(e){fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);if(it&&!it.deleted)it.lookupError=fail.slice(0,160)});if(/turned off|confirm your email|daily lookup limit/i.test(String(e&&e.message||""))){ids.slice(k).forEach(id=>lookingUp.delete(id));render();break}}
     chunk.forEach(id=>lookingUp.delete(id));render();await persist();
     if(viewing&&!$("detail").hidden&&chunk.includes(viewing.id))openDetail(all.find(i=>i.id===viewing.id),true);
   }
   if(!$("form").hidden&&editing){const busy=lookingUp.has(editing.id);$("mktBtn").disabled=busy;$("mktBtn").textContent=busy?"Looking up…":(GearLogic.saleRestricted(editing)?"Look up weight":"Market check")}
-  if(fail)toast("Market check: "+fail,6000);else if(!quiet||ids.length>1)toast(`Looked up ${ok} item${ok===1?"":"s"}`);
+  if(fail)toast(fail,6000);else if(!quiet||ids.length>1)toast(`Looked up ${ok} item${ok===1?"":"s"}`);
 }
 var _saveCurrent=saveCurrent;
 saveCurrent=async function(extra){
@@ -326,7 +325,7 @@ saveCurrent=async function(extra){
   const restricted=GearLogic.saleRestricted(rec);
   const changed=!before||before.name!==rec.name||before.brand!==rec.brand||before.category!==rec.category||before.arm!==rec.arm||(!restricted&&before.condition!==rec.condition);
   const needs=restricted?(rec.weight==null||rec.weight===""):((rec.priceSource!=="manual"&&rec.priceSource!=="market")||rec.weight==null||rec.weight==="");
-  if(window.LOOKUP_URL&&cloudUser&&!extra&&(changed||needs))runLookups([rec.id],true);
+  if(window.LOOKUP_URL&&cloudUser&&!extra&&(changed||needs))runLookups([rec.id],true).catch(()=>{});
   return rec;
 };
 if(window.LOOKUP_URL){
@@ -343,7 +342,7 @@ if(window.LOOKUP_URL){
       const chunk=list.slice(k,k+4);
       try{const res=await apiLookup(chunk.map(w=>({id:w.id,name:w.name,brand:w.brand||"",category:w.category||"",condition:"New",notes:"",kind:"wish",arm:w.arm||"",caliber:w.caliber||""})));
         res.forEach(r=>{const w=db.wish.find(x=>x.id===r.id);if(!w||!r.ok)return;if(GearLogic.saleRestricted(w))return;if(r.retailNew!=null)w.estPrice=Math.round(+r.retailNew);w.priceSource="market";w.priceDate=today();w.priceNote=GearLogic.stripGunMarketText(r.priceNote||"").slice(0,240);w.marketSources=GearLogic.stripGunMarketSources(r.sources);if(GearLogic.gunMarketUrl(w.link))w.link="";w.marketCheck="done";w.updatedAt=now()})}
-      catch(e){toast(e.message||"Pricing failed");break}
+      catch(e){toast(lookupFailMessage(e&&e.message));break}
     }
     await persist();render();
   };

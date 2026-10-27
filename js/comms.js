@@ -98,8 +98,8 @@ RENDER.comms=()=>{
   if(commsTab==="freqs"){
     body=`<section class="stats"><div class="stat"><b>${all_.length}</b><span>Frequencies</span></div><div class="stat"><b>${groups.length-1}</b><span>Groups</span></div><div class="stat"><b>${rs.length}</b><span>Radios</span></div><div class="stat"><b>${L("pace").length}</b><span>PACE plans</span></div></section>
     <div class="cBar"><select id="cGroup" aria-label="Group">${optList(groups.map(g=>[g,g]),commsGroup)}</select><button class="btn ghost" type="button" data-act="cimport">Import CHIRP .csv</button><button class="btn ghost" type="button" data-act="ccommon">Add common channels</button></div>
-    ${list.length?`<div class="scroll"><table class="tbl"><thead><tr><th class="n">Ch</th><th>Name</th><th class="n">RX</th><th>TX</th><th>Tone</th><th>Mode</th><th>Group</th></tr></thead><tbody>${list.map(f=>{const tx=txFreq(f);const ro=f.duplex==="off"||!TX_OK(f.service);
-      return `<tr class="click" data-act="edit" data-id="${esc(f.id)}"><td class="n">${esc(f.ch||"")}</td><td><b>${esc(f.name)}</b>${f.short&&f.short.toUpperCase()!==String(f.name).toUpperCase()?`<small class="mono"> ${esc(f.short)}</small>`:""}<br><small>${esc(f.service||"")}${f.notes?" · "+esc(f.notes):""}</small></td><td class="n mono">${esc(mhz(f.rx))}</td><td class="mono">${ro?"<small>RX only</small>":tx&&Math.abs(tx-fnum(f.rx))>1e-6?esc(mhz(tx)):"simplex"}</td><td class="mono">${esc(toneTxt(f)||"—")}</td><td>${esc(f.mode||"FM")}${f.power==="Low"?" · L":""}</td><td>${esc(f.group||"—")}</td></tr>`}).join("")}</tbody></table></div>`
+    ${list.length?`<div class="scroll"><table class="tbl"><thead><tr><th class="n">Ch</th><th>Name</th><th class="n">RX</th><th>TX</th><th>Tone</th><th>Mode</th><th>Group</th></tr></thead><tbody>${list.map(f=>{const lab=txLabel(f);
+      return `<tr class="click" data-act="edit" data-id="${esc(f.id)}"><td class="n">${esc(f.ch||"")}</td><td><b>${esc(f.name)}</b>${f.short&&f.short.toUpperCase()!==String(f.name).toUpperCase()?`<small class="mono"> ${esc(f.short)}</small>`:""}<br><small>${esc(f.service||"")}${f.notes?" · "+esc(f.notes):""}</small></td><td class="n mono">${esc(mhz(f.rx))}</td><td class="mono">${lab==="RX only"?"<small>RX only</small>":esc(lab)}</td><td class="mono">${esc(toneTxt(f)||"—")}</td><td>${esc(f.mode||"FM")}${f.power==="Low"?" · L":""}</td><td>${esc(f.group||"—")}</td></tr>`}).join("")}</tbody></table></div>`
      :`<div class="empty"><b>No frequencies yet</b>Tap <em>+</em> to add one, <em>Import CHIRP .csv</em> to pull in what's already on your radio, or <em>Add common channels</em> for calling, weather, MURS and FRS/GMRS.</div>`}`;
   }else if(commsTab==="pace"){
     const plans=L("pace").sort((a,b)=>(a.name||"").localeCompare(b.name||""));
@@ -159,7 +159,8 @@ ACT.comms=async(act,b,e)=>{
   if(act==="pdel"){paceCollect();if(!paceEd._armed){paceEd._armed=true;renderExtra();return}await removeC("pace",paceEd.id);paceEd=null;toast("Deleted");render();return}
   if(act==="pprint"){const p=L("pace").find(x=>x.id===b.dataset.id);if(p)printPace(p);return}
 };
-function freqTable(list){return `<table><thead><tr><th>Ch</th><th>Name</th><th>RX MHz</th><th>TX</th><th>Tone</th><th>Mode</th><th>Notes</th></tr></thead><tbody>${list.map(f=>{const tx=txFreq(f);const ro=f.duplex==="off"||!TX_OK(f.service);return `<tr><td>${esc(f.ch||"")}</td><td><b>${esc(f.name)}</b></td><td>${esc(mhz(f.rx))}</td><td>${ro?"RX only":tx&&Math.abs(tx-fnum(f.rx))>1e-6?esc(mhz(tx)):"simplex"}</td><td>${esc(toneTxt(f)||"—")}</td><td>${esc(f.mode||"FM")}</td><td>${esc(f.notes||"")}</td></tr>`}).join("")}</tbody></table>`}
+function txLabel(f){const svc=f.service||"";const tx=txFreq(f);const offset=tx&&Math.abs(tx-fnum(f.rx))>1e-6;if(svc==="GMRS"||svc==="FRS"||svc==="MURS"){if((f.duplex==="+"||f.duplex==="-"||f.duplex==="split")&&offset)return mhz(tx);return "simplex"}if(f.duplex==="off"||!TX_OK(svc))return "RX only";if(offset)return mhz(tx);return "simplex"}
+function freqTable(list){return `<table><thead><tr><th>Ch</th><th>Name</th><th>RX MHz</th><th>TX</th><th>Tone</th><th>Mode</th><th>Notes</th></tr></thead><tbody>${list.map(f=>{const lab=txLabel(f);return `<tr><td>${esc(f.ch||"")}</td><td><b>${esc(f.name)}</b></td><td>${esc(mhz(f.rx))}</td><td>${esc(lab)}</td><td>${esc(toneTxt(f)||"—")}</td><td>${esc(f.mode||"FM")}</td><td>${esc(f.notes||"")}</td></tr>`}).join("")}</tbody></table>`}
 function printFreqs(){const cs=commsSet();const list=freqsSorted();const gs=[...new Set(list.map(f=>f.group||"Ungrouped"))];
   $("printSheet").innerHTML=`<div class="ph"><div><h1>FREQUENCY CARD</h1><small>${cs.callsign?esc(cs.callsign)+" · ":""}Printed ${new Date().toLocaleDateString()}</small></div></div>${gs.map(g=>`<h3>${esc(g)}</h3>${freqTable(list.filter(f=>(f.group||"Ungrouped")===g))}`).join("")}${L("pace").map(p=>paceCard(p,true)).join("")}`;window.print()}
 function printPace(p){const ids=PSTEP.map(([k])=>p[k]?.freq).filter(Boolean);const list=L("freqs").filter(f=>ids.includes(f.id));
@@ -211,10 +212,7 @@ function pgSheet(){const g=paceGen,v=g.in;const sel=(n,arr)=>`<select name="${n}
   }
   return `<div class="sheetWrap"><div class="sheetBg" data-act="pgclose"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Build a PACE plan"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-act="pgclose" aria-label="Close">✕</button></div><form class="panel" id="pgForm">${body}</form></div></div>`}
 var pgGroup=()=>paceGen?.in?.location?("Local — "+paceGen.in.location).slice(0,40):"Local";
-{const _r=RENDER.comms;RENDER.comms=()=>{_r();const v=$("commsView");
-  if(commsTab==="pace"){const h=v.querySelector(".vhead");h?.insertAdjacentHTML("afterend",`<div class="cBar"><button class="btn" type="button" data-act="pgopen">Build a plan for me</button><span class="hint">from your area, situation and saved frequencies</span></div>`)}
-  if(paceGen)v.insertAdjacentHTML("beforeend",pgSheet());
-}}
+{const _r=RENDER.comms;RENDER.comms=()=>{_r();if(paceGen)$("commsView").insertAdjacentHTML("beforeend",pgSheet())}}
 {const _c=collect;collect=function(view){if(view==="comms"&&paceGen&&paceGen.stage!=="result")pgCollect();return _c(view)}}
 async function pgSaveNew(){const r=paceGen.res;const keep=new Set([...document.querySelectorAll("#pgForm [data-nf]:checked")].map(x=>+x.dataset.nf));const map={};
   const have=L("freqs");for(const [k,n] of r.newFreqs.entries()){if(!keep.has(k))continue;const dup=have.find(f=>mhz(f.rx)===mhz(n.rx)&&(f.duplex||"")===(n.duplex||""));if(dup){map[k]=dup.id;continue}

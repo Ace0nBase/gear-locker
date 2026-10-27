@@ -9,7 +9,10 @@ var $=id=>document.getElementById(id);
 var esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 var money=n=>"$"+Math.round(+n||0).toLocaleString();
 var now=()=>new Date().toISOString();
+function localISODate(d){const x=d instanceof Date?d:new Date();return x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0")}
+function localDateTime(d){const x=d instanceof Date?d:new Date();return localISODate(x)+"T"+String(x.getHours()).padStart(2,"0")+":"+String(x.getMinutes()).padStart(2,"0")}
 var today=()=>GearLogic.localDay();
+function lookupFailMessage(msg){const raw=String(msg||"");if(/^Couldn't reach the price check/.test(raw))return raw;const m=raw.replace(/^Market check:\s*/,"");if(!m||/failed to fetch|networkerror|load failed|network request failed|appears to be offline/i.test(m))return "Couldn't reach the price check. You can still save without a price.";return "Market check: "+m}
 function publicAppUrl(){
   var path=location.pathname.replace(/index\.html$/,"");
   var host=location.hostname;
@@ -115,19 +118,18 @@ function render(){
   const counts={};items.forEach(i=>counts[i.category]=(counts[i.category]||0)+1);
   if(filter!=="All"&&!counts[filter])filter="All";
   $("chips").innerHTML=["All",...CATS.filter(c=>counts[c])].map(c=>`<button type="button" class="chip" aria-pressed="${c===filter}" data-c="${esc(c)}">${esc(c)}<small>${c==="All"?items.length:counts[c]}</small></button>`).join("");
-  $("loadouts").innerHTML=[...new Set(items.map(i=>i.setupOn).filter(Boolean))].map(v=>`<option>${esc(v)}</option>`).join("");
   $("locations").innerHTML=[...new Set(items.map(i=>i.location).filter(Boolean))].map(v=>`<option>${esc(v)}</option>`).join("");
   let rows=items.filter(i=>(filter==="All"||i.category===filter)&&(!q||[i.name,i.brand,i.color,i.setupOn,i.location,i.notes,i.category,i.serial,i.armId].join(" ").toLowerCase().includes(q)));
-  const key={name:i=>(i.name||"").toLowerCase(),on:i=>(i.setupOn||"~").toLowerCase(),loc:i=>(i.location||"~").toLowerCase()}[sort];
-  rows.sort(sort==="val"?(a,b)=>(b.qty*GearLogic.countedValue(b)||0)-(a.qty*GearLogic.countedValue(a)||0):(a,b)=>key(a).localeCompare(key(b)));
+  const sortKey=sort==="on"?"name":sort;
+  const key={name:i=>(i.name||"").toLowerCase(),loc:i=>(i.location||"~").toLowerCase()}[sortKey]||(i=>(i.name||"").toLowerCase());
+  rows.sort(sortKey==="val"?(a,b)=>(b.qty*GearLogic.countedValue(b)||0)-(a.qty*GearLogic.countedValue(a)||0):(a,b)=>key(a).localeCompare(key(b)));
   if(!items.length){$("list").innerHTML=`<div class="empty"><b>Locker's empty</b>Add your first item with <em>+ Add item</em>. Work through one area at a time: carrier, belt, pouches, med, packs.</div>`;return}
   if(!rows.length){$("list").innerHTML=`<div class="empty">No items match that search.</div>`;return}
   $("list").innerHTML=CATS.filter(c=>rows.some(r=>r.category===c)).map(c=>{const g=rows.filter(r=>r.category===c);const gq=g.reduce((a,i)=>a+(+i.qty||0),0),gv=g.reduce((a,i)=>a+(+i.qty||0)*GearLogic.countedValue(i),0);
     return `<section class="group"><div class="ghead"><h3>${esc(c)}</h3><span>${gq} pcs${gv?` · ${money(gv)}`:""}</span></div>
-    <div class="row colhead" aria-hidden="true"><span>Qty</span><span>Item</span><span>Set up on</span><span>Stored</span><span>Cond.</span><span style="text-align:right">Value</span></div>
+    <div class="row colhead" aria-hidden="true"><span>Qty</span><span>Item</span><span>Stored</span><span>Cond.</span><span style="text-align:right">Value</span></div>
     ${g.map(i=>`<button type="button" class="row" data-id="${esc(i.id)}"><span class="qty">${+i.qty||0}×</span>
-      <span class="nm">${esc(i.name)}${i.nick?` <span class="tag">${esc(i.nick)}</span>`:""}<small>${esc([i.brand,i.color,i.category==="Firearms"?(i.caliber?i.caliber+" · ":"")+roundsFired(i.id).toLocaleString()+" rds":"",wtText(i)].filter(Boolean).join(" · "))}</small><small class="where">${esc(i.category)} · ${i.mountedOn&&itemById(i.mountedOn)?"on "+esc(itemById(i.mountedOn).name):i.setupOn?esc(i.setupOn):"Spare"}${onLoan(i.id)?" · on loan":""}</small></span>
-      <span class="meta">${i.mountedOn&&itemById(i.mountedOn)?`on <em>${esc(itemById(i.mountedOn).name)}</em>`:i.setupOn?`<em>${esc(i.setupOn)}</em>`:"Spare"}${onLoan(i.id)?`<span class="tag" style="display:block">on loan · ${esc(onLoan(i.id).borrower)}</span>`:""}</span>
+      <span class="nm">${esc(i.name)}${i.nick?` <span class="tag">${esc(i.nick)}</span>`:""}<small>${esc([i.brand,i.color,i.category==="Firearms"?(i.caliber?i.caliber+" · ":"")+roundsFired(i.id).toLocaleString()+" rds":"",wtText(i)].filter(Boolean).join(" · "))}</small><small class="where">${esc(i.category)}${i.mountedOn&&itemById(i.mountedOn)?" · on "+esc(itemById(i.mountedOn).name):""}${onLoan(i.id)?" · on loan":""}</small></span>
       <span class="meta">${esc(i.location||"—")}</span>
       <span class="cond ${esc(i.condition)}">${esc((i.condition||"").replace("-"," "))}</span>
       <span class="val">${GearLogic.countedValue(i)?money(i.qty*GearLogic.countedValue(i)):"—"}${lookingUp.has(i.id)?`<span class="tag">looking up…</span>`:GearLogic.saleRestricted(i)?"":(i.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
@@ -193,7 +195,7 @@ function openForm(item){
   $("formTitle").textContent=item?"Edit item":"Add item";
   $("fName").value=item?.name||"";$("fBrand").value=item?.brand||"";$("fCat").value=item?.category||(filter!=="All"?filter:"Pouches");
   $("fQty").value=item?.qty??1;$("fColor").value=item?.color||"";$("fCond").value=item?.condition||"Good";
-  $("fRetail").value=blocked?(manualRetail?item.retailNew||"":""):(item?.retailNew||"");$("fVal").value=blocked?(manualValue?item.value||"":""):(item?.value||"");$("fOn").value=item?.setupOn||"";$("fLoc").value=item?.location||"";$("fNotes").value=item?.notes||"";
+  $("fRetail").value=blocked?(manualRetail?item.retailNew||"":""):(item?.retailNew||"");$("fVal").value=blocked?(manualValue?item.value||"":""):(item?.value||"");$("fLoc").value=item?.location||"";$("fNotes").value=item?.notes||"";
   $("delBtn").hidden=!item;$("delBtn").className="btn ghost";$("delBtn").textContent="Delete";
   if(window.LOOKUP_URL){const busy=!!item&&lookingUp.has(item.id);$("mktBtn").disabled=busy;$("mktBtn").textContent=busy?"Looking up…":"Market check"}else{$("mktBtn").disabled=item?.marketCheck==="requested";$("mktBtn").textContent=item?.marketCheck==="requested"?"Check queued":"Market check"}
   $("fMount").innerHTML=mountOpts(item?.id);$("fMount").value=item?.mountedOn||"";
@@ -208,7 +210,7 @@ function cancelForm(){const back=formFrom;closeForm();formFrom=null;if(back){con
 function readForm(){
   return {name:$("fName").value.trim(),brand:$("fBrand").value.trim(),category:$("fCat").value,qty:Math.max(0,parseInt($("fQty").value)||0),
     color:$("fColor").value.trim(),condition:$("fCond").value,retailNew:Math.max(0,Math.round(parseFloat($("fRetail").value)||0)),value:Math.max(0,Math.round(parseFloat($("fVal").value)||0)),
-    setupOn:$("fOn").value.trim(),location:$("fLoc").value.trim(),notes:$("fNotes").value.trim(),
+    setupOn:(editing&&editing.setupOn)||"",location:$("fLoc").value.trim(),notes:$("fNotes").value.trim(),
     weight:$("fWt").value===""?null:Math.max(0,+$("fWt").value),mountedOn:$("fMount").value,caliber:$("fCal").value.trim(),
     baseRounds:$("fBase").value===""?"":Math.max(0,parseInt($("fBase").value)||0),
     nick:$("fNick").value.trim(),forGun:$("fCat").value==="Firearms"?"":$("fGun").value};
@@ -252,7 +254,7 @@ $("saveMoreBtn").onclick=async()=>{
   const rec=await saveCurrent();if(!rec)return;
   toast("Added "+rec.name);
   const k={c:rec.category,l:rec.location,o:rec.setupOn,m:rec.mountedOn,g:rec.forGun};
-  openForm();$("fCat").value=k.c;fireFields();$("fLoc").value=k.l;$("fOn").value=k.o;$("fMount").value=k.m||"";$("fGun").value=k.g||"";
+  openForm();$("fCat").value=k.c;fireFields();$("fLoc").value=k.l;$("fMount").value=k.m||"";$("fGun").value=k.g||"";
 };
 $("delBtn").onclick=async()=>{
   if(!editing)return;
@@ -279,8 +281,8 @@ function buildPrint(){
   let h=`<div class="ph"><div><h1>WAR BOX — INVENTORY</h1><small>Printed ${new Date().toLocaleDateString()} · ${items.length} line items · ${totQty} pieces · Value ${money(totVal)}</small></div><small>PRIVATE — PERSONAL PROPERTY RECORD</small></div>`;
   CATS.forEach(c=>{const g=items.filter(i=>i.category===c).sort((a,b)=>(a.name||"").localeCompare(b.name||""));if(!g.length)return;
     const gq=g.reduce((a,i)=>a+(+i.qty||0),0),gv=g.reduce((a,i)=>a+(+i.qty||0)*GearLogic.countedValue(i),0);
-    h+=`<table><thead><tr class="cat"><th colspan="9">${esc(c.toUpperCase())} — ${gq} pcs${gv?" · "+money(gv):""}</th></tr><tr><th>✓</th><th>Qty</th><th>Item</th><th>Brand / model</th><th>Color</th><th>Set up on</th><th>Stored</th><th>Cond.</th><th class="r">Value</th></tr></thead><tbody>`+
-      g.map(i=>{const v=GearLogic.countedValue(i);return `<tr><td><span class="box"></span></td><td class="r">${+i.qty||0}</td><td>${esc(i.name)}</td><td>${esc(i.brand)}</td><td>${esc(i.color)}</td><td>${esc(i.setupOn||"Spare")}</td><td>${esc(i.location)}</td><td>${esc((i.condition||"").replace("-"," "))}</td><td class="r">${v?money(i.qty*v):"—"}</td></tr>`}).join("")+`</tbody></table>`});
+    h+=`<table><thead><tr class="cat"><th colspan="8">${esc(c.toUpperCase())} — ${gq} pcs${gv?" · "+money(gv):""}</th></tr><tr><th>✓</th><th>Qty</th><th>Item</th><th>Brand / model</th><th>Color</th><th>Stored</th><th>Cond.</th><th class="r">Value</th></tr></thead><tbody>`+
+      g.map(i=>{const v=GearLogic.countedValue(i);return `<tr><td><span class="box"></span></td><td class="r">${+i.qty||0}</td><td>${esc(i.name)}</td><td>${esc(i.brand)}</td><td>${esc(i.color)}</td><td>${esc(i.location)}</td><td>${esc((i.condition||"").replace("-"," "))}</td><td class="r">${v?money(i.qty*v):"—"}</td></tr>`}).join("")+`</tbody></table>`});
   h+=`<p class="sign">Verified by: ______________________________ &nbsp;&nbsp; Date: ______________</p>`;
   $("printSheet").innerHTML=h;
 }
@@ -464,7 +466,7 @@ var byName=(a,b)=>(a.name||"").localeCompare(b.name||"");
 function itemById(id){return id?live().find(i=>i.id===id):undefined}
 function fmtDate(d){return d?new Date(d+"T12:00:00").toLocaleDateString():"—"}
 function daysBetween(a,b){return Math.round((new Date(b+"T12:00:00")-new Date(a+"T12:00:00"))/864e5)}
-function addDays(d,n){const x=new Date(d+"T12:00:00");x.setDate(x.getDate()+n);return x.toISOString().slice(0,10)}
+function addDays(d,n){const x=new Date(d+"T12:00:00");x.setDate(x.getDate()+n);return localISODate(x)}
 function fmtWt(oz){oz=+oz||0;return oz>=16?`${(oz/16).toFixed(1)} lb`:`${oz%1?oz.toFixed(1):oz} oz`}
 var lookupsOn=()=>!!(window.LOOKUP_URL||(kits._settings&&kits._settings.lookups));
 var lookingUp=new Set();

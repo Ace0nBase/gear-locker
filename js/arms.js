@@ -86,7 +86,7 @@ function docxTables(xml){
   }));
 }
 var MON={JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,SEPT:9,OCT:10,NOV:11,DEC:12};
-function recDate(s){const m=String(s||"").toUpperCase().replace(/\s/g,"").match(/^(\d{1,2})([A-Z]{3,4})(\d{4})$/);if(m&&MON[m[2]])return `${m[3]}-${String(MON[m[2]]).padStart(2,"0")}-${m[1].padStart(2,"0")}`;const d=new Date(s);return s&&!isNaN(d)&&/\d{4}/.test(s)?d.toISOString().slice(0,10):""}
+function recDate(s){const raw=String(s||"").trim();const iso=raw.match(/^(\d{4})-(\d{2})-(\d{2})/);if(iso)return iso[1]+"-"+iso[2]+"-"+iso[3];const m=raw.toUpperCase().replace(/\s/g,"").match(/^(\d{1,2})([A-Z]{3,4})(\d{4})$/);if(m&&MON[m[2]])return `${m[3]}-${String(MON[m[2]]).padStart(2,"0")}-${m[1].padStart(2,"0")}`;const d=new Date(raw);return raw&&!isNaN(d)&&/\d{4}/.test(raw)?localISODate(d):""}
 var unk=s=>/^(UK|UNK|UNKNOWN|N\/?A|NONE|-+)$/i.test(String(s||"").trim())?"":String(s||"").trim();
 function recMoney(s){const v=parseFloat(String(s||"").replace(/[$,\s]/g,""));return isFinite(v)&&v>0?Math.round(v*100)/100:0}
 function parseRecord(tables){

@@ -7,7 +7,7 @@ function staleGapWishes(){return db.wish.filter(w=>!w.deleted&&w.gapSlot&&w.stat
 async function cleanGapWishes(){const old=staleGapWishes();if(!old.length)return 0;const t=now();old.forEach(w=>{w.deleted=true;w.updatedAt=t});await persist();return old.length}
 {const _aw=ACT.wish;ACT.wish=async(act,b)=>{
   if(act!=="gaps")return _aw(act,b);
-  const removed=await cleanGapWishes();if(!KITS.some(kitStarted)){render();toast("Pack a kit first (try Build it for me on the Kits tab). Gaps come from the kits you use.",6000);return}const gaps=realGaps();let n=0,u=0;
+  const removed=await cleanGapWishes();if(!KITS.some(kitStarted)){render();toast("No packed kits yet. Gaps come from kits already saved on this account.",6000);return}const gaps=realGaps();let n=0,u=0;
   for(const [s,ks] of Object.entries(gaps)){const ex=db.wish.find(w=>!w.deleted&&w.gapSlot===s&&w.status!=="got");
     if(ex){ex.kitsNeeding=ks;ex.updatedAt=now();u++;continue}
     const d=slotDef(s);db.wish.push({id:uid(),name:d[0],category:(S[s]?.[1]?.[0])||"Misc",gapSlot:s,kitsNeeding:ks,priority:ks.length>=4?"High":ks.length>=2?"Medium":"Low",status:"want",notes:d[2]||"",createdAt:now(),updatedAt:now()});n++}
@@ -59,10 +59,10 @@ async function openSecurity(){const c=lockCfg();const bio=await canBio();const s
   const el=$("secSheet");el.querySelector(".panel").innerHTML=`<h2>Security</h2>
    <div class="secBlock"><h3>Privacy screen on this device</h3>
     <p class="hint">This hides your gear from someone looking over your shoulder. It is not a lock on your account. Your sign-in password and your phone's own passcode are what protect your data. The screen also blanks in the app switcher.</p>
-    <div class="f"><label for="sLock">Lock with</label><select id="sLock"><option value="off">Off</option>${bio?`<option value="bio"${c.mode==="bio"?" selected":""}>Face ID / Touch ID (+ PIN backup)</option>`:""}<option value="pin"${c.mode==="pin"?" selected":""}>PIN</option></select></div>
+    <div class="f"><label for="sLock">Privacy screen</label><select id="sLock"><option value="off">Off</option>${bio?`<option value="bio"${c.mode==="bio"?" selected":""}>Face ID / Touch ID (+ PIN backup)</option>`:""}<option value="pin"${c.mode==="pin"?" selected":""}>PIN</option></select></div>
     <div class="f"><label for="sAfter">Lock when I leave the app for</label><select id="sAfter">${[[0,"Right away"],[60,"1 minute"],[300,"5 minutes"],[900,"15 minutes"]].map(([v,l])=>`<option value="${v}"${(+c.after||0)===v?" selected":""}>${l}</option>`).join("")}</select></div>
     <div class="f" id="sPinBox"><label for="sPin">${c.pinHash?"New PIN (leave blank to keep the current one)":"PIN (6–12 digits)"}</label><input id="sPin" type="password" inputmode="numeric" autocomplete="new-password" maxlength="12"></div>
-    <button class="btn" type="button" data-sec="lock">Save lock</button>
+    <button class="btn" type="button" data-sec="lock">Save privacy screen</button>
     <p class="hint">The app also blanks itself in the app switcher while locked mode is on.</p></div>
    <div class="secBlock"><h3>What you've shared</h3>
     ${sh.length?sh.map(([k,sid])=>{const [kind,id]=k.split(":");const nm=kind==="kit"?(KITS.find(x=>x.id===id)?.name+" kit"):(itemById(id)?.name||"(deleted item)");return `<div class="pk"><span class="pkn"><b>${esc(nm)}</b><small>share link · anyone with the link can see it</small></span><button class="btn ghost" type="button" data-sec="unshare" data-k="${esc(k)}">Turn off</button></div>`}).join("")+`<button class="btn ghost" type="button" data-sec="unshareall">Turn off all links</button>`:`<p class="hint">No share links are on. Nothing of yours is viewable without signing in as you.</p>`}
@@ -78,7 +78,7 @@ async function openSecurity(){const c=lockCfg();const bio=await canBio();const s
 $("secSheet").addEventListener("click",async e=>{const b=e.target.closest("[data-sec]");if(!b)return;const a=b.dataset.sec;
   if(a==="close"){$("secSheet").hidden=true;syncLock();return}
   if(a==="lock"){const mode=$("sLock").value;const after=+$("sAfter").value;const pin=$("sPin").value.trim();const c=lockCfg();
-    if(mode==="off"){setLockCfg({});toast("App lock is off");openSecurity();return}
+    if(mode==="off"){setLockCfg({});toast("Privacy screen is off");openSecurity();return}
     if(pin&&!GearLogic.pinLengthOk(pin)){toast("PIN must be 6–12 digits");return}
     if(!pin&&!c.pinHash){toast(mode==="bio"?"Set a backup PIN too, in case Face ID fails":"Enter a PIN");return}
     if(!pin&&c.pinHash)toast("The PIN already saved on this device still works until you change it",4000)

@@ -305,9 +305,4 @@ $("buildSheet").addEventListener("click",async e=>{const b=e.target.closest("but
   if(b.dataset.unmount&&g){const it=all.find(x=>x.id===b.dataset.unmount);if(!it)return;if(b.dataset.role==="holster")it.forGun="";else{it.mountedOn="";mergeIntoSpare(it)}it.updatedAt=now();render();await persist();renderBuild()}});
 $("buildSheet").addEventListener("change",async e=>{const s=e.target.closest("[data-mountsel]");if(!s||!s.value)return;await mountOn(s.value,s.dataset.mountsel,itemById(buildFor))});
 $("buildSheet").querySelector(".sheetBg").addEventListener("click",()=>{buildFor=null;renderBuild()});
-{const _od=openDetail;openDetail=function(i,quiet){_od(i,quiet);if(!i||!classify(i).has("gun_long")&&!classify(i).has("gun_pistol"))return;const v=$("detail").querySelector(".dh .vbtns");if(v&&!v.querySelector("[data-dact='build']"))v.insertAdjacentHTML("beforeend",`<button class="btn ghost" type="button" data-dact="build">Build</button>`)}}
-detailClickers.push(function(b){if(b.dataset.dact==="build"&&viewing){openBuild(viewing.id);return true}});
-// Armory: a Build button on each gun
-{const _ra=renderArms;renderArms=function(){_ra();document.querySelectorAll("#armsView .armRow").forEach(r=>{const g=itemById(r.dataset.id);if(g&&(classify(g).has("gun_long")||classify(g).has("gun_pistol"))&&!r.nextElementSibling?.classList?.contains("buildLink"))r.insertAdjacentHTML("afterend",`<button type="button" class="lnk buildLink" data-build="${esc(g.id)}">Build ${esc(g.name)} →</button>`)})}}
-$("armsView").addEventListener("click",e=>{const b=e.target.closest("[data-build]");if(b){e.stopPropagation();openBuild(b.dataset.build)}},true);
 

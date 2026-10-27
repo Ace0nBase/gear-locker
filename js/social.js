@@ -90,7 +90,7 @@ ACT.loans=async(act,b)=>{
   if(act==="iback"){const bb=borrowed.find(y=>y.id===b.dataset.id);if(!bb)return;try{await fsdb.collection("lends").doc(bb.id).update({borrowerReturned:today(),updatedAt:now()});toast(`Let ${bb.lenderName||"them"} know you gave it back`)}catch(e){toast("Couldn't update: "+e.message)}return}
 };
 function downloadIcs(x){
-  const it=itemById(x.itemId);const when=(x.remindAt||(x.due?x.due+"T09:00":""))||new Date(Date.now()+7*864e5).toISOString().slice(0,16);
+  const it=itemById(x.itemId);const when=(x.remindAt||(x.due?x.due+"T09:00":""))||localDateTime(new Date(Date.now()+7*864e5));
   const d=new Date(when);const f=t=>t.toISOString().replace(/[-:]/g,"").replace(/\.\d+/,"");
   const title=`${x.borrower} still has your ${it?.name||x.itemName||"gear"}`;
   const ics=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//War Box//EN","BEGIN:VEVENT",`UID:${x.id}@gearlocker`,`DTSTAMP:${f(new Date())}`,`DTSTART:${f(d)}`,`DTEND:${f(new Date(+d+15*60e3))}`,
@@ -154,7 +154,7 @@ function applyWatch(ws){let ch=false,news=[];ws.forEach(r=>{const w=db.wish.find
     if(GearLogic.saleRestricted(w)){toast("Price search skips firearms and ammunition.");renderExtra();return}
     try{await apiPost("/watch/sync",{watches:L("wish").filter(x=>x.status!=="got"&&+x.target>0&&!GearLogic.saleRestricted(x)).map(x=>({id:x.id,name:x.name,brand:x.brand||"",category:x.category||"",target:+x.target}))});
       const j=await apiPost("/watch/check",{id:w.id});applyWatch(j.watches||[]);const d=db.wish.find(x=>x.id===w.id)?.deal;toast(d?.price?`Lowest found: ${money(d.price)} at ${d.where}`:"No listings found right now",5000)}
-    catch(e){toast("Price search: "+e.message,5000)}renderExtra();return}
+    catch(e){toast(lookupFailMessage(e.message),5000)}renderExtra();return}
   if(act==="dealseen"){const w=db.wish.find(x=>x.id===b.dataset.id);if(w&&w.deal){w.dealSeen=w.deal.date;w.updatedAt=now();await persist();updateBadges();renderExtra()}return}
   const r=await _aw(act,b);if(act==="got")syncWatches();return r}}
 {const _rw=RENDER.wish;RENDER.wish=()=>{
