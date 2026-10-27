@@ -1,6 +1,6 @@
 // Local lookup stub for npm run qa. It never calls Claude and it refuses
 // the live Firebase project. Run it only on 127.0.0.1. It is not the production worker.
-import { decideAccess, chargeDecision, quotaKey, saleRestricted } from "../js/logic.js";
+import { decideAccess, chargeDecision, quotaKey, saleRestricted, publicWeightNote } from "../js/logic.js";
 
 const memory = new Map();
 const memKv = {
@@ -39,7 +39,7 @@ function fakeItem(it) {
   const id = String(it.id || "");
   if (it.kind === "wish" && saleRestricted(it)) return { id, ok: false, error: "Price search skips this item." };
   if (saleRestricted(it) || it.weightOnly) {
-    return { id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: 12, priceNote: "", weightNote: "Local test weight", sources: [] };
+    return { id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: 12, priceNote: "", weightNote: publicWeightNote("Local test weight"), sources: [] };
   }
   return { id, ok: true, retailNew: 40, usedLow: 20, usedHigh: 30, value: 28, weightOz: 12, priceNote: "Local test price. No live lookup was made.", weightNote: "Local test weight", sources: [{ label: "Local test shop", url: "https://example.com/gear" }] };
 }

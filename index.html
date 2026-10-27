@@ -28,6 +28,7 @@
     <div class="err" id="gErr" role="alert"></div>
     <div class="row2"><button class="btn" type="submit" id="gIn">Sign in</button><button class="btn ghost" type="button" id="gNew">Create account</button></div>
     <label class="keep"><input type="checkbox" id="gKeep" checked> Keep me signed in on this device</label>
+    <p class="hint" id="gKeepNote" hidden>With this off, the locker on this device only works while you are online.</p>
     <button class="link" type="button" id="gReset">Forgot password?</button>
     </div>
   </form>
@@ -39,7 +40,7 @@
     <div>
       <h1>Gear Locker</h1>
       <div class="sub" id="sub">KIT INVENTORY</div>
-      <div class="acct" id="acct" hidden><span class="sync" id="syncDot"></span><span id="acctTxt"></span><button type="button" id="signOut">Sign out</button><span class="ver" id="ver"></span></div>
+      <div class="acct" id="acct" hidden><span class="sync" id="syncDot"></span><span id="acctTxt"></span><button type="button" id="signOut">Sign out</button><span class="ver" id="ver"></span><span class="ver" id="keepLive" hidden>Online only on this device</span></div>
     </div>
     <div class="hbtns">
       <button class="btn ghost" id="printBtn" type="button">Print</button>

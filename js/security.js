@@ -71,7 +71,7 @@ async function openSecurity(){const c=lockCfg();const bio=await canBio();const s
     <div class="f"><label for="sOld">Current password</label><input id="sOld" type="password" autocomplete="current-password"></div>
     <div class="f"><label for="sNew">New password (12+ characters)</label><input id="sNew" type="password" autocomplete="new-password" minlength="12"></div>
     <button class="btn ghost" type="button" data-sec="pw">Change password</button><div class="err" id="sErr"></div></div>
-   <div class="secBlock"><h3>Price &amp; weight lookups</h3><label class="keep"><input type="checkbox" id="sPriv"${kits._settings?.privateArms?" checked":""}> Never send Arms Room items (guns, suppressors, optics, lights, lasers, knives) to lookups</label><p class="hint">Lookups send an item's name, brand, category, color and condition. Photo ID sends the photo to the AI lookup service. They do not send your notes, serial numbers, or where you store it. With this on, Arms Room items are skipped entirely, including photo ID and battery lookup. Type their weights yourself.</p></div>
+   <div class="secBlock"><h3>Price &amp; weight lookups</h3><label class="keep"><input type="checkbox" id="sPriv"${kits._settings?.privateArms?" checked":""}> Never send Arms Room items (guns, suppressors, and gear mounted on a weapon) to lookups</label><p class="hint">Lookups send an item's name, brand, category, color, condition, caliber, load, and Arms Room type. Photo ID sends the photo to the AI lookup service. They do not send your notes, serial numbers, or where you store it. With this on, Arms Room records and gear mounted on a weapon are skipped entirely, including photo ID and battery lookup. Headlamps, flashlights, and binoculars still look up. Firearms, suppressors, frames, and ammunition get a weight-only lookup with no prices or stores.</p></div>
    <div class="actions"><span class="spacer"></span><button class="btn" type="button" data-sec="close">Done</button></div>`;
   el.hidden=false;syncLock();const tog=()=>{$("sPinBox").hidden=$("sLock").value==="off"};$("sLock").onchange=tog;tog();}
 $("secSheet").addEventListener("click",async e=>{const b=e.target.closest("[data-sec]");if(!b)return;const a=b.dataset.sec;
@@ -94,7 +94,7 @@ $("secSheet").addEventListener("change",async e=>{if(e.target.id==="sPriv"){kits
 $("secSheet").querySelector(".sheetBg").addEventListener("click",()=>{$("secSheet").hidden=true;syncLock()});
 $("acct").insertAdjacentHTML("beforeend",`<button type="button" id="secBtn">Security</button>`);$("secBtn").onclick=openSecurity;
 // honor "never send Arms Room items" in every lookup path
-{const _rl=runLookups;runLookups=function(ids,quiet){if(kits._settings?.privateArms){const skip=ids.filter(id=>{const i=itemById(id);return i&&GearLogic.armoryLookupBlocked(true,i)});ids=ids.filter(id=>!skip.includes(id));if(skip.length&&!quiet)toast(`Skipped ${skip.length} Arms Room item${skip.length>1?"s":""} (private)`)}return _rl(ids,quiet)}}
+{const _rl=runLookups;runLookups=function(ids,quiet){if(kits._settings?.privateArms){const skip=ids.filter(id=>{const i=itemById(id);return i&&GearLogic.armoryLookupBlocked(true,GearLogic.armorySubject(i,i.mountedOn&&itemById(i.mountedOn)))});ids=ids.filter(id=>!skip.includes(id));if(skip.length&&!quiet)toast(`Skipped ${skip.length} Arms Room item${skip.length>1?"s":""} (private)`)}return _rl(ids,quiet)}}
 
 /* ---------- v23: camo landing screen ---------- */
 (function(){

@@ -13,7 +13,7 @@ var ammoName=a=>[a.caliber,a.brand,a.load].filter(Boolean).join(" ");
   const cards=recs.slice().sort((a,b)=>(a.caliber||"").localeCompare(b.caliber||"")).map(a=>{const paid=+a.cpr&&+a.rounds?(+a.cpr)*(+a.rounds):0;
     return `<div class="ammoP"><div class="apTop"><b>${esc(ammoName(a)||"Ammo")}</b><small>${(+a.rounds||0).toLocaleString()} rds${a.location?" · "+esc(a.location):""}</small></div>
      <div class="apGrid">
-      <div><span>I paid</span><b>${paid?money(paid):"—"}</b></div>
+      <div class="apPaid"><span>I paid</span><b>${money(paid)}</b></div>
       <div><span>Cost per round</span><b>${+a.cpr?"$"+(+a.cpr).toFixed(2):"—"}<i>/rd</i></b></div>
      </div>
      <div class="apBtns"><button class="btn ghost" type="button" data-act="ammoshot" data-id="${esc(a.id)}">I shot some</button></div>

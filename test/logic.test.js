@@ -4,8 +4,8 @@ import {
   clearUserLocal, shareItemFields, decideAccess, chargeDecision, quotaKey, alertQuotaKey,
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
-  saleRestricted,
-  keepSignedIn, firestoreMemoryOnly, settleOrTimeout, signOutConfirmNeeded, SIGN_OUT_WAIT_MS, armoryLookupBlocked,
+  saleRestricted, countedValue, csvExportField, publicWeightNote, lookupAnswerRestricted, localDay,
+  keepSignedIn, firestoreMemoryOnly, settleOrTimeout, signOutConfirmNeeded, SIGN_OUT_WAIT_MS, armorySubject, armoryLookupBlocked, photoIdBlocked,
 } from "../js/logic.js";
 
 function memStorage(seed) {
@@ -56,10 +56,13 @@ test("shareItemFields drops serials, notes, location, and arm ids", () => {
   assert.equal(row.caliber, "");
   assert.equal(row.parent, "parent");
   assert.equal(row.name, "Pouch");
-  const priced = shareItemFields({ id: "g", name: "Rifle", category: "Firearms", caliber: "5.56", value: 1, paid: 2 }, "", true);
+  const priced = shareItemFields({ id: "g", name: "Rifle", category: "Firearms", caliber: "5.56", value: 1, paid: 2, valueSource: "manual" }, "", true);
   assert.equal(priced.caliber, "5.56");
   assert.equal(priced.value, 1);
   assert.equal(priced.serial, undefined);
+  const stale = shareItemFields({ id: "g2", name: "Rifle", category: "Firearms", value: 400, priceSource: "market", paid: 9 }, "", true);
+  assert.equal(stale.value, 0);
+  assert.equal(stale.paid, 9);
 });
 
 test("decideAccess denies an empty allowlist, strangers, and unverified email", () => {
@@ -225,51 +228,74 @@ test("offline edits flush immediately and the local test page can cache itself",
   assert.equal(serviceWorkerAllowed({ protocol: "http:", hostname: "example.com" }, true), false);
 });
 
-test("price search and sale links skip firearms, ammunition, and the parts that are firearms", () => {
-  assert.equal(saleRestricted({ category: "Firearms", name: "Rifle" }), true);
-  assert.equal(saleRestricted({ category: "firearms", name: "Carbine" }), true);
-  assert.equal(saleRestricted({ category: "FIREARMS", name: "Rifle" }), true);
-  assert.equal(saleRestricted({ category: "Suppressors", name: "Can" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Glock 19 pistol" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Ruger 10/22 rifle" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Remington 870 shotgun" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "S&W revolver" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Home defense handgun" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "16 inch carbine" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "AR-15 rifle" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "AR 15 lower" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Aero M4E1 lower" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Polymer80 PF940C frame" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Glock 19 frame" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Stripped lower receiver" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Pistol frame" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "80% frame" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "supressor" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "SilencerCo Omega 300" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "9mm 115gr" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Federal 5.56 M193" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "12ga buckshot" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Hornady Critical Defense 9mm" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: ".308 Win 168gr match" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "22LR bulk pack" }), true);
-  assert.equal(saleRestricted({ category: "Mags & Ammo Storage", name: "9mm 115gr" }), true);
-  assert.equal(saleRestricted({ name: "Range ammo", caliber: "9mm", load: "115gr FMJ", rounds: 500 }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "9mm ammunition" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "115gr FMJ" }), true);
+test("price search skips firearm, suppressor, ammunition, and lower-receiver shelves", () => {
+  assert.equal(saleRestricted({ category: "Firearms", name: "North line" }), true);
+  assert.equal(saleRestricted({ category: "firearms", name: "North line" }), true);
+  assert.equal(saleRestricted({ category: "FIREARMS", name: "North line" }), true);
+  assert.equal(saleRestricted({ category: "Suppressors", name: "Tube" }), true);
+  assert.equal(saleRestricted({ category: "Ammunition", name: "Practice box" }), true);
+  assert.equal(saleRestricted({ category: "Ammo", name: "Practice box" }), true);
+  assert.equal(saleRestricted({ category: "Reloading", name: "Press" }), true);
+  assert.equal(saleRestricted({ category: "Lower receivers", name: "Widget" }), true);
+  assert.equal(saleRestricted({ category: "Frames", name: "Widget" }), true);
+  assert.equal(saleRestricted({ category: "Handguns", name: "Widget" }), true);
+  assert.equal(saleRestricted({ category: "Rifles", name: "Widget" }), true);
+  assert.equal(saleRestricted({ category: "Shotguns", name: "Widget" }), true);
+  assert.equal(saleRestricted({ category: "NFA", name: "Widget" }), true);
+  assert.equal(saleRestricted({ kind: "ammo", name: "Practice box" }), true);
+  assert.equal(saleRestricted({ tab: "ammo", category: "Misc", name: "Practice box" }), true);
   assert.equal(saleRestricted({ category: "Pouches", name: "Admin pouch", arm: "FA" }), true);
   assert.equal(saleRestricted({ category: "Misc", name: "Tube", arm: "SU" }), true);
   assert.equal(saleRestricted({ category: "Mags & Ammo Storage", name: "Ammo can" }), false);
   assert.equal(saleRestricted({ category: "Pouches", name: "Ammo pouch" }), false);
-  assert.equal(saleRestricted({ category: "Misc", name: "Ammo pouch" }), false);
-  assert.equal(saleRestricted({ category: "Pouches", name: "Double mag pouch" }), false);
-  assert.equal(saleRestricted({ category: "NVG & Optics", name: "Red dot" }), false);
-  assert.equal(saleRestricted({ category: "Comms & Radios", name: "Handheld receiver" }), false);
-  assert.equal(saleRestricted({ category: "Holsters & Slings", name: "Holster" }), false);
-  assert.equal(saleRestricted({ category: "Holsters & Slings", name: "Glock 19 holster" }), false);
-  assert.equal(saleRestricted({ category: "Misc", name: "Glock 19 holster" }), false);
-  assert.equal(saleRestricted({ category: "Misc", name: "Upper receiver" }), false);
-  assert.equal(saleRestricted({ category: "Misc", name: "Pack frame" }), false);
+  assert.equal(saleRestricted({ category: "Misc", name: "Harbor HT-100" }), false);
+  assert.equal(saleRestricted({ category: "NVG & Optics", name: "Lumen 4-16" }), false);
+  assert.equal(saleRestricted({ category: "Comms & Radios", name: "Harbor HT-100" }), false);
+  assert.equal(saleRestricted({ category: "Packs & Bags", name: "Ridge 65" }), false);
+  assert.equal(saleRestricted({ category: "Knives & Tools", name: "Fold 940" }), false);
+  assert.equal(saleRestricted({ category: "NVG & Optics", name: "Red dot", arm: "OP" }), false);
   assert.equal(saleRestricted(null), false);
+});
+
+test("a looked-up price on a restricted item is not an insured value", () => {
+  const leftover = { category: "Firearms", name: "Rifle", value: 800, priceSource: "market", retailNew: 900, priceDate: "2026-01-01" };
+  assert.equal(countedValue(leftover), 0);
+  assert.equal(countedValue({ category: "Firearms", name: "Rifle", value: 800, valueSource: "manual" }), 800);
+  assert.equal(countedValue({ category: "Pouches", name: "Admin pouch", value: 40, priceSource: "market" }), 40);
+  assert.equal(csvExportField(leftover, "retailNew"), "");
+  assert.equal(csvExportField(leftover, "priceSource"), "");
+  assert.equal(csvExportField(leftover, "priceDate"), "");
+  assert.equal(csvExportField(leftover, "value"), "");
+  assert.equal(csvExportField({ category: "Firearms", name: "Rifle", value: 800, valueSource: "manual", retailNew: 1, priceSource: "manual", priceDate: "2026-01-01" }, "value"), 800);
+  assert.equal(csvExportField({ category: "Pouches", name: "Admin pouch", retailNew: 50, priceSource: "market", priceDate: "2026-02-02" }, "retailNew"), 50);
+});
+
+test("a restricted weight note drops store names, links, and prices", () => {
+  assert.equal(publicWeightNote("Maker spec https://www.amazon.com/dp/1 via Amazon"), "Maker spec via");
+  assert.equal(publicWeightNote("Brownells listing, www.brownells.com"), "listing");
+  assert.equal(publicWeightNote("Local test weight"), "Local test weight");
+  assert.equal(publicWeightNote("Primary Arms page"), "page");
+  assert.equal(publicWeightNote("Sold at State Armory for $899. MSRP $1,299 at Academy Sports"), "");
+  assert.equal(publicWeightNote("lists 30 oz, $1,299 at Academy Sports MSRP $1,350"), "");
+  assert.equal(publicWeightNote("Sold at State Armory"), "");
+  assert.equal(publicWeightNote("Midway: 899.99"), "");
+  assert.equal(publicWeightNote("GunBroker avg 1299"), "");
+  assert.equal(publicWeightNote("Listed at Scheels for 899 dollars"), "");
+  assert.equal(publicWeightNote("sold by Big 5 for 899"), "");
+  assert.equal(publicWeightNote("about nine hundred bucks at Cabelas"), "");
+  assert.equal(publicWeightNote("maker spec 24.5 oz"), "maker spec 24.5 oz");
+  assert.equal(publicWeightNote("four hundred at the village outfitter"), "");
+  assert.equal(publicWeightNote("two fifty from a corner shop"), "");
+  assert.equal(publicWeightNote("picked up at a local retailer"), "");
+  assert.equal(publicWeightNote("two point sling spec"), "two point sling spec");
+  assert.equal(lookupAnswerRestricted({ priceNote: "four hundred dollars" }), false);
+  assert.equal(lookupAnswerRestricted({ priceNote: "GunBroker listing", sources: [{ label: "listing", url: "https://gunbroker.com/x" }] }), true);
+  assert.equal(lookupAnswerRestricted({ priceNote: "Typical pouch", sources: [{ label: "Local test shop", url: "https://example.com/gear" }] }), false);
+  assert.equal(lookupAnswerRestricted({ priceNote: "REI $229.50, fits Glock 19", weightNote: "maker spec, 24 x 12 x 12 in", sources: [{ label: "REI", url: "https://www.rei.com/kywi-556" }] }), false);
+  assert.equal(lookupAnswerRestricted({ priceNote: "Amazon $39 for 30mm rings", sources: [{ label: "OpticsPlanet", url: "https://www.opticsplanet.com/1-6x24.html" }] }), false);
+  assert.equal(lookupAnswerRestricted({ priceNote: "Crye $1,300 with plates", sources: [{ label: "Crye", url: "https://www.cryeprecision.com/jpc" }] }), false);
+  const evening = new Date(2026, 9, 26, 22, 10);
+  assert.equal(localDay(evening), "2026-10-26");
 });
 
 test("keep-signed-in off uses a memory cache and sign-out confirms only when a save is still pending", async () => {
@@ -286,15 +312,18 @@ test("keep-signed-in off uses a memory cache and sign-out confirms only when a s
   assert.equal(await settleOrTimeout(Promise.reject(new Error("failed")), 50), false);
 });
 
-test("never send arms room items blocks photo and battery lookups for those items", () => {
+test("never send arms room items blocks records and weapon-mounted gear, and photo ID waits for a category", () => {
   assert.equal(armoryLookupBlocked(false, { category: "Firearms", name: "Rifle" }), false);
   assert.equal(armoryLookupBlocked(true, { category: "Firearms", name: "Rifle" }), true);
   assert.equal(armoryLookupBlocked(true, { category: "Firearms", arm: "no", name: "Rifle" }), true);
   assert.equal(armoryLookupBlocked(true, { category: "Suppressors", name: "Can" }), true);
-  assert.equal(armoryLookupBlocked(true, { category: "NVG & Optics", name: "Red dot" }), true);
-  assert.equal(armoryLookupBlocked(true, { category: "NVG & Optics", name: "NOD" }), true);
-  assert.equal(armoryLookupBlocked(true, { category: "Lights & Lasers", name: "Weapon light" }), true);
-  assert.equal(armoryLookupBlocked(true, { arm: "OP", name: "Scope" }), true);
+  assert.equal(armoryLookupBlocked(true, { category: "NVG & Optics", name: "Red dot" }), false);
+  assert.equal(armoryLookupBlocked(true, { category: "NVG & Optics", name: "NOD" }), false);
+  assert.equal(armoryLookupBlocked(true, { category: "NVG & Optics", name: "Binoculars" }), false);
+  assert.equal(armoryLookupBlocked(true, { category: "Lights & Lasers", name: "Weapon light" }), false);
+  assert.equal(armoryLookupBlocked(true, { category: "Lights & Lasers", name: "Flashlight" }), false);
+  assert.equal(armoryLookupBlocked(true, { category: "Helmet & Head", name: "Headlamp" }), false);
+  assert.equal(armoryLookupBlocked(true, { arm: "OP", category: "NVG & Optics", name: "Red dot" }), true);
   assert.equal(armoryLookupBlocked(true, { arm: "WL", name: "Light" }), true);
   assert.equal(armoryLookupBlocked(true, { arm: "LA", name: "PEQ" }), true);
   assert.equal(armoryLookupBlocked(true, { arm: "KN", category: "Knives & Tools", name: "Fixed blade" }), true);
@@ -304,6 +333,27 @@ test("never send arms room items blocks photo and battery lookups for those item
   assert.equal(armoryLookupBlocked(true, { category: "Comms & Radios", name: "Handheld radio" }), false);
   assert.equal(armoryLookupBlocked(true, { category: "Helmet & Head", name: "Headset" }), false);
   assert.equal(armoryLookupBlocked(true, null), false);
+  const onRifle = armorySubject(
+    { category: "Helmet & Head", name: "Headlamp", mountedOn: "rifle1" },
+    { category: "Firearms", arm: "FA" },
+  );
+  assert.equal(onRifle.hostCategory, "Firearms");
+  assert.equal(armoryLookupBlocked(true, onRifle), true);
+  const onHelmet = armorySubject(
+    { category: "Lights & Lasers", name: "Headlamp", mountedOn: "helm1" },
+    { category: "Helmet & Head", arm: "no" },
+  );
+  assert.equal(armoryLookupBlocked(true, onHelmet), false);
+  assert.equal(photoIdBlocked(false, { category: "" }), false);
+  assert.equal(photoIdBlocked(true, { category: "" }), true);
+  assert.equal(photoIdBlocked(true, {}), true);
+  assert.equal(photoIdBlocked(true, null), true);
+  assert.equal(photoIdBlocked(true, { category: "Pouches", name: "Admin pouch" }), false);
+  assert.equal(photoIdBlocked(true, { category: "Helmet & Head", name: "Headlamp" }), false);
+  assert.equal(photoIdBlocked(true, { category: "Lights & Lasers", name: "Flashlight" }), false);
+  assert.equal(photoIdBlocked(true, { category: "NVG & Optics", name: "Binoculars" }), false);
+  assert.equal(photoIdBlocked(true, { category: "Firearms", name: "Rifle" }), true);
+  assert.equal(photoIdBlocked(true, onRifle), true);
 });
 
 test("kit merge uses the server stamp and keeps a pending local edit", () => {

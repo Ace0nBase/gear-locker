@@ -36,4 +36,14 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   const fetchAt = src.indexOf("https://api.anthropic.com", dealAt);
   assert.ok(dealAt > 0 && guardAt > dealAt && guardAt < fetchAt);
   assert.match(src, /!saleRestricted\(w\)/);
+  assert.match(src, /publicWeightNote\(parsed\.weightNote\)/);
+  assert.match(src, /pickModelAnswer\(/);
+  assert.match(src, /settleLookup\(clean, parsed\)/);
+  assert.match(src, /settleDeal\(w, j\)/);
+  assert.match(src, /Item: \$\{name\}/);
+  assert.match(src, /const name = it\.name \|\| ""/);
+  assert.match(src, /const name = w\.name \|\| ""/);
+  assert.doesNotMatch(src, /"restricted"/);
+  assert.doesNotMatch(src, /normalizeGearLabel/);
+  assert.match(src, /stripGunMarketSources/);
 });

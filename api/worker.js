@@ -6,7 +6,7 @@
 // Vars (dashboard, kept across deploys): FIREBASE_PROJECT, ALLOWED_ORIGINS, MODEL, FALLBACK_MODEL, ALLOWED_EMAILS (required), DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS
 // An empty ALLOWED_EMAILS list turns lookups off for everyone, including the owner.
 
-import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, parseAllowlist, saleRestricted } from "../js/logic.js";
+import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, parseAllowlist, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -65,24 +65,26 @@ const CONDITION = {
 function prompt(it) {
   const restricted = saleRestricted(it) || it.weightOnly;
   const wish = it.kind === "wish" && !restricted;
+  const name = it.name || "";
+  const brand = it.brand || "unknown";
   if (restricted) {
     return `You look up the published weight of one piece of gear for a personal inventory app. Do not look up a price. Do not name a store, a seller, or a place to buy it.
 
-Item: ${it.name}
-Brand / model: ${it.brand || "unknown"}
+Item: ${name}
+Brand / model: ${brand}
 Category: ${it.category || "unknown"}
 
 Use web search only for the maker's listed weight (at most 2 searches). Do not price firearms, suppressors, frames, lower receivers, or ammunition.
 Set retailNew, usedLow, usedHigh, and value to null. Set priceNote to "" and sources to [].
-weightOz = the weight of ONE unit in ounces (1 lb = 16 oz, 1 g = 0.035274 oz), rounded to 0.1. If sizes differ and none is given, use size Medium and say so in weightNote.
+weightOz = the weight of ONE unit in ounces (1 lb = 16 oz, 1 g = 0.035274 oz), rounded to 0.1. If sizes differ and none is given, use size Medium and say so in weightNote. The weight note must not include a price or a store name.
 
 When done, reply with ONLY this JSON object:
 {"retailNew": null, "usedLow": null, "usedHigh": null, "value": null, "weightOz": number|null, "priceNote": "", "weightNote": "short source, e.g. maker spec", "sources": []}`;
   }
-  return `You look up real, current US market data for one piece of tactical / outdoor gear for a personal inventory app. Do not price firearms, suppressors, frames, lower receivers, or ammunition. If this item is one of those, set retailNew, usedLow, usedHigh, and value to null, priceNote to "", and sources to []. You may still return weightOz.
+  return `You look up real, current US market data for one piece of tactical / outdoor gear for a personal inventory app.
 
-Item: ${it.name}
-Brand / model: ${it.brand || "unknown"}
+Item: ${name}
+Brand / model: ${brand}
 Category: ${it.category || "unknown"}
 Color: ${it.color || "n/a"}
 Condition: ${it.condition || "Good"}
@@ -162,15 +164,16 @@ function parseResult(data) {
   const blocks = data.content || [];
   const cited = [];
   blocks.forEach(b => (b.citations || []).forEach(c => { if (c.url && !cited.some(x => x.url === c.url)) cited.push({ label: (c.title || "source").slice(0, 40), url: c.url }); }));
-  const j = findJson(textOf(data.final)) || findJson(textOf(blocks));
+  let j = pickModelAnswer(textOf(data.final));
+  if (!j) j = pickModelAnswer(textOf(blocks));
   if (!j) throw new Error("couldn't read the lookup answer, try again");
   const num = v => (v === null || v === undefined || v === "" || !isFinite(+v)) ? null : +v;
-  let sources = Array.isArray(j.sources) ? j.sources.filter(s => s && /^https:\/\//.test(s.url || "")) : [];
-  if (!sources.length) sources = cited;
+  let sources = j.linksDropped ? [] : stripGunMarketSources(j.sources);
+  if (!sources.length && !j.linksDropped) sources = stripGunMarketSources(cited);
   return {
     retailNew: num(j.retailNew), usedLow: num(j.usedLow), usedHigh: num(j.usedHigh), value: num(j.value), weightOz: num(j.weightOz),
     priceNote: String(j.priceNote || "").slice(0, 240), weightNote: String(j.weightNote || "").slice(0, 80),
-    sources: sources.slice(0, 4).map(s => ({ label: String(s.label || "source").slice(0, 40), url: String(s.url) })),
+    sources, linksDropped: !!j.linksDropped,
   };
 }
 
@@ -199,10 +202,12 @@ Reply with ONLY this JSON object:
 
 /* ---------- wishlist price watch ---------- */
 function dealPrompt(w) {
+  const name = w.name || "";
+  const brand = w.brand || "any well-regarded brand";
   return `Find the LOWEST price someone in the US can buy this item for RIGHT NOW (an active listing or in-stock store price, not a sold listing).
 
-Item: ${w.name}
-Brand / model: ${w.brand || "any well-regarded brand"}
+Item: ${name}
+Brand / model: ${brand}
 Category: ${w.category || "unknown"}
 The buyer's target price is $${w.target}.
 
@@ -212,7 +217,7 @@ When done, reply with ONLY this JSON object:
 {"price": number|null, "where": "site or seller, e.g. 'TacSwap' or 'Amazon'", "url": "https link to the listing", "condition": "new|used|like new", "note": "one short sentence, e.g. 'Used, good condition, ships free'"}`;
 }
 async function dealCheck(env, w) {
-  if (saleRestricted(w)) return { price: null, where: "", url: "", condition: "", note: "", date: new Date().toISOString().slice(0, 10), hit: false };
+  if (saleRestricted(w)) return { price: null, where: "", url: "", condition: "", note: "", date: localDay(new Date()), hit: false };
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
   const messages = [{ role: "user", content: dealPrompt(w) }];
   let data, all = [];
@@ -226,13 +231,9 @@ async function dealCheck(env, w) {
     if (data.stop_reason !== "pause_turn") break;
     messages.push({ role: "assistant", content: data.content });
   }
-  const t = textOf(data.content).replace(/```(?:json)?/gi, "");
-  let j = null; const ms = t.match(/\{[\s\S]*\}/g) || [];
-  for (const c of ms.reverse()) { try { const o = JSON.parse(c); if ("price" in o) { j = o; break } } catch {} }
-  const price = j && isFinite(+j.price) && +j.price > 0 ? Math.round(+j.price * 100) / 100 : null;
-  return { price, where: String(j?.where || "").slice(0, 40), url: /^https:\/\//.test(j?.url || "") ? String(j.url).slice(0, 400) : "",
-    condition: String(j?.condition || "").slice(0, 20), note: String(j?.note || "").slice(0, 160), date: new Date().toISOString().slice(0, 10),
-    hit: price != null && price <= +w.target };
+  const j = pickModelAnswer(textOf(data.content));
+  const settled = settleDeal(w, j);
+  return { ...settled, date: localDay(new Date()), hit: settled.price != null && settled.price <= +w.target };
 }
 const WKEY = uid => "w:" + uid;
 async function readCount(env, key) { return +(await env.WATCH.get(key)) || 0; }
@@ -414,10 +415,13 @@ async function lookupOne(env, it) {
     else throw e;
   }
   const parsed = parseResult(data);
+  const settled = settleLookup(clean, parsed);
+  if (!settled.apply) throw new Error("couldn't read the lookup answer, try again");
+  const { apply, ...fields } = settled;
   if (saleRestricted(clean) || clean.weightOnly) {
-    return { id: clean.id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: parsed.weightOz, priceNote: "", weightNote: parsed.weightNote, sources: [] };
+    return { id: clean.id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: fields.weightOz, priceNote: "", weightNote: publicWeightNote(parsed.weightNote), sources: [] };
   }
-  return { id: clean.id, ok: true, ...parsed };
+  return { id: clean.id, ok: true, ...fields };
 }
 
 const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
@@ -481,7 +485,7 @@ export default {
         const w = rec.list.find(x => x.id === String(body.id || ""));
         if (!w) return json({ error: "Set an alert price on this item first" }, 400, h);
         if (saleRestricted(w)) {
-          w.best = { price: null, where: "", url: "", condition: "", note: "", date: new Date().toISOString().slice(0, 10), hit: false };
+          w.best = { price: null, where: "", url: "", condition: "", note: "", date: localDay(new Date()), hit: false };
           w.lastErr = "";
           await saveRec();
           return json(pub(), 200, h);

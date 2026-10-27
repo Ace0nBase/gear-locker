@@ -45,7 +45,7 @@ export function shareItemFields(i, parent, prices) {
     caliber: i && i.category === "Firearms" ? String(i.caliber || "") : "",
   };
   if (prices) {
-    row.value = +((i && i.value) || 0) || 0;
+    row.value = countedValue(i);
     row.paid = +((i && i.paid) || 0) || 0;
   }
   return row;
@@ -296,76 +296,398 @@ export function serviceWorkerAllowed(loc, qa) {
   return !!qa && loc.protocol === "http:" && host;
 }
 
-const GEAR_CATEGORIES = new Set([
-  "comms & radios", "medical", "packs & bags", "clothing & boots", "helmet & head",
-  "holsters & slings", "belts & rigs", "pouches", "armor & carriers", "nvg & optics",
-  "lights & lasers", "cases & bags", "cleaning & maintenance", "mags & ammo storage",
-  "knives & tools",
-]);
-
-function normCat(category) {
-  return String(category || "").trim().toLowerCase();
+// Category text only. Names are not folded, and digit swaps are not rewritten.
+function categoryKey(value) {
+  return String(value || "").normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-function itemBlob(item) {
-  return [item.name, item.brand, item.load, item.caliber, item.armType].map(v => String(v || "").toLowerCase()).join(" ");
-}
-
-function ammoContainer(blob) {
-  return /\bammo\s+(can|box|bag|crate|pouch)\b/.test(blob);
-}
-
-function accessoryNotFirearm(blob) {
-  return /\b(holster|pouch|sling|scabbard|case|bag)\b/.test(blob)
-    && !/\blower\b/.test(blob)
-    && !/\bframe\b/.test(blob)
-    && !/suppress|supress|silenc/.test(blob);
-}
-
-function clearCartridge(blob) {
-  if (ammoContainer(blob) || accessoryNotFirearm(blob)) return false;
-  return /\d+(?:\.\d+)?\s*mm\b/.test(blob)
-    || /\.\d{2,3}\b/.test(blob)
-    || /\d+\s*ga\b/.test(blob)
-    || /\b22\s*lr\b/.test(blob)
-    || /\b5\.56\b/.test(blob)
-    || /\b7\.62\b/.test(blob)
-    || /\d+\s*gr\b/.test(blob)
-    || /\b(ammunition|cartridges?)\b/.test(blob)
-    || /\bammo\b/.test(blob);
-}
-
-const LOWER_PLATFORM = "(?:ar[\\s-]?15|ar15|ar[\\s-]?10|ar10|\\bar\\b|\\bm4|\\b308\\b)";
-const LOWER_NEAR = new RegExp(LOWER_PLATFORM + ".{0,40}lower|lower.{0,40}" + LOWER_PLATFORM);
-
-function firearmIdentity(blob) {
-  if (ammoContainer(blob) || accessoryNotFirearm(blob)) return false;
-  if (/suppress|supress|silenc/.test(blob)) return true;
-  if (/\bpolymer\s*80\b|\bpf-?\s*940/.test(blob)) return true;
-  if (/\b(pistol|rifle|handgun|firearm)\s+frame\b/.test(blob)) return true;
-  if (/\b(?!pack\b|photo\b|tent\b|bike\b|picture\b)[a-z0-9][\w.+-]*\s+frame\b/.test(blob)) return true;
-  if (/\b(stripped|serialized|complete)\s+(lower|receiver)\b/.test(blob)) return true;
-  if (/\blower\s+receiver\b/.test(blob)) return true;
-  if (/\b80%\s*(frame|lower|receiver)\b/.test(blob)) return true;
-  if (LOWER_NEAR.test(blob)) return true;
-  if (/\b(pistols?|rifles?|shotguns?|handguns?|revolvers?|carbines?)\b/.test(blob)) return true;
+// Automatic prices stop at the firearm, suppressor, ammunition, and lower-receiver
+// shelves, and at a firearm or suppressor record on the Arms Room. A magazine
+// shelf is not one of those. The item name is not checked.
+export function saleRestricted(item) {
+  if (!item || typeof item !== "object") return false;
+  const kind = String(item.kind || item.tab || "").trim().toLowerCase();
+  if (kind === "ammo") return true;
+  const arm = String(item.arm || "").trim().toUpperCase();
+  if (arm === "FA" || arm === "SU") return true;
+  const c = categoryKey(item.category);
+  if (!c) return false;
+  if (/\bmags?\b|\bmagazines?\b|\bstorage\b/.test(c)) return false;
+  if (/\b(firearms?|handguns?|rifles?|shotguns?|suppressors?|silencers?|nfa)\b/.test(c)) return true;
+  if (/\b(ammunitions?|ammo|cartridges?|reloading)\b/.test(c)) return true;
+  if (/\b(lowers?|frames?|receivers?)\b/.test(c)) return true;
   return false;
 }
 
-// The app must not shop for firearms, firearm parts that are the firearm, or ammunition.
-export function saleRestricted(item) {
-  if (!item || typeof item !== "object") return false;
-  const arm = String(item.arm || "").trim().toUpperCase();
-  if (arm === "FA" || arm === "SU") return true;
-  const category = normCat(item.category);
-  if (category === "firearms" || category === "suppressors" || category === "ammo" || category === "ammunition") return true;
-  const blob = itemBlob(item);
-  if (!category && item.caliber && (item.load || item.cpr != null || item.rounds != null)) return true;
-  if (category === "mags & ammo storage") return clearCartridge(blob);
-  if (GEAR_CATEGORIES.has(category)) return false;
-  if (clearCartridge(blob)) return true;
-  return firearmIdentity(blob);
+// Firearm marketplaces and firearm or ammunition retailers, matched by domain.
+// Stores that also sell gear drop only a firearm, ammunition, or suppressor path segment.
+const GUN_MARKET_HOSTS = new Set([
+  "gunbroker.com", "armslist.com", "gunsamerica.com", "palmettostatearmory.com", "ammoseek.com",
+  "luckygunner.com", "silencershop.com", "wikiarms.com", "cheaperthandirt.com", "grabagun.com",
+  "budsgunshop.com", "aimsurplus.com", "kygunco.com", "classicfirearms.com", "impactguns.com",
+  "gunsinternational.com", "galleryofguns.com", "slickguns.com", "truegunvalue.com", "targetsportsusa.com",
+  "ammunitiondepot.com", "ammobuy.com", "silencercentral.com", "capitolarmory.com", "guns.com",
+  "gun.deals", "ammo.com", "psa.com", "rainierarms.com", "ruger.com", "glock.com", "sgammo.com",
+  "bulkammo.com", "dkfirearms.com", "gunbuyer.com", "gunprime.com", "ar15.com",
+]);
+const SHORTENER_HOSTS = new Set([
+  "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "rebrand.ly", "cutt.ly", "is.gd",
+  "shorturl.at", "rb.gy", "tiny.cc", "s.id", "buff.ly", "lnkd.in", "bl.ink", "t.ly",
+  "v.gd", "x.co", "qr.ae", "shorte.st", "adf.ly",
+]);
+const GEAR_STORE_HOSTS = new Set([
+  "brownells.com", "primaryarms.com", "natchezss.com", "natchez.com", "cabelas.com", "basspro.com",
+  "sportsmans.com", "sportsmanswarehouse.com", "midwayusa.com", "opticsplanet.com", "academy.com",
+  "scheels.com", "sportsmansguide.com", "eurooptic.com", "sigsauer.com", "budk.com",
+]);
+const FIREARM_SEGMENTS = new Set([
+  "firearms", "guns", "handguns", "rifles", "pistols", "shotguns", "ammo", "ammunition",
+  "suppressors", "suppressor", "silencer", "silencers", "lowers", "nfa", "reloading",
+  "receivers", "lower-receivers", "stripped-lowers",
+]);
+const REDIRECT_KEYS = new Set(["u", "q", "url", "uddg", "target", "dest", "redirect", "redirect_url", "to", "next", "link", "r", "goto", "out"]);
+const LINK_TOKEN = /https?:\/\/[^\s<>"']+|\b(?:www\.)?(?:[a-z0-9-]+\.)+(?:com|deals|ly|gl|gd|co|at|cc|id|gy|in|ink|ae|st|ee)\b[^\s<>"']*/gi;
+
+function parsedUrl(value) {
+  try { return new URL(String(value)); } catch { return null; }
 }
+
+function normalizeHost(host) {
+  return String(host || "").toLowerCase().replace(/^www\./, "").replace(/\.+$/, "");
+}
+
+function toHttpUrl(value) {
+  const text = String(value || "").trim().replace(/[),.;]+$/, "");
+  if (!text) return null;
+  const direct = parsedUrl(text);
+  if (direct && /^https?:$/i.test(direct.protocol)) return direct;
+  if (/^(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[/:?#]|$)/i.test(text)) {
+    const withScheme = parsedUrl("https://" + text);
+    if (withScheme && /^https?:$/i.test(withScheme.protocol)) return withScheme;
+  }
+  return null;
+}
+
+function pathText(url) {
+  try { return decodeURIComponent(url.pathname || ""); } catch { return url.pathname || ""; }
+}
+
+function hostIn(host, names) {
+  let h = host;
+  while (h) {
+    if (names.has(h)) return true;
+    const dot = h.indexOf(".");
+    if (dot < 0) return false;
+    h = h.slice(dot + 1);
+  }
+  return false;
+}
+
+function firearmSegments(url) {
+  return pathText(url).split("/").map(part => part.trim().toLowerCase().replace(/\.(html?|aspx|php)$/i, "")).filter(Boolean).some(part => FIREARM_SEGMENTS.has(part));
+}
+
+function hostBlocked(url) {
+  if (!url) return false;
+  const host = normalizeHost(url.hostname);
+  if (!host) return false;
+  if (hostIn(host, SHORTENER_HOSTS)) return true;
+  if (host === "linktr.ee" && /^\/redirects(?:\/|$)/i.test(pathText(url))) return true;
+  if (hostIn(host, GUN_MARKET_HOSTS)) return true;
+  if (hostIn(host, GEAR_STORE_HOSTS) && firearmSegments(url)) return true;
+  return false;
+}
+
+function httpTarget(value) {
+  let text = String(value || "").trim();
+  for (let i = 0; i < 2 && /%[0-9a-f]{2}/i.test(text); i++) {
+    try {
+      const decoded = decodeURIComponent(text);
+      if (decoded === text) break;
+      text = decoded;
+    } catch { break; }
+  }
+  const url = toHttpUrl(text);
+  return url && /^https?:$/i.test(url.protocol) ? url : null;
+}
+
+function redirectTargets(url) {
+  const out = [];
+  for (const [key, value] of url.searchParams) {
+    if (!REDIRECT_KEYS.has(String(key).toLowerCase())) continue;
+    const next = httpTarget(value);
+    if (next && next.href !== url.href) out.push(next);
+  }
+  return out;
+}
+
+function chainBlocked(url, unwraps) {
+  if (!url) return false;
+  if (hostBlocked(url)) return true;
+  const nexts = redirectTargets(url);
+  if (!nexts.length) return false;
+  if (unwraps >= 3) return true;
+  return nexts.some(next => chainBlocked(next, unwraps + 1));
+}
+
+export function gunMarketUrl(value) {
+  return chainBlocked(toHttpUrl(value), 0);
+}
+
+export function stripGunMarketSources(sources) {
+  return (Array.isArray(sources) ? sources : [])
+    .filter(s => s && /^https:\/\//.test(s.url || "") && !gunMarketUrl(s.url))
+    .slice(0, 4)
+    .map(s => ({ label: String(s.label || "source").slice(0, 40), url: String(s.url).slice(0, 400) }));
+}
+
+export function stripGunMarketText(note) {
+  return String(note || "").replace(LINK_TOKEN, token => gunMarketUrl(token.replace(/[),.;]+$/, "")) ? "" : token).replace(/\s{2,}/g, " ").trim();
+}
+
+// True when the answer still carries a firearm-retailer link. A price note, a size, or cents do not count.
+export function lookupAnswerRestricted(parsed) {
+  if (!parsed || typeof parsed !== "object") return false;
+  const sources = Array.isArray(parsed.sources) ? parsed.sources : [];
+  const urls = [...sources.map(s => s && s.url), parsed.url].filter(Boolean);
+  return urls.some(gunMarketUrl);
+}
+
+function priceNumber(v) {
+  return (v === null || v === undefined || v === "" || !isFinite(+v)) ? null : +v;
+}
+
+function extractTopJsonObjects(text) {
+  const t = String(text || "").replace(/```(?:json)?/gi, "");
+  const out = [];
+  let i = 0;
+  while (i < t.length) {
+    if (t[i] !== "{") { i++; continue; }
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let j = i; j < t.length; j++) {
+      const c = t[j];
+      if (inStr) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true;
+      else if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) { end = j; break; }
+    }
+    if (end < 0) break;
+    const raw = t.slice(i, end + 1);
+    let parsed = null;
+    for (const cand of [raw, raw.replace(/[\r\n]+/g, " ")]) {
+      try { parsed = JSON.parse(cand); break; } catch { parsed = null; }
+    }
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) out.push(parsed);
+    i = end + 1;
+  }
+  return out;
+}
+
+// One lookup or deal object. A second JSON object drops every link, so the last
+// object cannot smuggle a marketplace url through. A single object keeps its
+// other links and loses firearm-retailer ones.
+export function pickModelAnswer(text) {
+  const objects = extractTopJsonObjects(text);
+  const answers = objects.filter(o => ["retailNew", "usedLow", "usedHigh", "value", "weightOz", "price", "sources", "url"].some(k => k in o));
+  if (!answers.length) return null;
+  const picked = { ...answers[answers.length - 1] };
+  if (objects.length > 1) {
+    picked.sources = [];
+    picked.url = "";
+    picked.linksDropped = true;
+  } else {
+    picked.sources = stripGunMarketSources(picked.sources);
+    if (gunMarketUrl(picked.url)) picked.url = "";
+  }
+  if (picked.priceNote) picked.priceNote = stripGunMarketText(picked.priceNote);
+  return picked;
+}
+
+// A blocked category never receives a price. Other gear keeps its price, without firearm-retailer links.
+export function settleLookup(item, parsed) {
+  const clean = parsed && typeof parsed === "object" ? parsed : null;
+  if (!clean) return { apply: false };
+  const block = !!(item && (item.weightOnly || saleRestricted(item)));
+  const sources = block || clean.linksDropped ? [] : stripGunMarketSources(clean.sources);
+  if (block) {
+    return {
+      apply: true,
+      retailNew: null, usedLow: null, usedHigh: null, value: null,
+      weightOz: priceNumber(clean.weightOz), priceNote: "",
+      weightNote: publicWeightNote(clean.weightNote), sources: [],
+    };
+  }
+  return {
+    apply: true,
+    retailNew: priceNumber(clean.retailNew), usedLow: priceNumber(clean.usedLow), usedHigh: priceNumber(clean.usedHigh),
+    value: priceNumber(clean.value), weightOz: priceNumber(clean.weightOz),
+    priceNote: stripGunMarketText(clean.priceNote).slice(0, 240),
+    weightNote: stripGunMarketText(clean.weightNote).slice(0, 80),
+    sources,
+  };
+}
+
+// Same condition factors the form uses when a typed retail price fills the insured value.
+const CONDITION_FACTOR = { New: 0.9, Good: 0.7, Used: 0.55, Worn: 0.4, "Needs-repair": 0.2 };
+
+// A number the user typed on a blocked item stays. A prefilled market price does not become a typed price.
+export function keepManualPrice(item, touch) {
+  if (!item || typeof item !== "object" || !saleRestricted(item)) return item;
+  const flags = touch && typeof touch === "object" ? touch : {};
+  const out = { ...item, marketSources: [] };
+  delete out.priceNote;
+  delete out.usedLow;
+  delete out.usedHigh;
+  delete out.deal;
+  if ("link" in out) out.link = "";
+  const retail = Math.max(0, Math.round(+out.retailNew || 0));
+  const value = Math.max(0, Math.round(+out.value || 0));
+  const retailDirty = !!flags.retail;
+  const valueDirty = !!flags.value;
+  const keepRetail = retail > 0 && (retailDirty || !!flags.retailWasManual);
+  if (keepRetail) {
+    out.retailNew = retail;
+    out.priceSource = "manual";
+  } else {
+    out.retailNew = 0;
+    delete out.priceSource;
+    delete out.priceDate;
+  }
+  const factor = CONDITION_FACTOR[out.condition] ?? 0.6;
+  const derived = keepRetail && retailDirty && !valueDirty && value > 0 && value === Math.round(retail * factor);
+  if (value > 0 && (valueDirty || !!flags.valueWasManual || derived)) {
+    out.value = value;
+    out.valueSource = "manual";
+  } else {
+    out.value = 0;
+    delete out.valueSource;
+  }
+  if (out.weightNote) out.weightNote = publicWeightNote(out.weightNote);
+  return out;
+}
+
+// Price flags belong on the record before the one cloud write. A later snapshot
+// echo then has the same flags, and a typed insured value survives a move onto a blocked shelf.
+export function stampManualPrices(item, before, touch) {
+  if (!item || typeof item !== "object") return item;
+  const flags = touch && typeof touch === "object" ? touch : {};
+  const out = { ...item };
+  const retailTyped = !!flags.retail && +out.retailNew > 0;
+  const valueTyped = !!flags.value && +out.value > 0;
+  const retailWasManual = !!(before && before.priceSource === "manual");
+  const valueWasManual = !!(before && before.valueSource === "manual");
+  if (retailTyped) out.priceSource = "manual";
+  else if (flags.retail && !(+out.retailNew > 0) && out.priceSource === "manual") {
+    delete out.priceSource;
+    delete out.priceDate;
+  }
+  if (valueTyped) out.valueSource = "manual";
+  else if (!flags.value && !(+out.value > 0) && out.valueSource === "manual") delete out.valueSource;
+  if (!saleRestricted(out)) return out;
+  return keepManualPrice(out, {
+    retail: !!flags.retail,
+    value: !!flags.value,
+    retailWasManual: retailWasManual || retailTyped,
+    valueWasManual: valueWasManual || valueTyped,
+  });
+}
+
+// A market lookup fills empty and auto-filled numbers. A retail or insured value the user typed stays.
+export function applyMarketPrices(item, result, day) {
+  const out = { ...(item && typeof item === "object" ? item : {}) };
+  const res = result && typeof result === "object" ? result : {};
+  const n = v => (v == null || v === "" || !isFinite(+v)) ? null : Math.round(+v);
+  const retailManual = out.priceSource === "manual" && +out.retailNew > 0;
+  const valueManual = out.valueSource === "manual" && +out.value > 0;
+  const retail = n(res.retailNew);
+  const value = n(res.value);
+  if (!retailManual && retail != null) out.retailNew = retail;
+  const usedLow = n(res.usedLow);
+  const usedHigh = n(res.usedHigh);
+  if (usedLow != null) out.usedLow = usedLow;
+  if (usedHigh != null) out.usedHigh = usedHigh;
+  if (!valueManual && value != null) out.value = value;
+  else if (!valueManual && value == null && +out.retailNew > 0) out.value = Math.round(+out.retailNew * (CONDITION_FACTOR[out.condition] ?? 0.6));
+  if (!retailManual) {
+    out.priceSource = "market";
+    if (day) out.priceDate = day;
+  }
+  out.priceNote = stripGunMarketText(res.priceNote || "").slice(0, 240);
+  out.marketSources = stripGunMarketSources(res.sources);
+  return out;
+}
+
+// A deal for a blocked category has no price and no link. Other gear keeps the price and loses a firearm-retailer link.
+export function settleDeal(item, parsed) {
+  const empty = blocked => ({ price: null, where: "", url: "", condition: "", note: "", restricted: !!blocked });
+  if (saleRestricted(item)) return empty(true);
+  const clean = parsed && typeof parsed === "object" ? parsed : null;
+  if (!clean) return empty(false);
+  let url = /^https:\/\//.test(clean.url || "") ? String(clean.url).slice(0, 400) : "";
+  if (clean.linksDropped || gunMarketUrl(url)) url = "";
+  let where = String(clean.where || "").slice(0, 40);
+  if (/^https?:/i.test(where) && (clean.linksDropped || gunMarketUrl(where))) where = "";
+  const price = isFinite(+clean.price) && +clean.price > 0 ? Math.round(+clean.price * 100) / 100 : null;
+  return {
+    price, where, url, condition: String(clean.condition || "").slice(0, 20),
+    note: stripGunMarketText(clean.note).slice(0, 160), restricted: false,
+  };
+}
+
+// The calendar day where the app is open, not the UTC date.
+export function localDay(d) {
+  const dt = d instanceof Date && !isNaN(d.getTime()) ? d : new Date();
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, "0");
+  const day = String(dt.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export function countedValue(item) {
+  if (!item || typeof item !== "object") return 0;
+  const n = +item.value;
+  if (!isFinite(n) || n <= 0) return 0;
+  if (saleRestricted(item) && item.valueSource !== "manual") return 0;
+  return n;
+}
+
+export function csvExportField(item, key) {
+  if (!item || typeof item !== "object") return "";
+  if (saleRestricted(item) && item.priceSource !== "manual" && (key === "retailNew" || key === "priceSource" || key === "priceDate")) return "";
+  if (key === "value" && saleRestricted(item)) {
+    const n = countedValue(item);
+    return n || "";
+  }
+  const v = item[key];
+  return v == null ? "" : v;
+}
+
+function hasPriceNumber(s) {
+  const bare = String(s).replace(/\b\d+(?:\.\d+)?\s*(?:oz|ounces?|lb|lbs|pounds?|g|kg|grams?|mm|cm|in|inch|inches)\b/gi, " ");
+  return /\b\d{2,5}\.\d{2}\b/.test(bare) || /\b\d{3,5}\b/.test(bare);
+}
+
+const NUMBER_WORD = "zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety";
+const SPELLED_AMOUNT = new RegExp(`\\b(?:${NUMBER_WORD})\\s+hundred\\b|\\b(?:${NUMBER_WORD})\\s+thousand\\b|\\b(?:${NUMBER_WORD})\\s+(?:${NUMBER_WORD})\\b`, "i");
+const RETAILER = /\b(stores?|shops?|retailers?|outfitters?|dealers?|sellers?|vendors?|merchants?|distributors?|resellers?|gunsmiths?|emporiums?|bazaars?)\b/i;
+
+// A restricted weight note keeps a maker spec. It drops store names and price figures.
+export function publicWeightNote(note) {
+  let s = String(note || "");
+  if (/\$\s*\d|\bUSD\b|\bMSRP\b|\bdollars?\b|\bbucks\b/i.test(s)) return "";
+  if (SPELLED_AMOUNT.test(s) || RETAILER.test(s)) return "";
+  const store = /\b(amazon|ebay|tacswap|brownells|palmetto|\bpsa\b|midway|opticsplanet|primary\s*arms|gunbroker|cheaper\s*than\s*dirt|cabela'?s|bass\s*pro|sportsman'?s|grabagun|bud'?s?(?:\s*gun)?|aim\s*surplus|eurooptic|armslist|ammoseek|wikiarms|guns\.com|impact\s*guns|kygunco|classic\s*firearms|gun\.deals|scheels|rei|\bbig\s*5\b)\b/i;
+  const priceWord = /\b(price|priced|avg|average|sale|sold|cost|retail)\b/i;
+  if ((store.test(s) || priceWord.test(s) || /\bfor\s+\d{3,5}(?:\.\d{2})?\b/i.test(s)) && hasPriceNumber(s)) return "";
+  s = s.replace(/https?:\/\/\S+/gi, " ");
+  s = s.replace(/\bwww\.\S+/gi, " ");
+  s = s.replace(store, " ");
+  if (/\b(armory|academy|sports|sporting|outdoor|surplus|warehouse|retailer|dealer|gun\s*shop|firearms|scheels|midway|gunbroker)\b/i.test(s)) return "";
+  if (hasPriceNumber(s)) return "";
+  s = s.replace(/\s{2,}/g, " ").replace(/^[\s,;:.\-|]+|[\s,;:.\-|]+$/g, "");
+  return s.slice(0, 80);
+}
+
 
 // Missing or "1" keeps the signed-in session. Only an explicit "0" turns it off.
 export function keepSignedIn(storage) {
@@ -397,14 +719,28 @@ export function signOutConfirmNeeded(settled) {
 const ARMORY_ARMS = new Set(["FA", "SU", "OP", "WL", "LA", "KN"]);
 const TOOLISH = /multi.?tool|leatherman|gerber|\bsaw\b|shovel|plier|wrench|screwdriver|sharpener|machete|e-?tool/i;
 
-// Guns, suppressors, optics, lights, lasers, NODs, and knives. A multi-tool is not one of these.
+// Attach the item this one is mounted on, so a headlamp on a helmet stays a lookup and a light on a rifle does not.
+export function armorySubject(item, host) {
+  if (!item || typeof item !== "object") return item;
+  if (!host) return item;
+  return { ...item, hostCategory: host.category || "", hostArm: host.arm || "" };
+}
+
+function onWeapon(item) {
+  if (!item || !item.mountedOn) return false;
+  const hostCat = String(item.hostCategory || "").trim().toLowerCase();
+  const hostArm = String(item.hostArm || "").trim().toUpperCase();
+  return hostCat === "firearms" || hostCat === "suppressors" || hostArm === "FA" || hostArm === "SU";
+}
+
+// Arms Room records, and gear mounted on a weapon. A headlamp, flashlight, or binoculars on their own still look up.
 export function armoryLookupBlocked(privateArms, item) {
   if (!privateArms || !item || typeof item !== "object") return false;
   const arm = String(item.arm || "").trim().toUpperCase();
   if (ARMORY_ARMS.has(arm)) return true;
+  if (onWeapon(item)) return true;
   const category = String(item.category || "").trim().toLowerCase();
   if (category === "firearms" || category === "suppressors") return true;
-  if (category === "nvg & optics" || category === "lights & lasers") return true;
   if (category === "knives & tools") {
     const blob = [item.name, item.brand].map(v => String(v || "")).join(" ");
     return !TOOLISH.test(blob);
@@ -412,11 +748,20 @@ export function armoryLookupBlocked(privateArms, item) {
   return false;
 }
 
+// With the opt-out on, a new item has to have a category before Photo ID can run.
+export function photoIdBlocked(privateArms, item) {
+  if (!privateArms) return false;
+  if (!item || !String(item.category || "").trim()) return true;
+  return armoryLookupBlocked(true, item);
+}
+
 const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
-  keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armoryLookupBlocked,
+  countedValue, csvExportField, publicWeightNote, lookupAnswerRestricted, localDay,
+  gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, applyMarketPrices,
+  keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
 };
 globalThis.GearLogic = GearLogic;
