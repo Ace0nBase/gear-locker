@@ -1,7 +1,9 @@
 // On-device import screen. File bytes stay in memory until this sheet closes.
+import { saleRestricted } from "./logic.js";
 import {
   FIELD_LABELS, LIMITS, confidenceLabel, headerHash, loadMaps, mapColumns,
   maskSerial, serialAriaLabel, planImport, readImportFile, rememberMap, summaryLine, undoImportState,
+  missingImportIds, typeColumnIsGun,
   changedAfterImport, escapeSaveReport, loadHistory, saveHistory, activeUndoEntry, countPlan, chunk, WRITE_BATCH,
 } from "./import-engine.js";
 
@@ -716,8 +718,8 @@ function summaryView() {
   const progress = S.saveProgress || { done: 0, total };
   const btn = el("button", {
     className: "btn",
-    text: S.saving ? `Saving ${progress.done} of ${progress.total}…` : `Import ${total} item${total === 1 ? "" : "s"}`,
-    attrs: { type: "button", "data-import": "save", disabled: total && !S.saving ? null : "disabled" },
+    text: rollbackBusy ? "Stopping…" : S.saving ? `Saving ${progress.done} of ${progress.total}…` : `Import ${total} item${total === 1 ? "" : "s"}`,
+    attrs: { type: "button", "data-import": "save", disabled: total && !S.saving && !rollbackBusy ? null : "disabled" },
   });
   const actions = [btn];
   if (S.saving) {
@@ -834,23 +836,64 @@ function importsLoaded() {
   return true;
 }
 
-async function commitUndo(id) {
-  try {
-    if (typeof render === "function") render();
-    if (typeof persist === "function") await persist();
-    if (typeof window.__warboxFlushCloud === "function") await window.__warboxFlushCloud();
-  } catch {
-    return false;
+function rowsForImport(id) {
+  const items = typeof all !== "undefined" && all ? all : [];
+  const ammo = typeof db !== "undefined" && db && db.ammo ? db.ammo : [];
+  return [...items, ...ammo].filter(row => carriesImport(row, id));
+}
+
+function reapplyRollbacks() {
+  if (typeof all === "undefined" || typeof db === "undefined") return;
+  const pending = loadHistory(localStorage).filter(row => row && !row.undone && (row.rollback || row.status === "rollback"));
+  pending.forEach(row => {
+    if (!row || !row.id || !liveImportRows(row.id).length) return;
+    const next = undoImportState(all, db.ammo || [], row.id, new Date().toISOString());
+    all = next.items;
+    db.ammo = next.ammo;
+  });
+}
+
+let rollbackBusy = false;
+
+async function rollbackWork(id) {
+  reapplyRollbacks();
+  if (typeof mirror === "function") mirror();
+  if (typeof persist === "function") await persist();
+  reapplyRollbacks();
+  if (typeof mirror === "function") mirror();
+  const ids = rowsForImport(id).map(row => row.id);
+  if (ids.length && typeof window.__warboxFlushCloud === "function") await window.__warboxFlushCloud(ids);
+  reapplyRollbacks();
+  if (liveImportRows(id).length === 0) {
+    const prev = loadHistory(localStorage).find(row => row.id === id) || { id, at: new Date().toISOString() };
+    if (!prev.undone && prev.status !== "undone") {
+      saveHistory(localStorage, { ...prev, id, status: "undone", undone: true, rollback: false });
+    }
   }
-  return liveImportRows(id).length === 0;
+}
+
+async function finishRollback(id) {
+  if (!id || rollbackBusy) return;
+  rollbackBusy = true;
+  try {
+    await rollbackWork(id);
+  } catch {
+    // The marker stays so the next open can finish this batch.
+  } finally {
+    rollbackBusy = false;
+    S.saving = false;
+    paintUndoBar();
+    if (S.step === "summary" || S.step === "done") paint();
+  }
 }
 
 let rollbackJob = null;
 
 function resumePendingRollbacks() {
-  if (!importsLoaded() || rollbackJob) return;
+  if (!importsLoaded() || rollbackJob || rollbackBusy) return;
   const pending = loadHistory(localStorage).filter(row => row && !row.undone && (row.rollback || row.status === "rollback"));
   if (!pending.length) return;
+  rollbackJob = Promise.resolve();
   rollbackJob = finishPendingRollbacks(pending).finally(() => {
     rollbackJob = null;
     paintUndoBar();
@@ -859,23 +902,13 @@ function resumePendingRollbacks() {
 
 async function finishPendingRollbacks(pending) {
   for (const row of pending) {
-    if (!importsLoaded() || !row || !row.id) return;
-    const id = row.id;
-    if (liveImportRows(id).length) {
-      const next = undoImportState(all, db.ammo || [], id, new Date().toISOString());
-      all = next.items;
-      db.ammo = next.ammo;
-    }
-    if (liveImportRows(id).length) return;
-    const durable = await commitUndo(id);
-    if (!durable) return;
-    const prev = loadHistory(localStorage).find(item => item.id === id) || row;
-    saveHistory(localStorage, { ...prev, id, status: "undone", undone: true, rollback: false });
+    if (!importsLoaded() || !row || !row.id || rollbackBusy) return;
+    await finishRollback(row.id);
   }
 }
 
 async function saveImport() {
-  if (S.saving) return;
+  if (S.saving || rollbackBusy) return;
   const plan = currentPlan();
   const total = plan.counts.total || 0;
   if (!total) return;
@@ -914,6 +947,7 @@ async function saveImport() {
     const id = plan.importId;
     const saved = S.saveProgress ? S.saveProgress.done : 0;
     const report = escapeSaveReport(saved, total);
+    rollbackBusy = true;
     S.saving = false;
     S.saveProgress = null;
     S.cancelSave = false;
@@ -922,32 +956,55 @@ async function saveImport() {
       all = next.items;
       db.ammo = next.ammo;
     }
+    S.importId = "";
+    S.plan = null;
     paint();
     if (!(saved > 0)) {
+      rollbackBusy = false;
       saveHistory(localStorage, { id, at, counts: plan.counts, status: "undone", undone: true, rollback: false, progress: { done: 0, total } });
       paintUndoBar();
       if (typeof toast === "function") toast(report);
       return;
     }
     saveHistory(localStorage, { id, at, counts: plan.counts, status: "rollback", rollback: true, undone: false, progress: { done: saved, total } });
-    paintUndoBar();
-    const durable = await commitUndo(id);
-    if (!durable) {
-      paintUndoBar();
-      if (typeof toast === "function") toast("Stopped. The rollback is still finishing.");
-      return;
-    }
-    saveHistory(localStorage, { id, at, counts: plan.counts, status: "undone", undone: true, rollback: false, progress: { done: saved, total } });
+    if (typeof mirror === "function") mirror();
     paintUndoBar();
     if (typeof toast === "function") toast(report);
-    paint();
+    void (async () => {
+      try {
+        await rollbackWork(id);
+      } catch {
+        // The marker stays so the next open can finish this batch.
+      } finally {
+        rollbackBusy = false;
+        S.saving = false;
+        paintUndoBar();
+        if (S.step === "summary" || S.step === "done") paint();
+      }
+    })();
     return;
   }
   S.tables.forEach((table, ti) => {
     const fields = table.columns.map(col => (S.choices[ti] && S.choices[ti][col.index]) || col.field);
     rememberMap(localStorage, table.columns.map(col => col.key), fields);
   });
-  saveHistory(localStorage, { id: plan.importId, at, counts: plan.counts, status: "saved", progress: { done: total, total } });
+  const expected = [
+    ...(plan.items || []).map(doc => doc.id),
+    ...(plan.ammo || []).map(doc => doc.id),
+    ...(plan.merges || []).map(merge => merge.id),
+  ];
+  const missing = missingImportIds([...(all || []), ...((db && db.ammo) || [])], plan.importId, expected);
+  if (missing.length) {
+    const live = expected.length - missing.length;
+    saveHistory(localStorage, { id: plan.importId, at, counts: plan.counts, status: "saving", progress: { done: live, total: expected.length } });
+    S.saving = false;
+    S.saveProgress = null;
+    paint();
+    paintUndoBar();
+    if (typeof toast === "function") toast(`${live} of ${expected.length} are saved.`);
+    return;
+  }
+  saveHistory(localStorage, { id: plan.importId, at, counts: { ...plan.counts, total: expected.length }, status: "saved", progress: { done: expected.length, total: expected.length } });
   S.savedId = plan.importId;
   S.saving = false;
   S.saveProgress = null;
@@ -955,7 +1012,7 @@ async function saveImport() {
   S.step = "done";
   paint();
   paintUndoBar();
-  if (typeof toast === "function") toast(`${total} item${total === 1 ? "" : "s"} imported`);
+  if (typeof toast === "function") toast(`${expected.length} item${expected.length === 1 ? "" : "s"} imported`);
 }
 
 async function undoImport(id, opts) {
@@ -978,17 +1035,11 @@ async function undoImport(id, opts) {
   const next = undoImportState(all, db.ammo, id, nowIso);
   all = next.items;
   db.ammo = next.ammo;
-  paintUndoBar();
-  const durable = await commitUndo(id);
-  if (!durable) {
-    paintUndoBar();
-    if (typeof toast === "function" && !(opts && opts.quiet)) toast("Stopped. The rollback is still finishing.");
-    return;
-  }
-  saveHistory(localStorage, { ...prev, id, status: "undone", undone: true, rollback: false });
+  if (typeof mirror === "function") mirror();
   paintUndoBar();
   const n = prev.counts && prev.counts.total ? prev.counts.total : removed;
   if (typeof toast === "function" && !(opts && opts.quiet)) toast(`Undone: ${n} item${n === 1 ? "" : "s"} removed`);
+  void finishRollback(id);
   const sec = document.getElementById("secSheet");
   if (sec && !sec.hidden && typeof openSecurity === "function") openSecurity();
 }
@@ -1003,7 +1054,13 @@ function finishImport(id) {
 function paintUndoBar() {
   const bar = document.getElementById("importUndo");
   if (!bar) return;
-  const open = activeUndoEntry(loadHistory(localStorage));
+  const list = loadHistory(localStorage).filter(row => {
+    if (!row || row.undone || row.status === "undone") return false;
+    const incomplete = row.status === "saving" || row.status === "rollback" || row.rollback;
+    if (incomplete && !S.saving && !rollbackBusy && importsLoaded() && liveImportRows(row.id).length === 0) return false;
+    return true;
+  });
+  const open = activeUndoEntry(list);
   bar.replaceChildren();
   if (!open) { bar.hidden = true; return; }
   bar.hidden = false;
@@ -1095,7 +1152,7 @@ function onClick(event) {
     paint();
     return;
   }
-  if (act === "save") { saveImport(); return; }
+  if (act === "save") { if (!S.saving && !rollbackBusy) saveImport(); return; }
   if (act === "undo") { undoImport(node.getAttribute("data-id")); return; }
   if (act === "finish") { finishImport(node.getAttribute("data-id")); return; }
   if (act === "camera") { openCamera(); return; }
@@ -1141,8 +1198,14 @@ function onChange(event) {
     const value = node.value;
     if (!value) return;
     const plan = currentPlan();
-    plan.rows.forEach(row => {
-      if (!row || row.target !== "needs") return;
+    const needs = plan.rows.filter(row => row && row.target === "needs");
+    const priced = !saleRestricted({ category: value });
+    const gunType = priced && needs.some(row => typeColumnIsGun(row.sourceType));
+    if (gunType && !window.confirm("Some rows have a gun type in the type column. Put them on a priced shelf anyway?")) {
+      paint();
+      return;
+    }
+    needs.forEach(row => {
       S.rowCategories[row.table] = S.rowCategories[row.table] || {};
       S.rowCategories[row.table][row.row] = value;
     });

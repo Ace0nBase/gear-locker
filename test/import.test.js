@@ -8,6 +8,7 @@ import {
   normalizeHeader, maskSerial, parseDate, excelSerialToIso, columnDateOrder, headerHash,
   rememberMap, loadMaps, chunk, WRITE_BATCH, decodeBytes, nrm, summaryLine, normalizeCaliber, serialAriaLabel,
   escapeSaveReport, loadHistory, saveHistory, activeUndoEntry, importHistoryLabel, importHistoryCanUndo,
+  missingImportIds, typeColumnIsGun,
 } from "../js/import-engine.js";
 
 const enc = s => new TextEncoder().encode(s);
@@ -649,12 +650,14 @@ test("escape during a save reports the rows already written", () => {
   assert.match(cancel, /S\.saving = false/);
   assert.ok(cancel.indexOf("undoImportState") !== -1 && cancel.indexOf("undoImportState") < cancel.indexOf("paint()"));
   assert.ok(cancel.indexOf("paint()") < cancel.indexOf("toast(report)"));
-  const commitAt = cancel.indexOf("await commitUndo");
-  const undoneAt = cancel.lastIndexOf('status: "undone"');
   const claimAt = cancel.lastIndexOf("toast(report)");
-  assert.ok(cancel.indexOf('status: "rollback"') !== -1 && cancel.indexOf('status: "rollback"') < commitAt);
-  assert.ok(commitAt < undoneAt && undoneAt < claimAt);
-  assert.match(cancel, /The rollback is still finishing/);
+  assert.ok(cancel.indexOf('status: "rollback"') !== -1 && cancel.indexOf('status: "rollback"') < claimAt);
+  assert.ok(cancel.indexOf("mirror()") !== -1 && cancel.indexOf("mirror()") < claimAt);
+  assert.ok(claimAt < cancel.indexOf("rollbackWork"));
+  assert.match(cancel, /S\.importId = ""/);
+  assert.match(cancel, /rollbackBusy = true/);
+  assert.doesNotMatch(cancel, /__warboxFlushCloud/);
+  assert.match(ui, /!S\.saving && !rollbackBusy/);
   const csv = "Manufacturer,Model,Serial Number,Type\nTarnway,Ranger,FA-1,Rifle\nTarnway,Spare,FA-2,Rifle\n";
   const fresh = planImport(readCsvText(csv).tables, { importId: "01ESC", now: "2026-10-27T00:00:00.000Z" });
   const rolled = undoImportState(fresh.items, [], "01ESC", "2026-10-27T01:00:00.000Z");
@@ -662,6 +665,61 @@ test("escape during a save reports the rows already written", () => {
   assert.equal(again.counts.firearms, fresh.counts.firearms);
   assert.equal(again.counts.total, fresh.counts.total);
   assert.equal(again.counts.skipped, 0);
+});
+
+test("a new import after a rollback does not reuse batch or item ids", () => {
+  const lines = ["Brand,Item,Type,Serial Number"];
+  for (let i = 0; i < 5; i++) lines.push(`Ferrowind,Pouch ${i},Pouches,SN-${i}`);
+  const tables = readCsvText(lines.join("\n")).tables;
+  const first = planImport(tables, { importId: "01BATCHOLD111", now: "2026-10-27T00:00:00.000Z" });
+  const undone = undoImportState(first.items, [], first.importId, "2026-10-27T00:01:00.000Z");
+  assert.ok(undone.items.every(row => row.deleted));
+  const oldIds = new Set(first.items.map(row => row.id));
+  const second = planImport(tables, { importId: "01BATCHNEW222", items: undone.items, now: "2026-10-27T00:02:00.000Z" });
+  assert.notEqual(second.importId, first.importId);
+  assert.equal(second.items.length, first.items.length);
+  assert.ok(second.items.every(row => !oldIds.has(row.id)));
+  const combined = [...undone.items, ...second.items];
+  assert.equal(combined.filter(row => !row.deleted).length, second.items.length);
+  assert.deepEqual(missingImportIds(combined, second.importId, second.items.map(row => row.id)), []);
+  const reused = planImport(tables, { importId: first.importId, items: undone.items, now: "2026-10-27T00:03:00.000Z" });
+  assert.ok(reused.items.every(row => !oldIds.has(row.id)));
+  const collided = [...undone.items];
+  reused.items.forEach(row => collided.push(row));
+  assert.equal(collided.filter(row => !row.deleted).length, reused.items.length);
+  assert.deepEqual(missingImportIds(collided, first.importId, reused.items.map(row => row.id)), []);
+});
+
+test("a gun type in the type column asks before a priced bulk category", () => {
+  assert.equal(typeColumnIsGun("Rifle"), true);
+  assert.equal(typeColumnIsGun("Rifle w/ scope"), true);
+  assert.equal(typeColumnIsGun("Suppressor"), true);
+  assert.equal(typeColumnIsGun("Lower receiver"), true);
+  assert.equal(typeColumnIsGun("Pouches"), false);
+  assert.equal(typeColumnIsGun("Red dot"), false);
+  assert.equal(typeColumnIsGun("AR-15"), false);
+  assert.equal(typeColumnIsGun(""), false);
+  const needs = planImport(readCsvText("Item,Type\nGlass,Rifle w/ scope\nDot,Red dot\n").tables, {
+    importId: "01GUNTYPE", now: "2026-10-27T00:00:00.000Z",
+  });
+  const glass = needs.rows.find(row => row.name === "Glass");
+  assert.equal(glass.target, "needs");
+  assert.equal(glass.sourceType, "Rifle w/ scope");
+  assert.equal(typeColumnIsGun(glass.sourceType), true);
+  assert.equal(typeColumnIsGun(needs.rows.find(row => row.name === "Dot").sourceType), false);
+  const ui = fs.readFileSync(new URL("../js/import-ui.js", import.meta.url), "utf8");
+  const bulk = ui.slice(ui.indexOf('act === "bulk-category"'), ui.indexOf('act === "bulk-category"') + 900);
+  assert.match(bulk, /typeColumnIsGun\(row\.sourceType\)/);
+  assert.match(bulk, /window\.confirm/);
+  assert.match(bulk, /saleRestricted\(\{ category: value \}\)/);
+  assert.equal(bulk.includes("row.name"), false);
+  assert.match(ui, /missingImportIds/);
+  const saveFn = ui.slice(ui.indexOf("async function saveImport"), ui.indexOf("async function undoImport"));
+  const partialAt = saveFn.indexOf("are saved.");
+  const importedAt = saveFn.indexOf("} imported");
+  assert.match(saveFn, /\$\{live\} of \$\{expected\.length\} are saved\./);
+  assert.ok(partialAt !== -1 && importedAt !== -1 && partialAt < importedAt);
+  assert.ok(saveFn.indexOf("return;", partialAt) < importedAt);
 });
 
 test("a stopped import stays on that batch until the rollback is stored", () => {
@@ -686,7 +744,9 @@ test("a stopped import stays on that batch until the rollback is stored", () => 
   assert.equal(importHistoryLabel(loadHistory(store).find(row => row.id === "01NEW")), "Undone");
   assert.equal(importHistoryCanUndo(loadHistory(store).find(row => row.id === "01NEW")), false);
   const ui = fs.readFileSync(new URL("../js/import-ui.js", import.meta.url), "utf8");
-  assert.match(ui, /activeUndoEntry\(loadHistory/);
+  assert.match(ui, /activeUndoEntry\(/);
+  assert.match(ui, /Stopping…/);
+  assert.match(ui, /liveImportRows\(row\.id\)\.length === 0/);
   assert.match(ui, /resumePendingRollbacks/);
   assert.match(ui, /__warboxFlushCloud/);
   const sec = fs.readFileSync(new URL("../js/security.js", import.meta.url), "utf8");
@@ -745,6 +805,32 @@ test("a merge keeps pricing on existing priced gear", () => {
   assert.equal(back.importPricedAllowlist, undefined);
   assert.equal(back.importId, undefined);
   assert.equal(importSkipsLookup(back), false);
+
+  const rifleCsv = "Brand,Item,Type,Serial Number,Purchase Price\nFerrowind,Chest Pouch (example),Rifle,SAMPLE-5001,39.50\n";
+  const riflePlan = planImport(readCsvText(rifleCsv).tables, {
+    items: [pouch], importId: "01MERGERIFLE", now: "2026-10-27T04:00:00.000Z",
+    rowDecisions: { 0: { 0: "merge" } },
+  });
+  assert.equal(riflePlan.merges.length, 1);
+  const riflePatch = riflePlan.merges[0].patch;
+  assert.equal(riflePatch.arm, undefined);
+  assert.equal(riflePatch.armType, undefined);
+  assert.equal(riflePatch.kind, undefined);
+  assert.equal(riflePatch.tab, undefined);
+  assert.equal(riflePatch.category, undefined);
+  const rifleMerged = { ...pouch, ...riflePatch };
+  assert.equal(rifleMerged.category, "Pouches");
+  assert.equal(rifleMerged.arm || "", "");
+  assert.equal(rifleMerged.paid, 39.5);
+  assert.equal(rifleMerged.paidSource, "manual");
+  assert.equal(rifleMerged.value, 40);
+  assert.equal(rifleMerged.marketSources[0].url, "https://example.com/pouch");
+  assert.equal(saleRestricted({ category: rifleMerged.category }), false);
+  assert.equal(importRestricted(rifleMerged), false);
+  assert.equal(importSkipsLookup(rifleMerged), false);
+  const rifleDeal = settleDeal(rifleMerged, { price: 35, url: "https://example.com/deal", where: "shop" });
+  assert.equal(rifleDeal.price, 35);
+  assert.equal(rifleDeal.url, "https://example.com/deal");
 
   const held = { ...pouch, id: "held", importId: "01OLD", importIds: ["01OLD"] };
   const heldPlan = planImport(readCsvText(csv).tables, {

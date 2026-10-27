@@ -30,10 +30,11 @@ function seenLocal(pairs){
   return {promise:promise,cancel:()=>unsubs.splice(0).forEach(u=>{try{u()}catch(e){}})};
 }
 function commitDurable(commit,pairs){if(!offlineNow())return commit;var watch=seenLocal(pairs);return Promise.race([commit,watch.promise]).finally(()=>watch.cancel())}
-async function pushCloudBody(){
+async function pushCloudBody(idList){
   if(accountDeleting||!cloudUser||cloudReady.size<CLOUD_COLS.length+1)return;
+  const only=idList&&idList.length?new Set(idList):null;
   const ops=[];
-  CLOUD_COLS.forEach(c=>arrOf(c).forEach(r=>{const k=c+"/"+r.id;if(r.id&&pushed[k]!==r.updatedAt){ops.push([c,r]);pushed[k]=r.updatedAt}}));
+  CLOUD_COLS.forEach(c=>arrOf(c).forEach(r=>{if(only&&!only.has(r.id))return;const k=c+"/"+r.id;if(r.id&&pushed[k]!==r.updatedAt){ops.push([c,r]);pushed[k]=r.updatedAt}}));
   const kj=JSON.stringify(kits);const kitsChanged=kj!==kitsPushed;
   if(!ops.length&&!kitsChanged)return;
   var reported=false;
@@ -55,15 +56,15 @@ async function pushCloudBody(){
   }catch(e){reportFail(e)}
 }
 var pushTail=Promise.resolve();
-function pushCloud(){
-  var run=pushTail.then(function(){return pushCloudBody()});
+function pushCloud(idList){
+  var run=pushTail.then(function(){return pushCloudBody(idList)});
   pushTail=run.then(function(){},function(){});
   return run;
 }
-function flushCloudWrites(){
+function flushCloudWrites(idList){
   clearTimeout(pushTimer);
   pushTimer=null;
-  return pushCloud();
+  return pushCloud(idList);
 }
 window.__warboxFlushCloud=flushCloudWrites;
 function onCloudChange(){
