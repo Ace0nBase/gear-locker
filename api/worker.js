@@ -6,7 +6,7 @@
 // Vars (dashboard, kept across deploys): FIREBASE_PROJECT, ALLOWED_ORIGINS, MODEL, FALLBACK_MODEL, ALLOWED_EMAILS (required), DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS
 // An empty ALLOWED_EMAILS list turns lookups off for everyone, including the owner.
 
-import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, parseAllowlist, saleRestricted, publicWeightNote, lookupAnswerRestricted } from "../js/logic.js";
+import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, parseAllowlist, saleRestricted, publicWeightNote, lookupAnswerRestricted, localDay } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -215,7 +215,7 @@ When done, reply with ONLY this JSON object:
 {"restricted": false, "price": number|null, "where": "site or seller, e.g. 'TacSwap' or 'Amazon'", "url": "https link to the listing", "condition": "new|used|like new", "note": "one short sentence, e.g. 'Used, good condition, ships free'"}`;
 }
 async function dealCheck(env, w) {
-  if (saleRestricted(w)) return { price: null, where: "", url: "", condition: "", note: "", date: new Date().toISOString().slice(0, 10), hit: false };
+  if (saleRestricted(w)) return { price: null, where: "", url: "", condition: "", note: "", date: localDay(new Date()), hit: false };
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
   const messages = [{ role: "user", content: dealPrompt(w) }];
   let data, all = [];
@@ -234,9 +234,9 @@ async function dealCheck(env, w) {
   for (const c of ms.reverse()) { try { const o = JSON.parse(c); if ("price" in o) { j = o; break } } catch {} }
   const price = j && isFinite(+j.price) && +j.price > 0 ? Math.round(+j.price * 100) / 100 : null;
   const deal = { price, where: String(j?.where || "").slice(0, 40), url: /^https:\/\//.test(j?.url || "") ? String(j.url).slice(0, 400) : "",
-    condition: String(j?.condition || "").slice(0, 20), note: String(j?.note || "").slice(0, 160), date: new Date().toISOString().slice(0, 10),
+    condition: String(j?.condition || "").slice(0, 20), note: String(j?.note || "").slice(0, 160), date: localDay(new Date()),
     hit: price != null && price <= +w.target };
-  if (lookupAnswerRestricted({ restricted: !!(j && j.restricted), priceNote: [deal.where, deal.note, deal.url].join(" "), sources: deal.url ? [{ label: deal.where, url: deal.url }] : [] })) {
+  if (lookupAnswerRestricted({ restricted: !!(j && j.restricted), url: deal.url, sources: deal.url ? [{ label: deal.where, url: deal.url }] : [] })) {
     return { price: null, where: "", url: "", condition: "", note: "", date: deal.date, hit: false };
   }
   return deal;
@@ -488,7 +488,7 @@ export default {
         const w = rec.list.find(x => x.id === String(body.id || ""));
         if (!w) return json({ error: "Set an alert price on this item first" }, 400, h);
         if (saleRestricted(w)) {
-          w.best = { price: null, where: "", url: "", condition: "", note: "", date: new Date().toISOString().slice(0, 10), hit: false };
+          w.best = { price: null, where: "", url: "", condition: "", note: "", date: localDay(new Date()), hit: false };
           w.lastErr = "";
           await saveRec();
           return json(pub(), 200, h);

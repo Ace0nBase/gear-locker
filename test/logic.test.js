@@ -4,7 +4,7 @@ import {
   clearUserLocal, shareItemFields, decideAccess, chargeDecision, quotaKey, alertQuotaKey,
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
-  saleRestricted, countedValue, csvExportField, publicWeightNote, lookupAnswerRestricted,
+  saleRestricted, countedValue, csvExportField, publicWeightNote, lookupAnswerRestricted, localDay,
   keepSignedIn, firestoreMemoryOnly, settleOrTimeout, signOutConfirmNeeded, SIGN_OUT_WAIT_MS, armorySubject, armoryLookupBlocked, photoIdBlocked,
 } from "../js/logic.js";
 
@@ -352,9 +352,20 @@ test("a restricted weight note drops store names, links, and prices", () => {
   assert.equal(publicWeightNote("Sold at State Armory for $899. MSRP $1,299 at Academy Sports"), "");
   assert.equal(publicWeightNote("lists 30 oz, $1,299 at Academy Sports MSRP $1,350"), "");
   assert.equal(publicWeightNote("Sold at State Armory"), "");
+  assert.equal(publicWeightNote("Midway: 899.99"), "");
+  assert.equal(publicWeightNote("GunBroker avg 1299"), "");
+  assert.equal(publicWeightNote("Listed at Scheels for 899 dollars"), "");
+  assert.equal(publicWeightNote("sold by Big 5 for 899"), "");
+  assert.equal(publicWeightNote("about nine hundred bucks at Cabelas"), "");
+  assert.equal(publicWeightNote("maker spec 24.5 oz"), "maker spec 24.5 oz");
   assert.equal(lookupAnswerRestricted({ restricted: true, priceNote: "" }), true);
   assert.equal(lookupAnswerRestricted({ priceNote: "GunBroker AR-15 $450", sources: [{ label: "GunBroker", url: "https://gunbroker.com/x" }] }), true);
   assert.equal(lookupAnswerRestricted({ priceNote: "Typical pouch", sources: [{ label: "Local test shop", url: "https://example.com/gear" }] }), false);
+  assert.equal(lookupAnswerRestricted({ priceNote: "REI $229.50, fits Glock 19", weightNote: "maker spec, 24 x 12 x 12 in", sources: [{ label: "REI", url: "https://www.rei.com/kywi-556" }] }), false);
+  assert.equal(lookupAnswerRestricted({ priceNote: "Amazon $39 for 30mm rings", sources: [{ label: "OpticsPlanet", url: "https://www.opticsplanet.com/1-6x24.html" }] }), false);
+  assert.equal(lookupAnswerRestricted({ priceNote: "Crye $1,300 with plates", sources: [{ label: "Crye", url: "https://www.cryeprecision.com/jpc" }] }), false);
+  const evening = new Date(2026, 9, 26, 22, 10);
+  assert.equal(localDay(evening), "2026-10-26");
 });
 
 test("keep-signed-in off uses a memory cache and sign-out confirms only when a save is still pending", async () => {

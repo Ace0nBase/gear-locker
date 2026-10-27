@@ -9,7 +9,7 @@ var $=id=>document.getElementById(id);
 var esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 var money=n=>"$"+Math.round(+n||0).toLocaleString();
 var now=()=>new Date().toISOString();
-var today=()=>new Date().toISOString().slice(0,10);
+var today=()=>GearLogic.localDay();
 function publicAppUrl(){
   var path=location.pathname.replace(/index\.html$/,"");
   var host=location.hostname;
