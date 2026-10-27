@@ -24,7 +24,7 @@ const PAID_KEYS = new Set([
 ]);
 
 const FIELD_DEFS = [
-  { id: "brand", aliases: ["brand", "make", "mfr", "mfg", "maker", "manufacturer"] },
+  { id: "brand", aliases: ["brand", "make", "mfr", "mfg", "maker", "manufacturer", "brand model"] },
   { id: "name", aliases: ["item name", "name", "item", "description"] },
   { id: "model", aliases: ["model", "model name"] },
   { id: "armType", aliases: ["type", "kind", "category", "class", "firearm type", "type of firearm"] },
@@ -217,7 +217,7 @@ export function priceKind(key) {
   const k = String(key || "");
   if (!k) return "";
   if (/cpr|cost per round|price per round|per round/.test(k)) return "drop";
-  if (PAID_KEYS.has(k) || /purchase price|price paid|amount paid|what i paid/.test(k)) return "paid";
+  if (PAID_KEYS.has(k) || k === "paid each" || /purchase price|price paid|amount paid|what i paid/.test(k)) return "paid";
   if (/current value|msrp|retail|appraised|insured|market value|sale price/.test(k)) return "drop";
   if (k === "value" || k === "amount") return "drop";
   if (/price|paid|cost|amount|msrp|retail|appraised|[$€£]/.test(k)) return "drop";
@@ -480,39 +480,104 @@ function mapCondition(raw) {
   return { value: "", note: s };
 }
 
-function classifyType(typeText, categories) {
-  const t = String(typeText || "").toLowerCase().trim();
-  if (!t) return null;
-  const list = categories || [];
-  const exact = list.find(c => c.toLowerCase() === t);
-  if (/(ammo|ammunition)[^\n]{0,40}\b(can|box|bag)\b|\b(can|box|bag)\b[^\n]{0,40}\b(ammo|ammunition)\b|ammo storage|\bloaders?\b|speed\s*loader/.test(t)) {
-    return { target: "gear", arm: "", category: storageCategory(list), storage: true };
-  }
-  if (exact && /storage|\bloader/i.test(exact)) return { target: "gear", arm: "", category: exact, storage: true };
-  if (/suppressor|silencer/.test(t) || (/\bcan\b/.test(t) && !/ammo|ammunition/.test(t))) return { target: "armory", arm: "SU", category: "Suppressors", armType: "Suppressor" };
-  if (/handgun|pistol|revolver/.test(t)) return { target: "armory", arm: "FA", category: "Firearms", armType: "Handgun" };
-  if (/shotgun/.test(t)) return { target: "armory", arm: "FA", category: "Firearms", armType: "Shotgun" };
-  if (/rifle|carbine|\bsbr\b|long gun/.test(t)) return { target: "armory", arm: "FA", category: "Firearms", armType: "Rifle" };
-  if (/lower/.test(t)) return { target: "armory", arm: "FA", category: "Lower receiver", armType: "Lower receiver" };
-  if (/firearm|\bgun\b/.test(t)) return { target: "armory", arm: "FA", category: "Firearms", armType: "" };
-  if (/optic|scope|red dot|lpvo|\bsight\b|holographic/.test(t)) return { target: "gear", arm: "OP", category: "NVG & Optics" };
-  if (/laser|\bnvg\b|night vision|thermal/.test(t)) return { target: "gear", arm: "LA", category: "Lights & Lasers" };
-  if (/\blight\b|\bwml\b|flashlight|weapon light/.test(t)) return { target: "gear", arm: "WL", category: "Lights & Lasers" };
-  if (/knife|\bblade\b|dagger/.test(t)) return { target: "gear", arm: "KN", category: "Knives & Tools" };
-  if (/magazine|\bmags?\b/.test(t)) return { target: "gear", arm: "", category: "Magazines & Belts" };
-  if (/trigger/.test(t)) return { target: "gear", arm: "", category: "Triggers & Parts" };
-  if (/reload/.test(t)) return { target: "gear", arm: "", category: "Reloading" };
-  if (exact) return routeNamedCategory(exact);
-  if (/ammunition|\bammo\b|cartridge/.test(t)) return { target: "ammo", arm: "", category: "Ammunition" };
+function normType(value) {
+  return String(value || "").normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Whole type-cell values. A word inside a longer accessory name is not a firearm.
+const STORAGE_TYPES = new Set([
+  "ammo can", "ammunition can", "ammo box", "ammo bag", "ammo crate", "ammo storage", "ammo storage loaders",
+  "speed loader", "speedloader", "mag loader",
+]);
+const SUPPRESSOR_TYPES = new Set(["suppressor", "suppressors", "silencer", "silencers", "sound suppressor", "nfa suppressor"]);
+const LOWER_TYPES = new Set([
+  "lower", "lower receiver", "lower receivers", "stripped lower", "complete lower", "assembled lower",
+  "ar lower", "ar15 lower", "ar 15 lower", "serialized lower", "frame", "receiver",
+]);
+const AMMO_TYPES = new Set(["ammunition", "ammo", "cartridge", "cartridges", "shotshell", "shotshells"]);
+const FIREARM_WORDS = new Set([
+  "rifle", "rifles", "pistol", "pistols", "handgun", "handguns", "revolver", "revolvers",
+  "shotgun", "shotguns", "carbine", "carbines", "sbr", "sbrs", "firearm", "firearms", "gun", "guns",
+  "machinegun", "smg",
+]);
+const FIREARM_MODS = new Set([
+  "semi", "auto", "automatic", "bolt", "action", "pump", "lever", "break", "single", "double", "full",
+  "size", "compact", "subcompact", "duty", "hunting", "tactical", "short", "barreled", "ar", "ar15",
+  "ak", "ak47", "over", "under", "side", "by", "nfa", "registered", "long", "machine", "submachine", "sub",
+]);
+const SOURCE_FIREARM_TYPES = {
+  myarmory: ["pistol", "rifle", "shotgun", "revolver", "handgun", "carbine", "sbr", "firearm", "long gun", "bolt action rifle"],
+  armscache: ["handgun", "rifle", "shotgun", "pistol", "revolver", "firearm", "long gun"],
+  guntrack: ["handgun", "handguns", "rifle", "rifles", "shotgun", "shotguns", "pistol", "revolver", "long gun"],
+};
+
+const ACCESSORY_RULES = [
+  [/\b(scopes?|optics?|lpvo|sights?|holographic|red dots?)\b/, { target: "gear", arm: "OP", category: "NVG & Optics" }],
+  [/\b(lasers?|nvgs?|night vision|thermal)\b/, { target: "gear", arm: "LA", category: "Lights & Lasers" }],
+  [/\b(lights?|flashlights?|wml|weapon lights?)\b/, { target: "gear", arm: "WL", category: "Lights & Lasers" }],
+  [/\b(slings?|holsters?)\b/, { target: "gear", arm: "", category: "Holsters & Slings" }],
+  [/\b(safes?|cases?)\b/, { target: "gear", arm: "", category: "Cases & Bags" }],
+  [/\bbipods?\b/, { target: "gear", arm: "", category: "Misc" }],
+  [/\b(magazines?|mags?)\b/, { target: "gear", arm: "", category: "Magazines & Belts" }],
+  [/\bgrips?\b/, { target: "gear", arm: "", category: "Triggers & Parts" }],
+  [/\bcleaning\b/, { target: "gear", arm: "", category: "Cleaning & Maintenance" }],
+  [/\b(shells?|shotshells?)\b/, { target: "ammo", arm: "", category: "Ammunition" }],
+  [/\b(knives|knife|blades?|daggers?)\b/, { target: "gear", arm: "KN", category: "Knives & Tools" }],
+  [/\btriggers?\b/, { target: "gear", arm: "", category: "Triggers & Parts" }],
+];
+
+function armoryFromTokens(tokens) {
+  let armType = "";
+  if (tokens.some(tok => tok === "shotgun" || tok === "shotguns")) armType = "Shotgun";
+  else if (tokens.some(tok => /^(pistols?|handguns?|revolvers?)$/.test(tok))) armType = "Handgun";
+  else if (tokens.some(tok => /^(rifles?|carbines?|sbrs?)$/.test(tok))) armType = "Rifle";
+  return { target: "armory", arm: "FA", category: "Firearms", armType };
+}
+
+function accessoryRoute(key) {
+  for (const [re, route] of ACCESSORY_RULES) if (re.test(key)) return { ...route };
   return null;
 }
 
+function firearmPhrase(key) {
+  if (key === "long gun" || key === "machine gun" || key === "submachine gun" || key === "sub machine gun") return armoryFromTokens(key.split(" "));
+  const tokens = key.split(" ").filter(Boolean);
+  const ok = tokens.every(tok => FIREARM_WORDS.has(tok) || FIREARM_MODS.has(tok) || /^\d+[a-z]?$/.test(tok));
+  if (!ok || !tokens.some(tok => FIREARM_WORDS.has(tok))) return null;
+  return armoryFromTokens(tokens);
+}
+
+function classifyType(typeText, categories, source) {
+  const key = normType(typeText);
+  if (!key) return null;
+  const list = categories || [];
+  if (key === "mags ammo storage" || key === "mags and ammo storage") {
+    return { target: "gear", arm: "", category: storageCategory(list), storage: true, migratedFromMagShelf: true };
+  }
+  if (STORAGE_TYPES.has(key)) return { target: "gear", arm: "", category: storageCategory(list), storage: true };
+  const named = routeNamedCategory(typeText);
+  if (named) return named;
+  const accessory = accessoryRoute(key);
+  if (accessory) return accessory;
+  if (SUPPRESSOR_TYPES.has(key)) return { target: "armory", arm: "SU", category: "Suppressors", armType: "Suppressor" };
+  if (LOWER_TYPES.has(key)) return { target: "armory", arm: "FA", category: "Lower receiver", armType: "Lower receiver" };
+  if (AMMO_TYPES.has(key)) return { target: "ammo", arm: "", category: "Ammunition" };
+  const listed = SOURCE_FIREARM_TYPES[source] || [];
+  if (listed.some(name => normType(name) === key)) return firearmPhrase(key) || armoryFromTokens(key.split(" "));
+  return firearmPhrase(key);
+}
+
 function routeNamedCategory(name) {
-  if (/^firearms$/i.test(name)) return { target: "armory", arm: "FA", category: name, armType: "" };
-  if (/suppressor/i.test(name)) return { target: "armory", arm: "SU", category: name, armType: "Suppressor" };
-  if (/lower/i.test(name)) return { target: "armory", arm: "FA", category: name, armType: name };
-  if (/^ammunition$/i.test(name)) return { target: "ammo", arm: "", category: name };
-  return { target: "gear", arm: "", category: name };
+  const key = normType(name);
+  if (!key) return null;
+  if (key === "firearms") return { target: "armory", arm: "FA", category: "Firearms", armType: "" };
+  if (key === "suppressors" || key === "suppressor") return { target: "armory", arm: "SU", category: "Suppressors", armType: "Suppressor" };
+  if (key === "lower receiver") return { target: "armory", arm: "FA", category: "Lower receiver", armType: "Lower receiver" };
+  if (key === "ammunition" || key === "ammo") return { target: "ammo", arm: "", category: "Ammunition" };
+  if (key === "reloading") return { target: "gear", arm: "", category: "Reloading" };
+  const exact = DEFAULT_CATEGORIES.find(c => normType(c) === key);
+  if (exact) return { target: "gear", arm: "", category: exact };
+  return null;
 }
 
 function storageCategory(categories) {
@@ -593,9 +658,11 @@ function finishRoute(typed, fields) {
   return { ...typed, arm: fields.serial ? (typed.arm || "") : "", gearArmory: !!fields.serial && !!typed.arm, target: "gear" };
 }
 
-function routeOne(fields, fileTarget, categories) {
-  const typed = classifyType(fields.armType || "", categories);
+function routeOne(fields, fileTarget, categories, source) {
+  const raw = String(fields.armType || "").trim();
+  const typed = raw ? classifyType(raw, categories, source) : null;
   if (typed) return finishRoute(typed, fields);
+  if (raw) return { target: "needs", arm: "", category: "", needsCategory: true, gearArmory: false };
   const qty = fields.qty;
   const structuralAmmo = !fields.serial && (
     !!fields.load || !!fields.lot ||
@@ -604,6 +671,15 @@ function routeOne(fields, fileTarget, categories) {
   );
   if (structuralAmmo) return { target: "ammo", arm: "", category: "Ammunition", gearArmory: false };
   return { target: "needs", arm: "", category: "", needsCategory: true, gearArmory: false };
+}
+
+function ownExport(columns) {
+  const keys = new Set((columns || []).map(col => col.key));
+  return keys.has("brand model") && (keys.has("paid each") || keys.has("new retail") || keys.has("price source"));
+}
+
+function nameBrandKey(name, brand) {
+  return `${String(name || "").trim().toLowerCase()}|${String(brand || "").trim().toLowerCase()}`;
 }
 
 function readFields(row, columns, opts) {
@@ -707,10 +783,12 @@ export function planImport(tables, opts = {}) {
   const ammoKeys = new Map();
   existingAmmo.forEach(a => ammoKeys.set(ammoKey(a), { row: a, where: "saved" }));
   const gearKeys = new Map();
+  const nameBrandKeys = new Map();
   existingItems.forEach(it => {
+    const named = nameBrandKey(it.name, it.brand);
+    if (named !== "|") nameBrandKeys.set(named, { row: it, where: "saved" });
     if (it.serial) return;
-    const k = `${String(it.name || "").trim().toLowerCase()}|${String(it.brand || "").trim().toLowerCase()}`;
-    if (k !== "|") gearKeys.set(k, { row: it, where: "saved" });
+    if (named !== "|") gearKeys.set(named, { row: it, where: "saved" });
   });
   let seq = 0;
   const nextId = () => {
@@ -728,6 +806,7 @@ export function planImport(tables, opts = {}) {
     let columns = applyColumns(table.columns, choices);
     columns = retargetQuantity(columns);
     const fileTarget = (opts.targets && opts.targets[ti]) || table.defaultTarget || "needs";
+    const own = ownExport(columns);
     const monthFirst = opts.monthFirst !== false && (opts.dateOrders ? opts.dateOrders[ti] : table.dateOrder) !== "dmy";
     table.grid.forEach((gridRow, ri) => {
       const read = readFields(gridRow, columns, { dateOrder: monthFirst ? "mdy" : "dmy" });
@@ -741,13 +820,32 @@ export function planImport(tables, opts = {}) {
         review.push({ table: ti, row: ri, target: "skip", name: composeName(fields, ri + 1), problems, decision: "skip", skipped: true });
         return;
       }
-      let routed = routeOne({ ...fields, qty: fields.qty ?? fields.rounds ?? null }, fileTarget, categories);
+      let routed = routeOne({ ...fields, qty: fields.qty ?? fields.rounds ?? null }, fileTarget, categories, table.source);
       const picked = opts.rowCategories && opts.rowCategories[ti] && opts.rowCategories[ti][ri];
-      if (picked) routed = finishRoute(classifyType(picked, categories) || routeNamedCategory(picked), fields);
+      if (picked) routed = finishRoute(classifyType(picked, categories, table.source) || routeNamedCategory(picked), fields);
       const rowTarget = opts.rowTargets && opts.rowTargets[ti] && opts.rowTargets[ti][ri];
       if (rowTarget && routed.target !== "needs") routed = { ...routed, target: rowTarget, moved: routed.target !== rowTarget || routed.moved };
       if ((routed.arm === "OP" || routed.arm === "WL" || routed.arm === "LA") && !fields.serial) routed.arm = "";
       const name = composeName(fields, review.length + 1);
+      if (routed.target === "needs") {
+        let duplicate = null;
+        if (fields.serial) {
+          const hit = serials.get(nrm(fields.serial));
+          if (hit) duplicate = { kind: "serial", existingId: hit.row.id, existingLabel: hit.row.name || "Saved item", where: hit.where, serial: fields.serial };
+        } else {
+          const key = nameBrandKey(name, fields.brand);
+          const hit = key !== "|" && (gearKeys.get(key) || nameBrandKeys.get(key));
+          if (hit) duplicate = { kind: "possible", existingId: hit.row.id, existingLabel: hit.row.name || name, where: hit.where };
+        }
+        review.push({
+          table: ti, row: ri, target: "needs", arm: "", gearArmory: false, name,
+          brand: fields.brand || "", category: "", caliber: fields.caliber || "",
+          serial: fields.serial || "", serialMasked: maskSerial(fields.serial),
+          paid: fields.paid != null ? fields.paid : null, problems, duplicate,
+          decision: "add", needsCategory: true, fileTarget,
+        });
+        return;
+      }
       let decision = "add";
       let duplicate = null;
       if (routed.target === "ammo") {
@@ -764,12 +862,12 @@ export function planImport(tables, opts = {}) {
           duplicate = { kind: "serial", existingId: hit.row.id, existingLabel: hit.row.name || "Saved item", where: hit.where, serial: fields.serial };
           decision = "skip";
         }
-      } else if (routed.target === "gear") {
-        const key = `${name.trim().toLowerCase()}|${String(fields.brand || "").trim().toLowerCase()}`;
-        const hit = key !== "|" && gearKeys.get(key);
+      } else if (routed.target === "gear" || own) {
+        const key = nameBrandKey(name, fields.brand);
+        const hit = key !== "|" && (own ? nameBrandKeys.get(key) : gearKeys.get(key));
         if (hit) {
-          duplicate = { kind: "possible", existingId: hit.row.id, existingLabel: hit.row.name || name, where: hit.where };
-          decision = "add";
+          duplicate = { kind: own ? "saved" : "possible", existingId: hit.row.id, existingLabel: hit.row.name || name, where: hit.where };
+          decision = own ? "skip" : "add";
         }
       }
       const chosen = opts.rowDecisions && opts.rowDecisions[ti] && opts.rowDecisions[ti][ri];
@@ -851,9 +949,12 @@ export function planImport(tables, opts = {}) {
           patch.importId = current.importId || importId;
           patch.importIds = prevIds.concat(importId);
           patch.importUndoBy = { ...(prevBy || {}), [importId]: undo };
+          undo.updatedAt = current.updatedAt || "";
+          undo.importBookkeeping = current.importBookkeeping || "";
           patch.importedAt = current.importedAt || now;
           patch.importUndo = undo;
           patch.updatedAt = now;
+          patch.importBookkeeping = now;
           merges.push({ id: current.id, collection, patch });
         }
         review.push({ ...view, decision: "merge", skipped: false });
@@ -887,6 +988,7 @@ export function planImport(tables, opts = {}) {
         mountedOnText: recordBase.mountedOnText,
       };
       if (paid != null) { doc.paid = paid; doc.paidSource = "manual"; }
+      if (routed.migratedFromMagShelf) doc.migratedFromMagShelf = true;
       const tags = [];
       if (!doc.serial && routed.target === "armory") tags.push("no serial");
       if (decision === "add" && duplicate) tags.push("possible duplicate");
@@ -899,8 +1001,10 @@ export function planImport(tables, opts = {}) {
         delete doc.marketSources;
       }
       items.push(doc);
+      const named = nameBrandKey(doc.name, doc.brand);
+      if (named !== "|") nameBrandKeys.set(named, { row: doc, where: "file" });
       if (doc.serial) serials.set(nrm(doc.serial), { row: doc, where: "file" });
-      else gearKeys.set(`${doc.name.trim().toLowerCase()}|${doc.brand.trim().toLowerCase()}`, { row: doc, where: "file" });
+      else if (named !== "|") gearKeys.set(named, { row: doc, where: "file" });
       review.push({ ...view, id, decision });
     });
   });
@@ -1076,12 +1180,24 @@ function isZip(bytes) {
 export function looksBinary(bytes) {
   const n = Math.min(bytes.length, 4096);
   if (!n) return false;
+  const sigs = [[0x89, 0x50, 0x4E, 0x47], [0xFF, 0xD8, 0xFF], [0x25, 0x50, 0x44, 0x46], [0x47, 0x49, 0x46, 0x38], [0x7F, 0x45, 0x4C, 0x46], [0x4D, 0x5A], [0x1F, 0x8B]];
+  for (const sig of sigs) {
+    if (n >= sig.length && sig.every((b, i) => bytes[i] === b)) return true;
+  }
   let bad = 0;
   for (let i = 0; i < n; i++) {
     const b = bytes[i];
-    if (b === 0 || b < 9 || (b > 13 && b < 32)) bad++;
+    if (b === 0) return true;
+    if (b < 9 || (b > 13 && b < 32)) bad++;
   }
   return bad / n > 0.1;
+}
+
+export function escapeSaveReport(saved, total) {
+  const n = Math.max(0, Math.round(+saved) || 0);
+  const m = Math.max(n, Math.round(+total) || 0);
+  if (!n) return "Stopped. Nothing was saved.";
+  return `Stopped. Rolled back ${n} of ${m}. Nothing was saved.`;
 }
 
 function decodeCp1252(bytes) {
@@ -1441,12 +1557,18 @@ function parseSheet(xml, strings, dateStyles, date1904) {
   return { rows: rows.map(r => r || []), formulaNoValue, merges, tooBig: false, cached };
 }
 
+function attrValue(tag, name) {
+  const re = new RegExp(`(?:^|[\\s/>])(?:[\\w.]+:)?${name}\\s*=\\s*(["'])([\\s\\S]*?)\\1`, "i");
+  const match = re.exec(String(tag || ""));
+  return match ? decodeXml(match[2]) : "";
+}
+
 function relPairs(xml) {
   const map = {};
-  for (const tag of String(xml || "").matchAll(/<[^>]*\bRelationship\b[^>]*>/g)) {
-    const id = /(?:^|\s)Id="([^"]+)"/.exec(tag[0]);
-    const target = /(?:^|\s)Target="([^"]+)"/.exec(tag[0]);
-    if (id && target) map[id[1]] = decodeXml(target[1]);
+  for (const tag of String(xml || "").matchAll(/<(?:[\w.]+:)?Relationship\b[^>]*>/g)) {
+    const id = attrValue(tag[0], "Id");
+    const target = attrValue(tag[0], "Target");
+    if (id && target) map[id] = target;
   }
   return map;
 }
@@ -1475,12 +1597,11 @@ export async function readXlsx(bytes, opts = {}) {
   const wbText = xmlText(zip.files[wb]);
   if (/<encryption/i.test(wbText)) return fail("encrypted-workbook");
   const date1904 = /date1904="1"|date1904="true"/i.test(wbText);
-  const sheets = [...wbText.matchAll(/<(?:\w+:)?sheet\b[^>]*name="([^"]*)"[^>]*>/g)].map(m => {
+  const sheets = [...wbText.matchAll(/<(?:[\w.]+:)?sheet\b[^>]*>/g)].map(m => {
     const tag = m[0];
-    const id = (/r:id="([^"]+)"/.exec(tag) || [])[1] || "";
-    const hidden = /state="hidden"|state="veryHidden"/i.test(tag);
-    return { name: decodeXml(m[1]), id, hidden };
-  });
+    const hidden = /state\s*=\s*(["'])hidden\1|state\s*=\s*(["'])veryHidden\2/i.test(tag);
+    return { name: attrValue(tag, "name"), id: attrValue(tag, "id"), hidden };
+  }).filter(sheet => sheet.name);
   const relsName = names.find(n => /xl\/_rels\/workbook\.xml\.rels$/i.test(n));
   const rels = relsName ? xmlText(zip.files[relsName]) : "";
   const relMap = relPairs(rels);
@@ -1544,7 +1665,7 @@ const GearImport = {
   nrm, maskSerial, serialAriaLabel, chunk, newUlid, normalizeHeader, priceKind, confidenceOf, confidenceLabel,
   findHeaderRow, detectSource, mapColumns, headerHash, parsePaid, excelSerialToIso, parseDate,
   columnDateOrder, normalizeCaliber, buildTable, planImport, countPlan, summaryLine,
-  undoImportState, changedAfterImport, loadHistory, saveHistory, undoOpen, loadMaps, rememberMap,
+  undoImportState, changedAfterImport, escapeSaveReport, loadHistory, saveHistory, undoOpen, loadMaps, rememberMap,
   decodeBytes, parseDelimited, readCsvText, readJsonText, readZip, readXlsx, readImportFile, looksBinary,
 };
 globalThis.GearImport = GearImport;

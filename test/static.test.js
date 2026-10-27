@@ -54,6 +54,7 @@ test("sign-out clears this device, the app is version 41, and the service worker
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
   assert.match(sw, /war-box-v46/);
+  assert.match(sw, /skip-waiting/);
   assert.match(read("js/cloud.js"), /APP_VERSION="41"/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);

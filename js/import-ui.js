@@ -2,7 +2,7 @@
 import {
   FIELD_LABELS, LIMITS, confidenceLabel, headerHash, loadMaps, mapColumns,
   maskSerial, serialAriaLabel, planImport, readImportFile, rememberMap, summaryLine, undoImportState,
-  changedAfterImport, loadHistory, saveHistory, undoOpen, countPlan, chunk, WRITE_BATCH,
+  changedAfterImport, escapeSaveReport, loadHistory, saveHistory, undoOpen, countPlan, chunk, WRITE_BATCH,
 } from "./import-engine.js";
 
 const PRIVACY = "Your file is read on this phone. Nothing is uploaded until you save, and then only to your own account.";
@@ -843,9 +843,12 @@ async function saveImport() {
   }
   if (S.cancelSave) {
     const id = plan.importId;
+    const saved = S.saveProgress ? S.saveProgress.done : 0;
+    const report = escapeSaveReport(saved, total);
     S.saving = false;
     S.saveProgress = null;
-    await undoImport(id, { skipConfirm: true });
+    await undoImport(id, { skipConfirm: true, quiet: true });
+    if (typeof toast === "function") toast(report);
     return;
   }
   S.tables.forEach((table, ti) => {
@@ -887,7 +890,7 @@ async function undoImport(id, opts) {
   if (typeof persist === "function") await persist();
   paintUndoBar();
   const n = prev.counts && prev.counts.total ? prev.counts.total : removed;
-  if (typeof toast === "function") toast(`Undone: ${n} item${n === 1 ? "" : "s"} removed`);
+  if (typeof toast === "function" && !(opts && opts.quiet)) toast(`Undone: ${n} item${n === 1 ? "" : "s"} removed`);
   const sec = document.getElementById("secSheet");
   if (sec && !sec.hidden && typeof openSecurity === "function") openSecurity();
 }
@@ -1038,7 +1041,7 @@ function onChange(event) {
     if (!value) return;
     const plan = currentPlan();
     plan.rows.forEach(row => {
-      if (!row || row.skipped || row.target !== "needs") return;
+      if (!row || row.target !== "needs") return;
       S.rowCategories[row.table] = S.rowCategories[row.table] || {};
       S.rowCategories[row.table][row.row] = value;
     });
@@ -1049,6 +1052,10 @@ function onChange(event) {
 function onEscape() {
   const sh = sheet();
   if (!sh || sh.hidden) return false;
+  if (S.saving) {
+    S.cancelSave = true;
+    return true;
+  }
   if (S.step === "scan") stopCamera();
   askClose();
   return true;

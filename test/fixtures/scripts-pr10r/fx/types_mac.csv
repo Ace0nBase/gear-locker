@@ -1,0 +1,8 @@
+Manufacturer,Model,Firearm Type,Serial Number,Caliber,Storage Location,Price Paid
+Maker,Hunter,Rifle,FA-007,.308,Safe,100
+Maker,Carry,Handgun,FA-008,9mm,Safe,100
+Maker,Field,Shotgun,FA-009,12 ga,Safe,100
+Optic,Glass,Rifle Scope,,.308,Safe,100
+Light,Scout,Handgun Light,,,Safe,100
+Federal,Target,Shotgun Shells,,12 ga,Safe,40
+Holster Co,Rig,Pistol Holster,,,Safe,40
