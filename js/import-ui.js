@@ -847,8 +847,10 @@ async function saveImport() {
     const report = escapeSaveReport(saved, total);
     S.saving = false;
     S.saveProgress = null;
-    await undoImport(id, { skipConfirm: true, quiet: true });
+    S.cancelSave = false;
+    paint();
     if (typeof toast === "function") toast(report);
+    await undoImport(id, { skipConfirm: true, quiet: true });
     return;
   }
   S.tables.forEach((table, ti) => {

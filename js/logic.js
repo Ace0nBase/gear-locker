@@ -1385,14 +1385,46 @@ export function photoIdSuggestion(category, categories) {
 // The priced lookup tells the model to withhold a price for these, without the app guessing from the item name.
 export const PRICE_BACKSTOP = "If the item is a magazine over 30 rounds, an ammunition (linked) belt, or an auto-fire device (bump stocks, auto sears, or similar), return no price and no sources. Set retailNew, usedLow, usedHigh, and value to null. Set priceNote to \"\" and sources to []. Do not name a store or a seller.";
 
-// Imported rows use the same restricted shelves. A purchase price stays the owner's own "What I paid" number.
-export function importRestricted(item) {
-  return saleRestricted(item);
+// Whole words in a type cell that mean a firearm, suppressor, or receiver.
+const FIREARM_TYPE_WORDS = new Set([
+  "rifle", "rifles", "pistol", "pistols", "handgun", "handguns", "revolver", "revolvers",
+  "shotgun", "shotguns", "carbine", "carbines", "sbr", "sbrs", "firearm", "firearms",
+  "gun", "guns", "machinegun", "smg", "receiver", "receivers", "lower", "lowers",
+  "frame", "frames", "suppressor", "suppressors", "silencer", "silencers",
+]);
+
+export function typeHasFirearmTerm(value) {
+  const key = String(value || "").normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!key) return false;
+  return key.split(" ").some(word => FIREARM_TYPE_WORDS.has(word));
 }
 
-// Imported restricted rows are not sent to price or weight lookups.
+// A row still waiting on a category is not priced and not looked up.
+function needsUncategorized(item) {
+  if (!item || typeof item !== "object") return false;
+  if (item.needsCategory) return true;
+  const category = String(item.category || "").trim();
+  if (/^needs a category$/i.test(category)) return true;
+  return !!(item.importId && !category);
+}
+
+// Until the owner picks a category, an imported type that names a firearm stays off market checks.
+function importTypeHeld(item) {
+  if (!item || !item.importId || item.importCategoryPicked) return false;
+  if (item.importTypeHold) return true;
+  return typeHasFirearmTerm(item.armType) || typeHasFirearmTerm(item.importType);
+}
+
+// Imported rows use the same restricted shelves. A purchase price stays the owner's own "What I paid" number.
+export function importRestricted(item) {
+  return saleRestricted(item) || importTypeHeld(item);
+}
+
+// Imported restricted rows, and anything still needing a category, are not sent to price or weight lookups.
 export function importSkipsLookup(item) {
-  return !!(item && item.importId && importRestricted(item));
+  if (!item || typeof item !== "object") return false;
+  if (needsUncategorized(item)) return true;
+  return !!(item.importId && importRestricted(item));
 }
 // Firearm marketplaces and firearm or ammunition retailers, matched by domain.
 // Stores that also sell gear drop only a firearm, ammunition, or suppressor path segment.
@@ -1750,7 +1782,7 @@ export function applyMarketPrices(item, result, day) {
   const out = { ...(item && typeof item === "object" ? item : {}) };
   const manualPaid = out.paidSource === "manual";
   const paid = out.paid;
-  if (magShelfPending(out)) return out;
+  if (magShelfPending(out) || needsUncategorized(out)) return out;
   // An imported restricted row keeps the owner's paid number and never gains a market price.
   if (out.importId && importRestricted(out)) {
     if (manualPaid) { out.paid = paid; out.paidSource = "manual"; }
@@ -1786,8 +1818,9 @@ export function applyMarketPrices(item, result, day) {
 // A deal for a blocked category has no price and no link. Other gear keeps the price and loses a firearm-retailer link.
 export function settleDeal(item, parsed) {
   const empty = blocked => ({ price: null, where: "", url: "", condition: "", note: "", restricted: !!blocked });
-  if (saleRestricted(item) || magShelfPending(item) || (item && item.importId && importRestricted(item))) {
-    return empty(!!saleRestricted(item) || !!(item && item.importId && importRestricted(item)));
+  const held = needsUncategorized(item) || !!(item && item.importId && importRestricted(item));
+  if (saleRestricted(item) || magShelfPending(item) || held) {
+    return empty(!!saleRestricted(item) || held);
   }
   const clean = parsed && typeof parsed === "object" ? parsed : null;
   if (!clean) return empty(false);

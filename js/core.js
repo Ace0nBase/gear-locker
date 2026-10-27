@@ -366,6 +366,7 @@ function readForm(){
 async function saveCurrent(extra){
   const data={...readForm(),...(extra||{}),updatedAt:now()};
   if(editing&&(editing.importId||(Array.isArray(editing.importIds)&&editing.importIds.length))) data.importEdited=true;
+  if(editing&&String(editing.category||"")!==String(data.category||"")) data.importCategoryPicked=true;
   if(!data.name){$("fName").focus();return null}
   if(!data.category){$("fCat").focus();toast("Choose a category");return null}
   let rec;

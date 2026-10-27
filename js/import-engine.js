@@ -1,7 +1,7 @@
 // On-device spreadsheet import. No network, no disk, no price lookups.
 // Column matching uses the header text only.
 
-import { GEAR_CATEGORIES, importRestricted, saleRestricted } from "./logic.js";
+import { GEAR_CATEGORIES, importRestricted, saleRestricted, typeHasFirearmTerm } from "./logic.js";
 
 export const LIMITS = {
   fileBytes: 15 * 1024 * 1024,
@@ -539,6 +539,16 @@ function accessoryRoute(key) {
   return null;
 }
 
+// "w/", "with", "+", "&", and "and" join a firearm to something else.
+function hasComboMarker(raw) {
+  return /\bw\/|\bwith\b|\band\b|[+&]/i.test(String(raw || ""));
+}
+
+// A firearm word plus an accessory, or a combo marker, is not a priced shelf.
+function mixedFirearmAccessory(raw, key) {
+  return typeHasFirearmTerm(raw) && (hasComboMarker(raw) || !!accessoryRoute(key));
+}
+
 function firearmPhrase(key) {
   if (key === "long gun" || key === "machine gun" || key === "submachine gun" || key === "sub machine gun") return armoryFromTokens(key.split(" "));
   const tokens = key.split(" ").filter(Boolean);
@@ -557,6 +567,7 @@ function classifyType(typeText, categories, source) {
   if (STORAGE_TYPES.has(key)) return { target: "gear", arm: "", category: storageCategory(list), storage: true };
   const named = routeNamedCategory(typeText);
   if (named) return named;
+  if (mixedFirearmAccessory(typeText, key)) return null;
   const accessory = accessoryRoute(key);
   if (accessory) return accessory;
   if (SUPPRESSOR_TYPES.has(key)) return { target: "armory", arm: "SU", category: "Suppressors", armType: "Suppressor" };
@@ -663,12 +674,10 @@ function routeOne(fields, fileTarget, categories, source) {
   const typed = raw ? classifyType(raw, categories, source) : null;
   if (typed) return finishRoute(typed, fields);
   if (raw) return { target: "needs", arm: "", category: "", needsCategory: true, gearArmory: false };
-  const qty = fields.qty;
-  const structuralAmmo = !fields.serial && (
-    !!fields.load || !!fields.lot ||
-    (fields.caliber && qty != null && qty >= 20) ||
-    (fileTarget === "ammo" && !!fields.caliber)
-  );
+  // An empty type is not ammunition just because the file is an ammo list or a caliber is filled in.
+  // A lot or a load on the row is the ammunition signal. fileTarget is not.
+  void fileTarget;
+  const structuralAmmo = !fields.serial && (!!fields.load || !!fields.lot);
   if (structuralAmmo) return { target: "ammo", arm: "", category: "Ammunition", gearArmory: false };
   return { target: "needs", arm: "", category: "", needsCategory: true, gearArmory: false };
 }
@@ -970,6 +979,8 @@ export function planImport(tables, opts = {}) {
           lowAlert: fields.lowAlert || "", notes: recordBase.notes, kind: "ammo", tab: "ammo",
         };
         if (paid != null) { doc.paid = paid; doc.paidSource = "manual"; }
+        if (picked) doc.importCategoryPicked = true;
+        else if (typeHasFirearmTerm(fields.armType)) doc.importTypeHold = true;
         if (decision === "add" && duplicate) doc.tags = ["possible duplicate"];
         ammo.push(doc);
         ammoKeys.set(ammoKey(doc), { row: doc, where: "file" });
@@ -988,6 +999,8 @@ export function planImport(tables, opts = {}) {
         mountedOnText: recordBase.mountedOnText,
       };
       if (paid != null) { doc.paid = paid; doc.paidSource = "manual"; }
+      if (picked) doc.importCategoryPicked = true;
+      else if (typeHasFirearmTerm(fields.armType)) doc.importTypeHold = true;
       if (routed.migratedFromMagShelf) doc.migratedFromMagShelf = true;
       const tags = [];
       if (!doc.serial && routed.target === "armory") tags.push("no serial");
@@ -1174,7 +1187,7 @@ function isOle(bytes) {
 }
 
 function isZip(bytes) {
-  return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4B;
+  return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4B && bytes[2] === 0x03 && bytes[3] === 0x04;
 }
 
 export function looksBinary(bytes) {
@@ -1647,6 +1660,10 @@ export async function readImportFile(bytes, opts = {}) {
   if (u8.length > LIMITS.fileBytes) return fail("too-big", { limit: "file" });
   if (ext === "mab" || isSalted(u8)) return fail("encrypted-backup");
   if (ext === "xls" || ext === "numbers" || ext === "ods" || isOle(u8)) return fail("unsupported");
+  if (ext === "xlsx" || ext === "xlsm") {
+    if (!isZip(u8)) return fail("not-workbook");
+    return readXlsx(u8, opts);
+  }
   if (isZip(u8)) return readXlsx(u8, opts);
   const utf16 = (u8.length >= 2 && u8[0] === 0xFF && u8[1] === 0xFE) || (u8.length >= 2 && u8[0] === 0xFE && u8[1] === 0xFF);
   if (!utf16 && looksBinary(u8)) return fail("binary");
