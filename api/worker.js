@@ -6,7 +6,7 @@
 // Vars (dashboard, kept across deploys): FIREBASE_PROJECT, ALLOWED_ORIGINS, MODEL, FALLBACK_MODEL, ALLOWED_EMAILS (required), DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS
 // An empty ALLOWED_EMAILS list turns lookups off for everyone, including the owner.
 
-import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, parseAllowlist, saleRestricted, publicWeightNote, lookupAnswerRestricted, localDay, normalizeGearLabel, settleLookup, settleDeal } from "../js/logic.js";
+import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, parseAllowlist, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -55,9 +55,6 @@ async function verifyFirebaseToken(token, project) {
   return pay;
 }
 
-// One classification, inside the price or deal answer. No second model call.
-const CLASSIFY_RULE = `Set "restricted" to a boolean in this same JSON object. True when the item is a firearm, a receiver, a lower or a frame, a suppressor or suppressor parts such as baffles, an auto sear or other NFA item, or ammunition, primers, or powder. False for accessories: holsters, mag pouches, magazines, optics, slings, cleaning kits, uppers, slides, and bolt carrier groups, and for clothing or gear that only shares a word, such as a shell jacket, a hitch receiver, a shotgun mic, or a suppressor cover.`;
-
 const CONDITION = {
   "New": "new/unused: near the low end of current retail, or recent new-in-package sold prices",
   "Good": "lightly used: the upper part of the used range",
@@ -68,8 +65,8 @@ const CONDITION = {
 function prompt(it) {
   const restricted = saleRestricted(it) || it.weightOnly;
   const wish = it.kind === "wish" && !restricted;
-  const name = normalizeGearLabel(it.name) || it.name;
-  const brand = normalizeGearLabel(it.brand) || "unknown";
+  const name = it.name || "";
+  const brand = it.brand || "unknown";
   if (restricted) {
     return `You look up the published weight of one piece of gear for a personal inventory app. Do not look up a price. Do not name a store, a seller, or a place to buy it.
 
@@ -78,13 +75,13 @@ Brand / model: ${brand}
 Category: ${it.category || "unknown"}
 
 Use web search only for the maker's listed weight (at most 2 searches). Do not price firearms, suppressors, frames, lower receivers, or ammunition.
-Set retailNew, usedLow, usedHigh, and value to null. Set priceNote to "" and sources to []. Set "restricted" to true.
+Set retailNew, usedLow, usedHigh, and value to null. Set priceNote to "" and sources to [].
 weightOz = the weight of ONE unit in ounces (1 lb = 16 oz, 1 g = 0.035274 oz), rounded to 0.1. If sizes differ and none is given, use size Medium and say so in weightNote. The weight note must not include a price or a store name.
 
 When done, reply with ONLY this JSON object:
-{"restricted": true, "retailNew": null, "usedLow": null, "usedHigh": null, "value": null, "weightOz": number|null, "priceNote": "", "weightNote": "short source, e.g. maker spec", "sources": []}`;
+{"retailNew": null, "usedLow": null, "usedHigh": null, "value": null, "weightOz": number|null, "priceNote": "", "weightNote": "short source, e.g. maker spec", "sources": []}`;
   }
-  return `You look up real, current US market data for one piece of tactical / outdoor gear for a personal inventory app. ${CLASSIFY_RULE} If restricted is true, set retailNew, usedLow, usedHigh, and value to null, priceNote to "", and sources to []. You may still return weightOz.
+  return `You look up real, current US market data for one piece of tactical / outdoor gear for a personal inventory app.
 
 Item: ${name}
 Brand / model: ${brand}
@@ -104,7 +101,7 @@ weightOz = the weight of ONE unit in ounces (1 lb = 16 oz, 1 g = 0.035274 oz), r
 Use null only for things you truly could not find. Never invent numbers.
 
 When done searching, your final message must be ONLY this JSON object, no other words before or after it:
-{"restricted": false, "retailNew": number|null, "usedLow": number|null, "usedHigh": number|null, "value": number|null, "weightOz": number|null, "priceNote": "one short sentence with the comps you found, e.g. 'Amazon $129, eBay sold $85-120, TacSwap ~$110'", "weightNote": "short source, e.g. 'Crye spec, size M'", "sources": [{"label": "Amazon", "url": "https://..."}]}`;
+{"retailNew": number|null, "usedLow": number|null, "usedHigh": number|null, "value": number|null, "weightOz": number|null, "priceNote": "one short sentence with the comps you found, e.g. 'Amazon $129, eBay sold $85-120, TacSwap ~$110'", "weightNote": "short source, e.g. 'Crye spec, size M'", "sources": [{"label": "Amazon", "url": "https://..."}]}`;
 }
 
 const textOf = blocks => (blocks || []).filter(b => b.type === "text").map(b => b.text).join("");
@@ -167,18 +164,17 @@ function parseResult(data) {
   const blocks = data.content || [];
   const cited = [];
   blocks.forEach(b => (b.citations || []).forEach(c => { if (c.url && !cited.some(x => x.url === c.url)) cited.push({ label: (c.title || "source").slice(0, 40), url: c.url }); }));
-  const j = findJson(textOf(data.final)) || findJson(textOf(blocks));
+  let j = pickModelAnswer(textOf(data.final));
+  if (!j) j = pickModelAnswer(textOf(blocks));
   if (!j) throw new Error("couldn't read the lookup answer, try again");
   const num = v => (v === null || v === undefined || v === "" || !isFinite(+v)) ? null : +v;
-  let sources = Array.isArray(j.sources) ? j.sources.filter(s => s && /^https:\/\//.test(s.url || "")) : [];
-  if (!sources.length) sources = cited;
-  const out = {
+  let sources = j.linksDropped ? [] : stripGunMarketSources(j.sources);
+  if (!sources.length && !j.linksDropped) sources = stripGunMarketSources(cited);
+  return {
     retailNew: num(j.retailNew), usedLow: num(j.usedLow), usedHigh: num(j.usedHigh), value: num(j.value), weightOz: num(j.weightOz),
     priceNote: String(j.priceNote || "").slice(0, 240), weightNote: String(j.weightNote || "").slice(0, 80),
-    sources: sources.slice(0, 4).map(s => ({ label: String(s.label || "source").slice(0, 40), url: String(s.url) })),
+    sources, linksDropped: !!j.linksDropped,
   };
-  if (typeof j.restricted === "boolean") out.restricted = j.restricted;
-  return out;
 }
 
 const CATS = ["Firearms","Suppressors","Armor & Carriers","Belts & Rigs","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Mags & Ammo Storage","Cleaning & Maintenance","Misc"];
@@ -206,8 +202,8 @@ Reply with ONLY this JSON object:
 
 /* ---------- wishlist price watch ---------- */
 function dealPrompt(w) {
-  const name = normalizeGearLabel(w.name) || w.name;
-  const brand = normalizeGearLabel(w.brand) || "any well-regarded brand";
+  const name = w.name || "";
+  const brand = w.brand || "any well-regarded brand";
   return `Find the LOWEST price someone in the US can buy this item for RIGHT NOW (an active listing or in-stock store price, not a sold listing).
 
 Item: ${name}
@@ -217,10 +213,8 @@ The buyer's target price is $${w.target}.
 
 Use web search (at most 2 searches). Check TacSwap listings, eBay Buy It Now listings, Amazon, the maker's site and big retailers or sales. New or used in good condition both count; skip parts-only, wrong item or out-of-stock listings. Include shipping if it's clearly listed.
 
-${CLASSIFY_RULE} If restricted is true, set price to null and leave where, url, and note empty.
-
 When done, reply with ONLY this JSON object:
-{"restricted": false, "price": number|null, "where": "site or seller, e.g. 'TacSwap' or 'Amazon'", "url": "https link to the listing", "condition": "new|used|like new", "note": "one short sentence, e.g. 'Used, good condition, ships free'"}`;
+{"price": number|null, "where": "site or seller, e.g. 'TacSwap' or 'Amazon'", "url": "https link to the listing", "condition": "new|used|like new", "note": "one short sentence, e.g. 'Used, good condition, ships free'"}`;
 }
 async function dealCheck(env, w) {
   if (saleRestricted(w)) return { price: null, where: "", url: "", condition: "", note: "", date: localDay(new Date()), hit: false };
@@ -237,9 +231,7 @@ async function dealCheck(env, w) {
     if (data.stop_reason !== "pause_turn") break;
     messages.push({ role: "assistant", content: data.content });
   }
-  const t = textOf(data.content).replace(/```(?:json)?/gi, "");
-  let j = null; const ms = t.match(/\{[\s\S]*\}/g) || [];
-  for (const c of ms.reverse()) { try { const o = JSON.parse(c); if (o && typeof o === "object" && ("price" in o || "restricted" in o)) { j = o; break } } catch {} }
+  const j = pickModelAnswer(textOf(data.content));
   const settled = settleDeal(w, j);
   return { ...settled, date: localDay(new Date()), hit: settled.price != null && settled.price <= +w.target };
 }
@@ -426,8 +418,8 @@ async function lookupOne(env, it) {
   const settled = settleLookup(clean, parsed);
   if (!settled.apply) throw new Error("couldn't read the lookup answer, try again");
   const { apply, ...fields } = settled;
-  if (saleRestricted(clean) || clean.weightOnly || lookupAnswerRestricted(parsed) || fields.restricted) {
-    return { id: clean.id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: fields.weightOz, priceNote: "", weightNote: publicWeightNote(parsed.weightNote), sources: [], restricted: true };
+  if (saleRestricted(clean) || clean.weightOnly) {
+    return { id: clean.id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: fields.weightOz, priceNote: "", weightNote: publicWeightNote(parsed.weightNote), sources: [] };
   }
   return { id: clean.id, ok: true, ...fields };
 }

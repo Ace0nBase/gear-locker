@@ -1,175 +1,157 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { saleRestricted, lookupAnswerRestricted, normalizeGearLabel, settleLookup, settleDeal, countedValue } from "../js/logic.js";
+import { saleRestricted, lookupAnswerRestricted, pickModelAnswer, settleLookup, settleDeal, countedValue, csvExportField, keepManualPrice, gunMarketUrl, publicWeightNote } from "../js/logic.js";
 
-// Pattern fixtures. These names are not the QA lists.
-test("a firearm, suppressor, frame, or ammunition category is weight-only for every name", () => {
-  assert.equal(saleRestricted({ category: "Firearms", name: "Blue sticker" }), true);
-  assert.equal(saleRestricted({ category: "Suppressors", name: "Widget" }), true);
-  assert.equal(saleRestricted({ category: "Ammunition", name: "Practice box" }), true);
-  assert.equal(saleRestricted({ category: "Ammo", name: "Widget" }), true);
-  assert.equal(saleRestricted({ category: "Lower receivers", name: "Widget" }), true);
-  assert.equal(saleRestricted({ category: "Frames", name: "Widget" }), true);
-  assert.equal(saleRestricted({ category: "Pouches", name: "Cap", arm: "FA" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Cap", arm: "SU" }), true);
-  assert.equal(saleRestricted({ category: "Mags & Ammo Storage", name: "PMAG 30" }), false);
+test("firearm, suppressor, ammunition, and lower-receiver shelves are weight-only", () => {
+  const blocked = [
+    { category: "Firearms", name: "North line" },
+    { category: "Suppressors", name: "Tube" },
+    { category: "Ammunition", name: "Practice box" },
+    { category: "Ammo", name: "Practice box" },
+    { category: "Reloading", name: "Bench press" },
+    { category: "Cartridges", name: "Practice box" },
+    { category: "Lower receivers", name: "Widget" },
+    { category: "Frames", name: "Widget" },
+    { category: "Receivers", name: "Widget" },
+    { category: "Silencers", name: "Tube" },
+    { category: "NFA", name: "Widget" },
+    { category: "Pouches", name: "Cap", arm: "FA" },
+    { category: "Misc", name: "Cap", arm: "SU" },
+    { kind: "ammo", name: "Practice box" },
+    { tab: "ammo", category: "Misc", name: "Practice box" },
+  ];
+  blocked.forEach(item => assert.equal(saleRestricted(item), true, JSON.stringify(item)));
   assert.equal(saleRestricted({ category: "Mags & Ammo Storage", name: "Ammo can" }), false);
+  assert.equal(saleRestricted({ category: "Knives & Tools", name: "Fold 940", arm: "KN" }), false);
+  assert.equal(saleRestricted({ category: "NVG & Optics", name: "Lumen 4-16", arm: "OP" }), false);
 });
 
-test("a missing or unknown category still catches a clear caliber, cartridge, or NFA word", () => {
-  const restricted = [
-    { category: "", name: "6.8 Western" },
-    { category: "Zed", name: "25-06" },
-    { category: "", name: "7mm-08" },
-    { category: "Oddball", name: "large rifle primers" },
-    { category: "Misc", name: "16 gauge" },
-    { category: "Misc", name: "410 bore" },
-    { category: "Misc", name: "00 buck" },
-    { category: "Misc", name: "once-fired brass" },
-    { category: "Misc", name: "reloading powder" },
-    { category: "Misc", name: "drop-in sear" },
-    { category: "Misc", name: "baffle cup" },
-    { category: "Misc", name: "form paper SBR" },
-    { category: "Misc", name: "short barreled SBS" },
-    { category: "Misc", name: "Nockon 77" },
-    { category: "Misc", name: "Arbor M2" },
-    { name: "Range fodder", caliber: "6.8 Western", load: "120gr", rounds: 40 },
-  ];
-  restricted.forEach(item => assert.equal(saleRestricted(item), true, JSON.stringify(item)));
-});
-
-test("gun accessories and look-alike gear keep their prices", () => {
+test("branded gear with a model number still prices in ordinary categories", () => {
   const open = [
-    ["Clothing & Boots", "shell jacket"],
-    ["Clothing & Boots", "canvas shell coat"],
-    ["Misc", "hitch receiver"],
-    ["Misc", "trailer hitch receiver"],
-    ["NVG & Optics", "LPVO 1-6x24"],
-    ["NVG & Optics", "1-8x24 glass"],
-    ["Medical", "P100 filter"],
-    ["Comms & Radios", "shotgun mic"],
-    ["Comms & Radios", "boom shotgun microphone"],
-    ["Belts & Rigs", "pistol belt"],
-    ["Belts & Rigs", "duty pistol belt"],
-    ["Cases & Bags", "suppressor cover"],
-    ["Cases & Bags", "nylon suppressor cover"],
-    ["Misc", "bolt carrier group"],
-    ["Misc", "complete upper"],
-    ["Misc", "steel pistol slide"],
-    ["Holsters & Slings", "fits Nockon 19 holster"],
-    ["Pouches", "double mag pouch"],
-    ["Cleaning & Maintenance", "rod and patch kit"],
-    ["Holsters & Slings", "two point sling"],
-    ["NVG & Optics", "red dot optic"],
-    ["Misc", "desk lamp 60"],
+    ["Comms & Radios", "Harbor HT-100"],
+    ["NVG & Optics", "Lumen 4-16"],
+    ["Packs & Bags", "Ridge 65"],
+    ["Knives & Tools", "Fold 940"],
+    ["Misc", "Harbor HT-100"],
+    ["Comms & Radios", "A&B + C.D"],
   ];
-  open.forEach(([category, name]) => assert.equal(saleRestricted({ category, name }), false, name));
+  open.forEach(([category, name]) => {
+    const item = { category, name };
+    assert.equal(saleRestricted(item), false, name);
+    const priced = settleLookup(item, {
+      retailNew: 40, usedLow: 20, usedHigh: 30, value: 28, weightOz: 12,
+      priceNote: "Local shelf $40", weightNote: "maker spec 12 oz",
+      sources: [{ label: "Local shelf", url: "https://example.com/harbor" }],
+    });
+    assert.equal(priced.apply, true, name);
+    assert.equal(priced.retailNew, 40, name);
+    assert.equal(priced.value, 28, name);
+    assert.equal(priced.sources.length, 1, name);
+  });
 });
 
-test("digit-for-letter spellings fold before the sale check, and model numbers stay numbers", () => {
-  assert.equal(saleRestricted({ category: "Misc", name: "b4ffle cup" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "s3ar" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "n0ckon 77" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "\uFF15ilencer" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "h0lster" }), false);
-  assert.equal(saleRestricted({ category: "Clothing & Boots", name: "c4nvas field coat" }), false);
-  assert.equal(saleRestricted({ category: "Comms & Radios", name: "b0om mic" }), false);
-  assert.match(normalizeGearLabel("b0om mic"), /boom/);
-  assert.equal(saleRestricted({ category: "Misc", name: "10mm wrench" }), false);
-  assert.match(normalizeGearLabel("b4ffle-cup"), /baffle/);
-  assert.match(normalizeGearLabel("10mm wrench"), /10mm/);
+test("a blocked shelf keeps a typed price and drops a market price", () => {
+  const rifle = { category: "Firearms", name: "North line", retailNew: 1800, value: 1500, priceSource: "market", valueSource: "market" };
+  const typed = keepManualPrice({ ...rifle, priceSource: "manual", valueSource: "manual" }, true);
+  assert.equal(typed.retailNew, 1800);
+  assert.equal(typed.value, 1500);
+  assert.equal(typed.priceSource, "manual");
+  assert.equal(typed.valueSource, "manual");
+  assert.equal(countedValue(typed), 1500);
+  assert.equal(csvExportField(typed, "retailNew"), 1800);
+  assert.equal(csvExportField(typed, "value"), 1500);
+
+  const fromForm = keepManualPrice({ ...rifle, retailNew: 1800, value: 1500 }, true);
+  assert.equal(fromForm.priceSource, "manual");
+  assert.equal(fromForm.valueSource, "manual");
+  assert.equal(countedValue(fromForm), 1500);
+
+  const leftover = keepManualPrice({ ...rifle, retailNew: 0, value: 0 }, false);
+  assert.equal(leftover.retailNew, 0);
+  assert.equal(leftover.value, 0);
+  assert.equal(countedValue(leftover), 0);
+  assert.equal(csvExportField(leftover, "retailNew"), "");
+
+  const settled = settleLookup({ category: "Firearms", name: "North line" }, {
+    retailNew: 900, value: 800, weightOz: 40, weightNote: "four hundred at the village outfitter",
+    sources: [{ label: "listing", url: "https://www.gunbroker.com/item/1" }],
+  });
+  assert.equal(settled.apply, true);
+  assert.equal(settled.retailNew, null);
+  assert.equal(settled.value, null);
+  assert.equal(settled.weightOz, 40);
+  assert.equal(settled.weightNote, "");
+  assert.deepEqual(settled.sources, []);
+  const clientAsked = settleLookup({ category: "Suppressors", name: "Tube", weightOnly: false }, {
+    retailNew: 500, value: 400, weightOz: 8, weightNote: "maker spec 8 oz",
+  });
+  assert.equal(clientAsked.retailNew, null);
+  assert.equal(clientAsked.weightNote, "maker spec 8 oz");
 });
 
-test("a model classification of restricted strips the price, and a bad answer does not unlock one", () => {
-  const coat = { category: "Clothing & Boots", name: "Parcel coat" };
-  assert.equal(saleRestricted(coat), false);
-  const blocked = settleLookup(coat, {
-    restricted: true, retailNew: 250, usedLow: 100, usedHigh: 180, value: 160, weightOz: 18,
-    priceNote: "REI $250", weightNote: "Midway: 899.99",
-    sources: [{ label: "REI", url: "https://www.rei.com/parcel-coat" }],
+test("a firearm retailer link is removed in every category and the price stays", () => {
+  const coat = { category: "Comms & Radios", name: "Harbor HT-100" };
+  const mixed = settleLookup(coat, {
+    retailNew: 40, value: 28, weightOz: 12, priceNote: "Local shelf $40. See https://www.luckygunner.com/rifle",
+    sources: [
+      { label: "Local shelf", url: "https://example.com/harbor" },
+      { label: "listing", url: "https://www.gunbroker.com/item/77" },
+      { label: "Arms list", url: "https://www.armslist.com/posts/1" },
+      { label: "Guns America", url: "https://www.gunsamerica.com/77" },
+      { label: "Palmetto", url: "https://palmettostatearmory.com/rifle" },
+      { label: "Seek", url: "https://ammoseek.com/ammo" },
+      { label: "Lucky", url: "https://www.luckygunner.com/rifle" },
+      { label: "Shop", url: "https://www.silencershop.com/tube" },
+      { label: "Brownells rifle", url: "https://www.brownells.com/firearms/north-line/" },
+      { label: "Brownells sling", url: "https://www.brownells.com/slings/harbor-sling/" },
+    ],
   });
-  assert.equal(blocked.apply, true);
-  assert.equal(blocked.restricted, true);
-  assert.equal(blocked.retailNew, null);
-  assert.equal(blocked.usedLow, null);
-  assert.equal(blocked.usedHigh, null);
-  assert.equal(blocked.value, null);
-  assert.equal(blocked.priceNote, "");
-  assert.equal(blocked.weightNote, "");
-  assert.deepEqual(blocked.sources, []);
-  assert.equal(blocked.weightOz, 18);
-  assert.equal(saleRestricted({ ...coat, modelRestricted: true }), true);
-  assert.equal(countedValue({ ...coat, modelRestricted: true, value: 160, priceSource: "market" }), 0);
-
-  for (const parsed of [null, {}, { retailNew: 80, value: 70 }, { restricted: "yes", retailNew: 80 }, { restricted: 1, value: 10 }]) {
-    const missed = settleLookup(coat, parsed);
-    assert.equal(missed.apply, false, JSON.stringify(parsed));
-    assert.equal(missed.retailNew, undefined);
-  }
-  const already = settleLookup({ category: "Firearms", name: "Blue sticker" }, { retailNew: 900, weightOz: 40, weightNote: "Midway: 899.99" });
-  assert.equal(already.apply, true);
-  assert.equal(already.restricted, true);
-  assert.equal(already.retailNew, null);
-  assert.equal(already.weightNote, "");
-  assert.equal(already.weightOz, 40);
-  const unlocked = settleLookup({ category: "Firearms", name: "Blue sticker" }, {
-    restricted: false, retailNew: 900, value: 800, priceNote: "shop $900",
-    sources: [{ label: "REI", url: "https://www.rei.com/sticker" }],
-  });
-  assert.equal(unlocked.restricted, true);
-  assert.equal(unlocked.retailNew, null);
-  assert.equal(unlocked.priceNote, "");
-  assert.deepEqual(unlocked.sources, []);
-});
-
-test("a benign look-alike keeps its price when the model says it is not restricted", () => {
-  const coat = { category: "Clothing & Boots", name: "Parcel coat" };
-  const kept = settleLookup(coat, {
-    restricted: false, retailNew: 89, usedLow: 40, usedHigh: 70, value: 60, weightOz: 18,
-    priceNote: "REI $89.50, fits a small frame", weightNote: "maker spec 18 oz",
-    sources: [{ label: "REI", url: "https://www.rei.com/parcel-coat" }],
-  });
-  assert.equal(kept.apply, true);
-  assert.equal(kept.restricted, false);
-  assert.equal(kept.retailNew, 89);
-  assert.equal(kept.value, 60);
-  assert.match(kept.priceNote, /89\.50/);
-  assert.equal(kept.weightNote, "maker spec 18 oz");
-  assert.equal(kept.sources.length, 1);
-  const deal = settleDeal(coat, {
-    restricted: false, price: 89.5, where: "REI", url: "https://www.rei.com/parcel-coat",
-    condition: "used", note: "Used, $250.30 shipped, fits a small frame",
-  });
-  assert.equal(deal.restricted, false);
-  assert.equal(deal.price, 89.5);
-  assert.match(deal.note, /250\.30/);
-  assert.match(deal.url, /rei\.com/);
-  const dropped = settleDeal(coat, {
-    restricted: true, price: 40, where: "REI", url: "https://www.rei.com/parcel-coat", note: "Midway: 899.99",
-  });
-  assert.equal(dropped.restricted, true);
-  assert.equal(dropped.price, null);
-  assert.equal(dropped.url, "");
-  assert.equal(dropped.where, "");
-  assert.equal(dropped.note, "");
-  const broken = settleDeal(coat, { price: 40, where: "REI", url: "https://www.rei.com/parcel-coat", note: "$40" });
-  assert.equal(broken.restricted, false);
-  assert.equal(broken.price, null);
-  assert.equal(broken.url, "");
-});
-
-test("a price note or a size in a link does not wipe an ordinary item", () => {
+  assert.equal(mixed.retailNew, 40);
+  assert.equal(mixed.value, 28);
+  assert.equal(mixed.sources.map(s => s.label).join(","), "Local shelf,Brownells sling");
+  assert.equal(mixed.priceNote.includes("luckygunner"), false);
+  assert.equal(lookupAnswerRestricted({ sources: mixed.sources }), false);
+  assert.equal(gunMarketUrl("https://www.brownells.com/slings/harbor-sling/"), false);
+  assert.equal(gunMarketUrl("https://www.rei.com/kywi-556"), false);
   assert.equal(lookupAnswerRestricted({
-    restricted: false,
-    priceNote: "REI $229.50, fits Glock 19",
+    priceNote: "REI $229.50, fits a small frame",
     weightNote: "24 x 12",
     sources: [{ label: "REI", url: "https://www.rei.com/product/556" }],
   }), false);
-  assert.equal(lookupAnswerRestricted({
-    priceNote: "Amazon $1,300",
-    sources: [{ label: "Amazon", url: "https://www.amazon.com/dp/30mm" }],
-  }), false);
-  assert.equal(lookupAnswerRestricted({
-    sources: [{ label: "listing", url: "https://www.gunbroker.com/item/1" }],
-  }), true);
+
+  const deal = settleDeal(coat, {
+    price: 40, where: "Local shelf", url: "https://www.gunbroker.com/item/77", note: "Used, $40.50 shipped",
+  });
+  assert.equal(deal.price, 40);
+  assert.equal(deal.url, "");
+  assert.match(deal.note, /40\.50/);
+  const blockedDeal = settleDeal({ category: "Ammo", name: "Practice box" }, {
+    price: 1, url: "https://example.com/box", note: "in stock",
+  });
+  assert.equal(blockedDeal.price, null);
+  assert.equal(blockedDeal.url, "");
+});
+
+test("more than one JSON object cannot return a marketplace link", () => {
+  const text = '{"retailNew":40,"value":28,"sources":[{"label":"Local shelf","url":"https://example.com/harbor"}]} {"retailNew":40,"value":28,"url":"https://www.gunbroker.com/item/77","sources":[{"label":"listing","url":"https://www.luckygunner.com/rifle"}]}';
+  const picked = pickModelAnswer(text);
+  assert.equal(picked.linksDropped, true);
+  assert.deepEqual(picked.sources, []);
+  assert.equal(picked.url, "");
+  assert.equal(picked.retailNew, 40);
+  const settled = settleLookup({ category: "Packs & Bags", name: "Ridge 65" }, picked);
+  assert.equal(settled.retailNew, 40);
+  assert.deepEqual(settled.sources, []);
+  const one = pickModelAnswer('{"retailNew":40,"sources":[{"label":"Local shelf","url":"https://example.com/harbor"},{"label":"listing","url":"https://www.silencershop.com/tube"}]}');
+  assert.equal(one.linksDropped, undefined);
+  assert.equal(one.sources.length, 1);
+  assert.equal(one.sources[0].url, "https://example.com/harbor");
+});
+
+test("a restricted weight note drops spelled amounts and retailer words", () => {
+  assert.equal(publicWeightNote("four hundred at the village outfitter"), "");
+  assert.equal(publicWeightNote("two fifty from a corner shop"), "");
+  assert.equal(publicWeightNote("picked up at a local retailer"), "");
+  assert.equal(publicWeightNote("maker spec 24.5 oz"), "maker spec 24.5 oz");
+  assert.equal(publicWeightNote("two point sling spec"), "two point sling spec");
 });

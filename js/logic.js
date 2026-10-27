@@ -296,70 +296,21 @@ export function serviceWorkerAllowed(loc, qa) {
   return !!qa && loc.protocol === "http:" && host;
 }
 
-// Letters that look like Latin in a name. Cyrillic у is mapped to u so a lookalike "suppressor" still matches.
-const CONFUSABLES = {
-  "\u0405": "s", "\u0455": "s", "\u0443": "u", "\u0423": "u",
-  "\u0430": "a", "\u0410": "a", "\u0435": "e", "\u0415": "e", "\u043e": "o", "\u041e": "o",
-  "\u0440": "p", "\u0420": "p", "\u0441": "c", "\u0421": "c", "\u0445": "x", "\u0425": "x",
-  "\u0456": "i", "\u0406": "i", "\u0458": "j", "\u04bb": "h", "\u04ba": "h", "\u0501": "d",
-};
-
-function foldText(value) {
-  let t = String(value || "");
-  t = t.replace(/[\u200B-\u200D\uFEFF\u00AD]/g, "");
-  t = t.replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ");
-  t = t.replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, "-");
-  t = t.normalize("NFD").replace(/\p{M}/gu, "");
-  t = t.normalize("NFKC");
-  t = [...t].map(ch => CONFUSABLES[ch] || ch).join("").toLowerCase();
-  t = t.replace(/m\s*&\s*p/g, "mp");
-  t = t.replace(/s\s*&\s*w/g, "sw");
-  t = t.replace(/(\d),(?=\d)/g, "$1.");
-  t = t.replace(/[_/\\|]+/g, " ");
-  t = t.replace(/-+/g, " ");
-  return t;
+// Category text only. Names are not folded, and digit swaps are not rewritten.
+function categoryKey(value) {
+  return String(value || "").normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-// Digit-for-letter swaps only inside a token that is mostly letters.
-// A caliber or a model number stays as written. 1 can be i or l, so both stay.
-function leetVariants(token) {
-  if (!token || token.includes(".")) return [token];
-  const letters = (token.match(/[a-z]/g) || []).length;
-  const swaps = (token.match(/[013457]/g) || []).length;
-  if (!swaps || letters <= swaps) return [token];
-  const mapped = token.replace(/0/g, "o").replace(/3/g, "e").replace(/4/g, "a").replace(/5/g, "s").replace(/7/g, "t");
-  return [...new Set([token, mapped.replace(/1/g, "i"), mapped.replace(/1/g, "l")])];
-}
-
-function leetExpand(spaced) {
-  const extra = [];
-  for (const token of spaced.split(" ")) {
-    for (const variant of leetVariants(token)) if (variant !== token) extra.push(variant);
-  }
-  return extra.length ? `${spaced} ${extra.join(" ")}` : spaced;
-}
-
-// Fold lookalikes, digit swaps, and spacing before the sale check and the model prompt.
-export function normalizeGearLabel(value) {
-  const folded = foldText(value);
-  const spaced = folded.replace(/[^a-z0-9.]+/g, " ").replace(/\s+/g, " ").trim();
-  return leetExpand(spaced);
-}
-
-function saleText(item) {
-  const raw = [item.name, item.brand, item.load, item.caliber, item.armType].map(v => String(v || "")).join(" ");
-  const expanded = normalizeGearLabel(raw);
-  const parts = foldText(raw).split(/[^a-z0-9]+/).filter(Boolean);
-  const glued = parts.length >= 6 && parts.every(p => p.length === 1) ? parts.join("") : "";
-  return glued ? `${expanded} ${glued}` : expanded;
-}
-
-// Where the item is filed. Those categories are weight-only for every name.
-// Magazine storage is not one of them. A blank category is not a free pass.
-function placeRestricted(item) {
+// Automatic prices stop at the firearm, suppressor, ammunition, and lower-receiver
+// shelves, and at a firearm or suppressor record on the Arms Room. A magazine
+// shelf is not one of those. The item name is not checked.
+export function saleRestricted(item) {
+  if (!item || typeof item !== "object") return false;
+  const kind = String(item.kind || item.tab || "").trim().toLowerCase();
+  if (kind === "ammo") return true;
   const arm = String(item.arm || "").trim().toUpperCase();
   if (arm === "FA" || arm === "SU") return true;
-  const c = foldText(item.category).replace(/[^a-z0-9]+/g, " ").trim();
+  const c = categoryKey(item.category);
   if (!c) return false;
   if (/\bmags?\b|\bmagazines?\b|\bstorage\b/.test(c)) return false;
   if (/\b(firearms?|handguns?|rifles?|shotguns?|suppressors?|silencers?|nfa)\b/.test(c)) return true;
@@ -368,201 +319,157 @@ function placeRestricted(item) {
   return false;
 }
 
-function isMagazine(t) {
-  if (/\b(pouch(?:es)?|holsters?|slings?|cases?|bags?|carriers?|wells?|holders?|kywi)\b/.test(t)) return false;
-  if (/\b(win|rem|remington)\s+mags?\b/.test(t)) return false;
-  if (/\b(pmags?|magazines?|mags)\b/.test(t)) return true;
-  if (/\bmag\b/.test(t) && /\b(round|rounds|rd|rds|rifle|pistol|glock|carbine)\b/.test(t)) return true;
-  if (/\bmag\b/.test(t) && !/\b(\d+(?:\.\d+)?\s*mm|\.\d{2,3}|magnum)\b/.test(t)) return true;
+// Firearm marketplaces and firearm or ammunition retailers, matched by domain.
+// Brownells also sells gear, so only its firearm, ammunition, and suppressor pages drop.
+const GUN_MARKET_HOST = /(^|\.)((gunbroker|armslist|gunsamerica|palmettostatearmory|ammoseek|luckygunner|silencershop|wikiarms|cheaperthandirt|grabagun|budsgunshop|aimsurplus|kygunco|classicfirearms|impactguns|gunsinternational|galleryofguns)\.com|guns\.com|gun\.deals)$/i;
+const BROWNELLS_FIREARM = /firearm|ammo|ammunition|suppress|silencer|\blowers?\b|receivers?|rifles?|pistols?|shotguns?|handguns?|reloading|\bnfa\b|cartridges?/i;
+
+function parsedUrl(value) {
+  try { return new URL(String(value)); } catch { return null; }
+}
+
+export function gunMarketUrl(value) {
+  const url = parsedUrl(value);
+  if (!url || !/^https?:$/i.test(url.protocol)) return false;
+  const host = url.hostname.replace(/^www\./i, "");
+  if (GUN_MARKET_HOST.test(host)) return true;
+  if (/(^|\.)brownells\.com$/i.test(host) && BROWNELLS_FIREARM.test(decodeURIComponent(url.pathname))) return true;
   return false;
 }
 
-function isAmmoContainer(t) {
-  return /\bammo\s+(cans?|box(?:es)?|bags?|crates?|pouch(?:es)?)\b/.test(t);
+export function stripGunMarketSources(sources) {
+  return (Array.isArray(sources) ? sources : [])
+    .filter(s => s && /^https:\/\//.test(s.url || "") && !gunMarketUrl(s.url))
+    .slice(0, 4)
+    .map(s => ({ label: String(s.label || "source").slice(0, 40), url: String(s.url).slice(0, 400) }));
 }
 
-// Unserialized parts stay priced. The receiver, frame, and sear do not.
-function isPricedPart(t) {
-  if (/\bbolt\s+actions?\b/.test(t)) return false;
-  if (/\b(uppers?|slides?|barrels?|bcgs?|bolt\s+carriers?)\b/.test(t)) return true;
-  if (/\bbolts?\b/.test(t)) return true;
-  return false;
+export function stripGunMarketText(note) {
+  return String(note || "").replace(/https?:\/\/\S+/gi, url => gunMarketUrl(url.replace(/[),.;]+$/, "")) ? "" : url).replace(/\s{2,}/g, " ").trim();
 }
 
-function isAccessory(t) {
-  if (/\b\d+\s+\d+x\d+/.test(t) || /\blpvos?\b/.test(t)) return true;
-  const bare = t.replace(/\b(?:brass|ammo|shell|cartridge|shotgun|once\s*fired)\s+cases?\b/g, " ");
-  return /\b(holsters?|pouch(?:es)?|kywi|slings?|scabbards?|cases?|bags?|carriers?|grips?|bipods?|buttstocks?|handguards?|gas\s+tubes?|parts\s+kits?|wrench(?:es)?|sockets?|hex\s+keys?|paracords?|knives|knife|mats?|brush(?:es)?|chest\s+rigs?|rigs?|shell\s+holders?|lights?|lamps?|scopes?|sights?|optics?|binoculars?|headlamps?|multitools?|hats?|cameras?|tarps?|blankets?|flags?|snacks?|jugs?|batter(?:y|ies)|rangefinders?|ear\s+pro|glasses|sunglasses|tourniquets?|splints?|stocks?|cords?|jackets?|coats?|shirts?|pants|gaiters?|gloves?|boots?|mics?|microphones?|filters?|masks?|respirators?|belts?|covers?|mice|mouse|headsets?|ropes?|wires?|gauzes?|pads?|tents?|stickers?|koozies?|cards?|calipers?|hitches?|speakers?|socks?|hoodies?|vests?|radios?|jigs?|presses?|dies?|brakes?|vises?)\b/.test(bare);
-}
-
-function isCleaning(t) {
-  return /\b(cleaning\s+(kits?|rods?|mats?)|bore\s+(snakes?|brush(?:es)?)|gun\s+oils?)\b/.test(t) && !/\bsolvent\s*traps?\b/.test(t);
-}
-
-function isAirgun(t) {
-  return /\b(airsoft|air\s*guns?|air\s*pistols?|air\s*rifles?|pellet\s+guns?|bb\s*guns?|co2\s*pistols?)\b/.test(t);
-}
-
-function isBareCan(t) {
-  if (/\b(ammo|fuel|gas|jerry|water|trash|garbage|oil|food|coffee|paint|tin|milk|soda|beer|watering|soup|spray|bear)\s+cans?\b/.test(t)) return false;
-  if (/\bcans?\s+(openers?|lights?|holders?|stoves?|koozies?)\b/.test(t)) return false;
-  if (/\bcan\s+am\b|\batvs?\b|\bkoozies?\b/.test(t)) return false;
-  return /\bcans?\b/.test(t);
-}
-
-function isSuppressor(t) {
-  if (/\b(suppress\w*|supress\w*|suppres\w*|surpress\w*|syppress\w*|silenc\w*|sillenc\w*|moderators?|solvent\s*traps?)\b/.test(t)) return true;
-  if (/\b(sico|silencerco|dead\s+air)\b/.test(t)) return true;
-  if (/suppress|silenc|syppress/.test(t.replace(/[^a-z0-9]/g, ""))) return true;
-  return isBareCan(t);
-}
-
-function isNfa(t) {
-  if (/\b(sbrs?|sbs|sears?|baffles?|monocores?)\b/.test(t)) return true;
-  if (/\b(machine\s*guns?|lightning\s+links?|full\s*auto|select\s*fire)\b/.test(t)) return true;
-  return false;
-}
-
-function isFrameOrLower(t) {
-  if (/\b(window|internal|door|bed|picture|photo|pack|tent|bike|backpack)\s+frames?\b/.test(t) || /\bframes?\s+(packs?|sheets?)\b/.test(t)) return false;
-  if (/\ba\s+frames?\b/.test(t)) return false;
-  if (/\b(hitch|av|audio|stereo|gps|handheld|upper|radio|satellite|weather|noaa|sdr|gmrs|baofeng|bike)\b/.test(t) && /\breceivers?\b/.test(t)) return false;
-  if (/\blower\s+(back|leg|body)\b/.test(t)) return false;
-  if (/polymer\s*80|pf\s*940/.test(t)) return true;
-  if (/\b(stripped|serialized|80)\b/.test(t) && /\b(lowers?|receivers?|frames?)\b/.test(t)) return true;
-  if (/\blowers?\s+receivers?\b/.test(t)) return true;
-  if (/\b80\s+(lowers?|frames?|receivers?)\b/.test(t)) return true;
-  if (/\bfcus?\b|\bfire\s+control\s+units?\b/.test(t)) return true;
-  if (/\b(pistol|rifle|handgun|firearm)\s+frames?\b/.test(t)) return true;
-  if (/\blowers?\b/.test(t)) return true;
-  if (/\bframes?\b/.test(t)) return true;
-  if (/\breceivers?\b/.test(t)) return true;
-  return false;
-}
-
-function isAmmo(t) {
-  if (/\b(fmj|jhp|buckshot|birdshot|primers?|gunpowder|smokeless|green\s+tips?|hollow\s+points?|ammunition|cartridges?|ammo|hst|bmg)\b/.test(t)) return true;
-  if (/\b(blazer\s+brass|brass\s+(?:cases?|casings?)|once\s*fired\s+brass|reloading\s+powder)\b/.test(t)) return true;
-  if (/\b(m855|m193|creedmoor|valkyrie|grendel|blackout|ackley)\b/.test(t)) return true;
-  if (/\b00\s*buck\b/.test(t)) return true;
-  if (/\b\d+(?:\.\d+)?\s*mm\b/.test(t)) return true;
-  if (!/\d\s+\d+x\d+/.test(t) && /\b(?:4\.6|5\.45|5\.56|5\.7|6\.5|6\.8|7\.62|7\.92|8\.6|9|10)\s*x\s*\d{2}\b/.test(t)) return true;
-  if (/\b(5\.56|7\.62|6\.5|9\.3|4\.6|5\.7|6\.8)\b/.test(t)) return true;
-  if (/(^|[^a-z0-9])\.(17|22|223|224|243|25|270|277|30|300|308|338|350|357|375|38|40|44|45|410|450|458|50)\b/.test(t)) return true;
-  if (/\b\d{2,3}\s+(win|rem|remington|blk|blackout|special|magnum|sw|acp|auto|lr|legend|bushmaster|valkyrie|creedmoor|wsm|prc|hmr|western|nosler|grendel)\b/.test(t)) return true;
-  if (/\b(?:30\s+06|30\s+30|45\s+70|25\s+06|22\s+250)\b/.test(t)) return true;
-  if (/\b(?:10|12|16|20|28)\s*ga(?:uge)?\b/.test(t) || /\b410\s*bore\b/.test(t) || /\b\.410\b/.test(t)) return true;
-  if (/\b22\s*lr\b/.test(t) || /22lr/.test(t.replace(/[^a-z0-9]/g, ""))) return true;
-  if (/\b\d+\s*gr(?:ain)?s?\b/.test(t)) return true;
-  if (/\b(?:shotgun|rifle|pistol)\s+shells?\b/.test(t) || /\bbox\s+of\s+shells?\b/.test(t)) return true;
-  return false;
-}
-
-const MODEL_STOP = new Set(["the", "and", "for", "with", "size", "inch", "inches", "gen", "new", "used", "pack", "box", "set", "pair", "count", "qty", "oz", "lb", "mm", "cm", "day", "days", "year", "from", "this", "that", "one", "per", "all", "not", "its", "via", "page", "length", "style", "type", "model", "an", "of", "to", "on", "or", "at", "by", "my", "is", "it", "be", "as", "up", "if", "so", "we", "do", "no", "in"]);
-
-// A brand-like word plus a model number. Not a catalog of brand and model pairs.
-function hasBrandModel(t) {
-  const compact = t.replace(/[^a-z0-9]/g, "");
-  if (/\bar\s*\d{2}\b/.test(t) || /(?:^|[^a-z])ar\d{2}/.test(compact) || /\bak\s*\d{2}\b/.test(t) || /(?:^|[^a-z])ak\d{2}/.test(compact)) return true;
-  if (/\b1911\b/.test(t)) return true;
-  if (/\bmp\s*\d{1,2}\b/.test(t)) return true;
-  if (/\bp\s*[2-9]\d{2}[a-z]?\b/.test(t)) return true;
-  if (/\bg\s*\d{1,2}[a-z]?\b/.test(t)) return true;
-  if (/\bm\s*\d{1,2}[a-z]?\d*\b/.test(t)) return true;
-  const measured = t.replace(/\b\d+(?:\.\d+)?\s*(?:mm|cm|in|inch|inches|oz|lb|lbs|g|kg|gr|grain|grains|ga|gauge|rd|rds|pk|pack)\b/g, " ");
-  const words = measured.split(" ").filter(w => /^[a-z]{2,}$/.test(w) && !MODEL_STOP.has(w) && !/^[a-z]{1,2}\d{1,2}$/.test(w));
-  const nums = measured.match(/\b\d{2,3}[a-z]?\b/g) || [];
-  if (words.length > 0 && nums.length > 0) return true;
-  if (/\b[a-z]{1,2}\d{1,2}\b/.test(measured) && words.length > 0) return true;
-  return false;
-}
-
-function isFirearmWord(t) {
-  return /\b(pistols?|rifles?|shotguns?|handguns?|revolvers?|carbines?|lever\s+actions?)\b/.test(t);
-}
-
-// The category decides. The name is only a backup for a clear misfile.
-// A model classification sticks until the name, brand, or category changes.
-export function saleRestricted(item) {
-  if (!item || typeof item !== "object") return false;
-  if (item.modelRestricted === true) return true;
-  if (placeRestricted(item)) return true;
-  const category = foldText(item.category).replace(/[^a-z0-9]+/g, " ").trim();
-  if (!category && item.caliber && (item.load || item.cpr != null || item.rounds != null)) return true;
-  const t = saleText(item);
-  if (!t) return false;
-  if (isMagazine(t)) return false;
-  if (isAmmoContainer(t)) return false;
-  if (isPricedPart(t)) return false;
-  if (isAccessory(t) || /\bfits\b/.test(t)) return false;
-  if (isCleaning(t)) return false;
-  if (isAirgun(t)) return false;
-  if (isSuppressor(t)) return true;
-  if (isNfa(t)) return true;
-  if (isFrameOrLower(t)) return true;
-  if (isAmmo(t)) return true;
-  if (hasBrandModel(t)) return true;
-  return isFirearmWord(t);
-}
-
-const GUN_MARKET = /(^|\.)((gunbroker|armslist|ammoseek|wikiarms|guns)\.com|gun\.deals)$/i;
-
-function sourceHost(url) {
-  try { return new URL(String(url)).hostname.replace(/^www\./i, ""); } catch { return ""; }
-}
-
-// A gun-market link or source label drops the price. A note, a size, or cents do not.
+// True when the answer still carries a firearm-retailer link. A price note, a size, or cents do not count.
 export function lookupAnswerRestricted(parsed) {
   if (!parsed || typeof parsed !== "object") return false;
-  if (parsed.restricted === true) return true;
   const sources = Array.isArray(parsed.sources) ? parsed.sources : [];
   const urls = [...sources.map(s => s && s.url), parsed.url].filter(Boolean);
-  if (urls.some(u => GUN_MARKET.test(sourceHost(u)))) return true;
-  const labels = sources.map(s => s && s.label).filter(Boolean).join(" ");
-  return /\b(gunbroker|armslist|ammoseek|wikiarms|guns\.com|gun\.deals)\b/i.test(labels);
+  return urls.some(gunMarketUrl);
 }
 
 function priceNumber(v) {
   return (v === null || v === undefined || v === "" || !isFinite(+v)) ? null : +v;
 }
 
-// The model answer is part of the same lookup. A missing flag does not unlock a price.
-// An item the category already blocks stays weight-only either way.
+function extractTopJsonObjects(text) {
+  const t = String(text || "").replace(/```(?:json)?/gi, "");
+  const out = [];
+  let i = 0;
+  while (i < t.length) {
+    if (t[i] !== "{") { i++; continue; }
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let j = i; j < t.length; j++) {
+      const c = t[j];
+      if (inStr) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true;
+      else if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) { end = j; break; }
+    }
+    if (end < 0) break;
+    const raw = t.slice(i, end + 1);
+    let parsed = null;
+    for (const cand of [raw, raw.replace(/[\r\n]+/g, " ")]) {
+      try { parsed = JSON.parse(cand); break; } catch { parsed = null; }
+    }
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) out.push(parsed);
+    i = end + 1;
+  }
+  return out;
+}
+
+// One lookup or deal object. A second JSON object drops every link, so the last
+// object cannot smuggle a marketplace url through. A single object keeps its
+// other links and loses firearm-retailer ones.
+export function pickModelAnswer(text) {
+  const objects = extractTopJsonObjects(text);
+  const answers = objects.filter(o => ["retailNew", "usedLow", "usedHigh", "value", "weightOz", "price", "sources", "url"].some(k => k in o));
+  if (!answers.length) return null;
+  const picked = { ...answers[answers.length - 1] };
+  if (objects.length > 1) {
+    picked.sources = [];
+    picked.url = "";
+    picked.linksDropped = true;
+  } else {
+    picked.sources = stripGunMarketSources(picked.sources);
+    if (gunMarketUrl(picked.url)) picked.url = "";
+  }
+  if (picked.priceNote) picked.priceNote = stripGunMarketText(picked.priceNote);
+  return picked;
+}
+
+// A blocked category never receives a price. Other gear keeps its price, without firearm-retailer links.
 export function settleLookup(item, parsed) {
   const clean = parsed && typeof parsed === "object" ? parsed : null;
-  const flagOk = !!(clean && typeof clean.restricted === "boolean");
-  const deterministic = !!(item && (item.weightOnly || saleRestricted(item)));
-  if (!clean || (!flagOk && !deterministic)) return { apply: false };
-  const block = deterministic || clean.restricted === true || lookupAnswerRestricted(clean);
+  if (!clean) return { apply: false };
+  const block = !!(item && (item.weightOnly || saleRestricted(item)));
+  const sources = block || clean.linksDropped ? [] : stripGunMarketSources(clean.sources);
   if (block) {
     return {
-      apply: true, restricted: true,
+      apply: true,
       retailNew: null, usedLow: null, usedHigh: null, value: null,
       weightOz: priceNumber(clean.weightOz), priceNote: "",
       weightNote: publicWeightNote(clean.weightNote), sources: [],
     };
   }
-  const sources = Array.isArray(clean.sources) ? clean.sources.filter(s => s && /^https:\/\//.test(s.url || "")).slice(0, 4).map(s => ({ label: String(s.label || "source").slice(0, 40), url: String(s.url) })) : [];
   return {
-    apply: true, restricted: false,
+    apply: true,
     retailNew: priceNumber(clean.retailNew), usedLow: priceNumber(clean.usedLow), usedHigh: priceNumber(clean.usedHigh),
     value: priceNumber(clean.value), weightOz: priceNumber(clean.weightOz),
-    priceNote: String(clean.priceNote || "").slice(0, 240), weightNote: String(clean.weightNote || "").slice(0, 80),
+    priceNote: stripGunMarketText(clean.priceNote).slice(0, 240),
+    weightNote: stripGunMarketText(clean.weightNote).slice(0, 80),
     sources,
   };
 }
 
-// A deal from the same model call. Restricted drops the price, the link, and the note.
+// A typed price on a blocked item stays. A leftover market price does not.
+export function keepManualPrice(item, valueTouched) {
+  if (!item || typeof item !== "object" || !saleRestricted(item)) return item;
+  const out = { ...item, marketSources: [] };
+  delete out.priceNote;
+  delete out.usedLow;
+  delete out.usedHigh;
+  delete out.deal;
+  if ("link" in out) out.link = "";
+  const retail = Math.max(0, Math.round(+out.retailNew || 0));
+  const value = Math.max(0, Math.round(+out.value || 0));
+  if (retail > 0) {
+    out.retailNew = retail;
+    out.priceSource = "manual";
+  } else {
+    out.retailNew = 0;
+    delete out.priceSource;
+    delete out.priceDate;
+  }
+  if (value > 0 && (valueTouched || out.valueSource === "manual" || retail > 0)) {
+    out.value = value;
+    out.valueSource = "manual";
+  } else {
+    out.value = 0;
+    delete out.valueSource;
+  }
+  if (out.weightNote) out.weightNote = publicWeightNote(out.weightNote);
+  return out;
+}
+
+// A deal for a blocked category has no price and no link. Other gear keeps the price and loses a firearm-retailer link.
 export function settleDeal(item, parsed) {
-  const empty = restricted => ({ price: null, where: "", url: "", condition: "", note: "", restricted: !!restricted });
+  const empty = blocked => ({ price: null, where: "", url: "", condition: "", note: "", restricted: !!blocked });
+  if (saleRestricted(item)) return empty(true);
   const clean = parsed && typeof parsed === "object" ? parsed : null;
-  if (!clean || typeof clean.restricted !== "boolean") return empty(false);
-  const url = /^https:\/\//.test(clean.url || "") ? String(clean.url).slice(0, 400) : "";
-  const where = String(clean.where || "").slice(0, 40);
-  const blocked = clean.restricted === true || saleRestricted(item) || lookupAnswerRestricted({
-    restricted: clean.restricted, url, sources: url ? [{ label: where, url }] : [],
-  });
-  if (blocked) return empty(true);
+  if (!clean) return empty(false);
+  let url = /^https:\/\//.test(clean.url || "") ? String(clean.url).slice(0, 400) : "";
+  if (clean.linksDropped || gunMarketUrl(url)) url = "";
+  let where = String(clean.where || "").slice(0, 40);
+  if (/^https?:/i.test(where) && (clean.linksDropped || gunMarketUrl(where))) where = "";
   const price = isFinite(+clean.price) && +clean.price > 0 ? Math.round(+clean.price * 100) / 100 : null;
   return {
     price, where, url, condition: String(clean.condition || "").slice(0, 20),
@@ -589,7 +496,7 @@ export function countedValue(item) {
 
 export function csvExportField(item, key) {
   if (!item || typeof item !== "object") return "";
-  if (saleRestricted(item) && (key === "retailNew" || key === "priceSource" || key === "priceDate")) return "";
+  if (saleRestricted(item) && item.priceSource !== "manual" && (key === "retailNew" || key === "priceSource" || key === "priceDate")) return "";
   if (key === "value" && saleRestricted(item)) {
     const n = countedValue(item);
     return n || "";
@@ -603,10 +510,15 @@ function hasPriceNumber(s) {
   return /\b\d{2,5}\.\d{2}\b/.test(bare) || /\b\d{3,5}\b/.test(bare);
 }
 
+const NUMBER_WORD = "zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety";
+const SPELLED_AMOUNT = new RegExp(`\\b(?:${NUMBER_WORD})\\s+hundred\\b|\\b(?:${NUMBER_WORD})\\s+thousand\\b|\\b(?:${NUMBER_WORD})\\s+(?:${NUMBER_WORD})\\b`, "i");
+const RETAILER = /\b(stores?|shops?|retailers?|outfitters?|dealers?|sellers?|vendors?|merchants?|distributors?|resellers?|gunsmiths?|emporiums?|bazaars?)\b/i;
+
 // A restricted weight note keeps a maker spec. It drops store names and price figures.
 export function publicWeightNote(note) {
   let s = String(note || "");
   if (/\$\s*\d|\bUSD\b|\bMSRP\b|\bdollars?\b|\bbucks\b/i.test(s)) return "";
+  if (SPELLED_AMOUNT.test(s) || RETAILER.test(s)) return "";
   const store = /\b(amazon|ebay|tacswap|brownells|palmetto|\bpsa\b|midway|opticsplanet|primary\s*arms|gunbroker|cheaper\s*than\s*dirt|cabela'?s|bass\s*pro|sportsman'?s|grabagun|bud'?s?(?:\s*gun)?|aim\s*surplus|eurooptic|armslist|ammoseek|wikiarms|guns\.com|impact\s*guns|kygunco|classic\s*firearms|gun\.deals|scheels|rei|\bbig\s*5\b)\b/i;
   const priceWord = /\b(price|priced|avg|average|sale|sold|cost|retail)\b/i;
   if ((store.test(s) || priceWord.test(s) || /\bfor\s+\d{3,5}(?:\.\d{2})?\b/i.test(s)) && hasPriceNumber(s)) return "";
@@ -692,7 +604,7 @@ const GearLogic = {
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, publicWeightNote, lookupAnswerRestricted, localDay,
-  normalizeGearLabel, settleLookup, settleDeal,
+  gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
 };
 globalThis.GearLogic = GearLogic;

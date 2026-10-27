@@ -228,107 +228,33 @@ test("offline edits flush immediately and the local test page can cache itself",
   assert.equal(serviceWorkerAllowed({ protocol: "http:", hostname: "example.com" }, true), false);
 });
 
-test("price search and sale links skip firearms, ammunition, and the parts that are firearms", () => {
-  assert.equal(saleRestricted({ category: "Firearms", name: "Rifle" }), true);
-  assert.equal(saleRestricted({ category: "firearms", name: "Carbine" }), true);
-  assert.equal(saleRestricted({ category: "FIREARMS", name: "Rifle" }), true);
-  assert.equal(saleRestricted({ category: "Suppressors", name: "Can" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Glock 19 pistol" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Ruger 10/22 rifle" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Remington 870 shotgun" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "S&W revolver" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Home defense handgun" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "16 inch carbine" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "AR-15 rifle" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "AR 15 lower" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Aero M4E1 lower" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Polymer80 PF940C frame" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Glock 19 frame" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Stripped lower receiver" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Pistol frame" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "80% frame" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "supressor" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "SilencerCo Omega 300" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "9mm 115gr" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Federal 5.56 M193" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "12ga buckshot" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "Hornady Critical Defense 9mm" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: ".308 Win 168gr match" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "22LR bulk pack" }), true);
-  assert.equal(saleRestricted({ category: "Mags & Ammo Storage", name: "9mm 115gr" }), true);
-  assert.equal(saleRestricted({ name: "Range ammo", caliber: "9mm", load: "115gr FMJ", rounds: 500 }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "9mm ammunition" }), true);
-  assert.equal(saleRestricted({ category: "Misc", name: "115gr FMJ" }), true);
+test("price search skips firearm, suppressor, ammunition, and lower-receiver shelves", () => {
+  assert.equal(saleRestricted({ category: "Firearms", name: "North line" }), true);
+  assert.equal(saleRestricted({ category: "firearms", name: "North line" }), true);
+  assert.equal(saleRestricted({ category: "FIREARMS", name: "North line" }), true);
+  assert.equal(saleRestricted({ category: "Suppressors", name: "Tube" }), true);
+  assert.equal(saleRestricted({ category: "Ammunition", name: "Practice box" }), true);
+  assert.equal(saleRestricted({ category: "Ammo", name: "Practice box" }), true);
+  assert.equal(saleRestricted({ category: "Reloading", name: "Press" }), true);
+  assert.equal(saleRestricted({ category: "Lower receivers", name: "Widget" }), true);
+  assert.equal(saleRestricted({ category: "Frames", name: "Widget" }), true);
+  assert.equal(saleRestricted({ category: "Handguns", name: "Widget" }), true);
+  assert.equal(saleRestricted({ category: "Rifles", name: "Widget" }), true);
+  assert.equal(saleRestricted({ category: "Shotguns", name: "Widget" }), true);
+  assert.equal(saleRestricted({ category: "NFA", name: "Widget" }), true);
+  assert.equal(saleRestricted({ kind: "ammo", name: "Practice box" }), true);
+  assert.equal(saleRestricted({ tab: "ammo", category: "Misc", name: "Practice box" }), true);
   assert.equal(saleRestricted({ category: "Pouches", name: "Admin pouch", arm: "FA" }), true);
   assert.equal(saleRestricted({ category: "Misc", name: "Tube", arm: "SU" }), true);
   assert.equal(saleRestricted({ category: "Mags & Ammo Storage", name: "Ammo can" }), false);
   assert.equal(saleRestricted({ category: "Pouches", name: "Ammo pouch" }), false);
-  assert.equal(saleRestricted({ category: "Misc", name: "Ammo pouch" }), false);
-  assert.equal(saleRestricted({ category: "Pouches", name: "Double mag pouch" }), false);
-  assert.equal(saleRestricted({ category: "NVG & Optics", name: "Red dot" }), false);
-  assert.equal(saleRestricted({ category: "Comms & Radios", name: "Handheld receiver" }), false);
-  assert.equal(saleRestricted({ category: "Holsters & Slings", name: "Holster" }), false);
-  assert.equal(saleRestricted({ category: "Holsters & Slings", name: "Glock 19 holster" }), false);
-  assert.equal(saleRestricted({ category: "Misc", name: "Glock 19 holster" }), false);
-  assert.equal(saleRestricted({ category: "Misc", name: "Upper receiver" }), false);
-  assert.equal(saleRestricted({ category: "Misc", name: "Pack frame" }), false);
+  assert.equal(saleRestricted({ category: "Misc", name: "Harbor HT-100" }), false);
+  assert.equal(saleRestricted({ category: "NVG & Optics", name: "Lumen 4-16" }), false);
+  assert.equal(saleRestricted({ category: "Comms & Radios", name: "Harbor HT-100" }), false);
+  assert.equal(saleRestricted({ category: "Packs & Bags", name: "Ridge 65" }), false);
+  assert.equal(saleRestricted({ category: "Knives & Tools", name: "Fold 940" }), false);
+  assert.equal(saleRestricted({ category: "NVG & Optics", name: "Red dot", arm: "OP" }), false);
   assert.equal(saleRestricted(null), false);
-  const caught = [
-    ["Cleaning & Maintenance", "Suppressor"],
-    ["Cases & Bags", "Silencer"],
-    ["NVG & Optics", "AR-15 lower"],
-    ["Holsters & Slings", "Glock 19 pistol"],
-    ["Misc", "Glock 19"],
-    ["Misc", "Sig P365"],
-    ["Misc", "Remington 870"],
-    ["Misc", "M&P 15"],
-    ["Misc", "suppresor"],
-    ["Misc", "SiCo"],
-    ["Misc", "Dead Air"],
-    ["Misc", "Can"],
-    ["Misc", "solvent trap"],
-    ["Misc", "80 lower"],
-    ["Misc", "receiver"],
-    ["Misc", "FCU"],
-    ["Misc", "12 gauge"],
-    ["Misc", "124 grain"],
-    ["Misc", "6.5 Creedmoor"],
-    ["Misc", "45 ACP"],
-    ["Misc", "Blazer Brass 9"],
-  ];
-  caught.forEach(([category, name]) => assert.equal(saleRestricted({ category, name }), true, name + " in " + category));
-  const allowed = [
-    ["Lights & Lasers", "Pistol light"],
-    ["NVG & Optics", "rifle scope"],
-    ["Packs & Bags", "internal frame pack"],
-    ["Cleaning & Maintenance", "Otis 9mm cleaning kit"],
-    ["Misc", "Window frame"],
-    ["Mags & Ammo Storage", "PMAG 30"],
-    ["Mags & Ammo Storage", "PMAG 30 5.56"],
-    ["Mags & Ammo Storage", "5.56 magazine"],
-    ["Mags & Ammo Storage", "Glock 19 magazine"],
-    ["Misc", "Jerry can"],
-    ["Misc", "can opener"],
-    ["Misc", "pistol grip"],
-    ["Misc", "rifle bipod"],
-    ["Misc", "10mm wrench"],
-    ["NVG & Optics", "30mm scope rings"],
-    ["Cleaning & Maintenance", "bore brush .308"],
-    ["Belts & Rigs", "7.62 chest rig"],
-    ["Misc", "soup can"],
-    ["Misc", "Can-Am ATV"],
-    ["Misc", "8mm socket"],
-    ["Misc", "3mm hex key"],
-    ["Misc", "1.5mm paracord"],
-    ["Misc", "Carbine length gas tube"],
-    ["Cleaning & Maintenance", "pistol cleaning mat"],
-    ["Belts & Rigs", "shotgun shell holder"],
-    ["Misc", "bear spray can"],
-    ["Comms & Radios", "SDR receiver"],
-    ["Misc", "Glock 78 field knife"],
-    ["Misc", "barrel 16in 5.56"],
-  ];
-  allowed.forEach(([category, name]) => assert.equal(saleRestricted({ category, name }), false, name + " in " + category));
 });
 
 test("a looked-up price on a restricted item is not an insured value", () => {
@@ -358,8 +284,12 @@ test("a restricted weight note drops store names, links, and prices", () => {
   assert.equal(publicWeightNote("sold by Big 5 for 899"), "");
   assert.equal(publicWeightNote("about nine hundred bucks at Cabelas"), "");
   assert.equal(publicWeightNote("maker spec 24.5 oz"), "maker spec 24.5 oz");
-  assert.equal(lookupAnswerRestricted({ restricted: true, priceNote: "" }), true);
-  assert.equal(lookupAnswerRestricted({ priceNote: "GunBroker AR-15 $450", sources: [{ label: "GunBroker", url: "https://gunbroker.com/x" }] }), true);
+  assert.equal(publicWeightNote("four hundred at the village outfitter"), "");
+  assert.equal(publicWeightNote("two fifty from a corner shop"), "");
+  assert.equal(publicWeightNote("picked up at a local retailer"), "");
+  assert.equal(publicWeightNote("two point sling spec"), "two point sling spec");
+  assert.equal(lookupAnswerRestricted({ priceNote: "four hundred dollars" }), false);
+  assert.equal(lookupAnswerRestricted({ priceNote: "GunBroker listing", sources: [{ label: "listing", url: "https://gunbroker.com/x" }] }), true);
   assert.equal(lookupAnswerRestricted({ priceNote: "Typical pouch", sources: [{ label: "Local test shop", url: "https://example.com/gear" }] }), false);
   assert.equal(lookupAnswerRestricted({ priceNote: "REI $229.50, fits Glock 19", weightNote: "maker spec, 24 x 12 x 12 in", sources: [{ label: "REI", url: "https://www.rei.com/kywi-556" }] }), false);
   assert.equal(lookupAnswerRestricted({ priceNote: "Amazon $39 for 30mm rings", sources: [{ label: "OpticsPlanet", url: "https://www.opticsplanet.com/1-6x24.html" }] }), false);
