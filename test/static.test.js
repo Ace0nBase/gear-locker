@@ -144,7 +144,10 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/core.js"), /\["Pouches","Ammo Storage & Loaders","Mags & Ammo Storage","Magazines","Magazines & Belts"\]/);
   assert.match(read("js/core.js"), /\["Ammo Storage & Loaders","Mags & Ammo Storage","Magazines","Magazines & Belts","Misc"\]/);
   assert.match(read("js/core.js"), /categoryAnswersReady\)return false/);
-  assert.match(read("js/core.js"), /action:"move",category:rec\.category/);
+  assert.match(read("js/core.js"), /explicitCategoryChoice/);
+  assert.match(read("js/records.js"), /explicitCategoryChoice/);
+  assert.match(read("js/records.js"), /d\.movedAt=choice\.movedAt/);
+  assert.match(read("js/core.js"), /swReloadPending/);
   assert.doesNotMatch(read("js/core.js"), /on Belts & Rigs/);
   assert.match(read("js/logic.js"), /migratedFromMagShelf/);
   assert.match(read("js/logic.js"), /migratedFromBeltRig/);
@@ -157,8 +160,7 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.doesNotMatch(read("js/stacks.js"), /Belts & Rigs/);
   assert.doesNotMatch(read("README.md"), /linked-ammo/);
   assert.doesNotMatch(read("README.md"), /ammunition belt/);
-  assert.doesNotMatch(read("README.md"), /belted/i);
-  assert.doesNotMatch(read("README.md"), /linked/i);
+  assert.doesNotMatch(read("README.md"), /belted ammo|linked ammo|ammo belt|belt-fed/i);
   assert.match(read("js/cloud.js"), /swReloadPending/);
   assert.match(read("js/cloud.js"), /showUpdateToast/);
   assert.match(read("js/cloud.js"), /textContent="Reload"/);
@@ -204,15 +206,22 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("README.md"), /Java 21 or newer/);
 });
 
-test("user-facing copy and docs do not say belted or linked", () => {
+test("user-facing copy and docs avoid belted and linked ammo phrases", () => {
   const withoutComments = src => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
   const literals = src => (withoutComments(src).match(/`(?:\\[\s\S]|[^`\\])*`|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'/g) || []).join("\n");
   const docs = ["index.html", "README.md", "manifest.webmanifest"].map(read).join("\n");
   const scripts = ["js/core.js", "js/records.js", "js/security.js", "js/cloud.js", "js/comms.js", "js/arms.js", "js/social.js", "js/stacks.js", "js/kits.js", "js/field.js"].map(f => literals(read(f))).join("\n");
   const logic = literals(read("js/logic.js").replace(/export const PRICE_BACKSTOP =[\s\S]*?;/, ""));
   const copy = docs + "\n" + scripts + "\n" + logic;
-  const banned = copy.match(/.{0,48}(?:belted|linked).{0,48}/i);
-  assert.equal(banned, null, banned && banned[0]);
+  const phrases = [/belted ammo/i, /linked ammo/i, /ammo belt/i, /ammunition belt/i, /belt-fed/i];
+  for (const phrase of phrases) {
+    const banned = copy.match(new RegExp(".{0,48}" + phrase.source + ".{0,48}", "i"));
+    assert.equal(banned, null, banned && banned[0]);
+    assert.match("sample " + phrase.source.replace(/\\/g, ""), phrase);
+  }
+  const phrase = new RegExp(phrases.map(p => p.source).join("|"), "i");
+  assert.doesNotMatch("Unlinked", phrase);
+  assert.doesNotMatch("Linked radios", phrase);
   const shot = new URL("../design/appstore-shots/scripts/seed-data.mjs", import.meta.url);
   if (fs.existsSync(shot)) assert.doesNotMatch(fs.readFileSync(shot, "utf8"), /Belts & Rigs/);
 });

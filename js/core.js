@@ -32,7 +32,10 @@ var categoryAnswers={};
 var categoryAnswersReady=typeof window==="undefined"||!window.FIREBASE_CONFIG;
 var live=()=>all.filter(i=>!i.deleted);
 $("fCat").innerHTML=`<option value="">Choose a category</option>`+CATS.map(c=>`<option>${esc(c)}</option>`).join("");
-function toast(t,ms){const el=$("toast");el.textContent=t;el.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>el.hidden=true,ms||2200)}
+function toast(t,ms){
+  if(typeof swReloadPending!=="undefined"&&swReloadPending){toast.q=t;if(typeof showUpdateToast==="function")showUpdateToast();return}
+  const el=$("toast");el.textContent=t;el.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>el.hidden=true,ms||2200);
+}
 
 /* ---------- storage: gear.json in the chosen folder, plus a local mirror ---------- */
 function idb(){return new Promise((res,rej)=>{const r=indexedDB.open("gearLocker",1);r.onupgradeneeded=()=>r.result.createObjectStore("kv");r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
@@ -361,9 +364,8 @@ async function saveCurrent(extra){
   Object.keys(rec).forEach(k=>{if(!(k in stamped))delete rec[k]});
   Object.assign(rec,stamped);
   all=all.map(i=>i.id===rec.id?rec:i);
-  if(beforeSnap&&beforeSnap.category!==rec.category&&categoryAnswers&&categoryAnswers[rec.id]&&categoryAnswers[rec.id].prompt){
-    rememberCategoryAnswers([{id:rec.id,prompt:categoryAnswers[rec.id].prompt,action:"move",category:rec.category,at:rec.updatedAt}]);
-  }
+  const choice=GearLogic.explicitCategoryChoice(beforeSnap&&categoryAnswers&&categoryAnswers[rec.id],beforeSnap&&beforeSnap.category,rec.category,rec.updatedAt);
+  if(choice){rec.movedAt=choice.movedAt;rememberCategoryAnswers([{id:rec.id,...choice.answer}]);all=all.map(i=>i.id===rec.id?rec:i)}
   render();await persist();return rec;
 }
 $("addBtn").onclick=()=>openForm();

@@ -12,10 +12,10 @@ export const SEED_ITEMS = [
   { id: "holster", name: "Safariland holster", category: "Holsters & Slings", condition: "Good" },
   { id: "sling", name: "Blue Force sling", category: "Holsters & Slings", condition: "Good" },
   { id: "targets", name: "IPSC targets", category: "Misc", condition: "Good" },
-  { id: "loader", name: "Maglula Uplula loader", category: "Magazines", condition: "Good" },
+  { id: "loader", name: "Maglula Uplula loader", category: "Ammo Storage & Loaders", condition: "Good" },
   { id: "ammocan", name: "Ammo can", category: "Ammo Storage & Loaders", condition: "Good" },
-  { id: "snapcaps", name: "A-Zoom snap caps", category: "Magazines", condition: "Good" },
-  { id: "pistolmag", name: "Glock pistol mag pouch", category: "Magazines", condition: "Good" },
+  { id: "snapcaps", name: "A-Zoom snap caps", category: "Ammo Storage & Loaders", condition: "Good" },
+  { id: "pistolmag", name: "Glock pistol mag pouch", category: "Pouches", condition: "Good" },
   { id: "ifak", name: "IFAK blowout kit", category: "Medical", condition: "Good" },
   { id: "tq", name: "CAT tourniquet", category: "Medical", condition: "Good" },
 

@@ -245,7 +245,9 @@ var swReloadPending=false;
 function showUpdateToast(){
   const el=$("toast");if(!el)return;
   el.replaceChildren();
-  el.append("War Box updated. ");
+  const note=document.createElement("span");
+  note.textContent=toast.q?toast.q+" · War Box updated. ":"War Box updated. ";
+  el.append(note);
   const b=document.createElement("button");
   b.type="button";b.textContent="Reload";
   b.addEventListener("click",()=>{swReloadPending=false;location.reload()});

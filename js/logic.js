@@ -381,6 +381,18 @@ function answeredMove(answer, prompt) {
   return !!(answer && answer.prompt === prompt && answer.action === "move" && answer.category);
 }
 
+// An explicit category save replaces the stored move, so the old destination cannot snap the row back.
+// The returned movedAt is written on the row. A same-category save leaves the answer alone.
+export function explicitCategoryChoice(answer, previousCategory, nextCategory, stamp) {
+  if (!answer || typeof answer !== "object" || !answer.prompt) return null;
+  if (String(previousCategory || "") === String(nextCategory || "")) return null;
+  const at = stamp || "";
+  return {
+    answer: { prompt: answer.prompt, action: "move", category: nextCategory || "", at },
+    movedAt: at,
+  };
+}
+
 // Account answers win before the old id is renamed. A row already parked on Belts, Magazines, or Ammo Storage is put back.
 // A category that is neither the old id nor that default shelf is an explicit choice and stays put.
 function savedMoveCategory(from, answer) {
@@ -1206,7 +1218,7 @@ const GearLogic = {
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
   LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, MAGAZINES_CATEGORY, LEGACY_MAGAZINES_CATEGORY, BELTS_CATEGORY, LEGACY_BELTS_CATEGORY, ARMOR_CATEGORY, GEAR_CATEGORIES, CATEGORY_HINTS, PRICE_BACKSTOP,
-  migrateCategoryName, migrateRecordCategories, magShelfPending, answerMagShelf, beltRigPending, answerBeltRig,
+  migrateCategoryName, migrateRecordCategories, explicitCategoryChoice, magShelfPending, answerMagShelf, beltRigPending, answerBeltRig,
   magazinesBeltPending, answerMagazinesBelt, magazineCategory, clearMagazineAutoPrices, slotAllowsCategory, starterSlotScore,
   keepMovedCategory, mergeCategoryAnswers, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, photoIdBlockReason,
   timerShotAccepted, radioService, radioTxLabel, mergeFieldConflict,

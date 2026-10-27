@@ -216,7 +216,13 @@ RENDER.wish=()=>{
   :`<div class="empty"><b>Wishlist is empty</b>Tap <em>+ Add item</em> to remember something you want.</div>`}
   ${got.length?`<div class="slotsHead">Bought <span>${got.length}</span></div><p class="hint">${got.map(w=>esc(w.name)).join(" · ")}</p>`:""}`;
 };
-SAVE.wish=async d=>{if(!String(d.name||"").trim()){toast("Name the item");return}await upsertC("wish",d);ED.wish=null;toast("Saved");render()};
+SAVE.wish=async d=>{
+  if(!String(d.name||"").trim()){toast("Name the item");return}
+  const prev=d.id?db.wish.find(x=>x.id===d.id):null;
+  const choice=GearLogic.explicitCategoryChoice(prev&&categoryAnswers&&categoryAnswers[d.id],prev&&prev.category,d.category,now());
+  if(choice){d.movedAt=choice.movedAt;d.updatedAt=choice.movedAt;rememberCategoryAnswers([{id:d.id,...choice.answer}])}
+  await upsertC("wish",d);ED.wish=null;toast("Saved");render();
+};
 DEL.wish=async d=>{await removeC("wish",d.id)};
 ACT.wish=async(act,b)=>{
   if(act==="check"||act==="checkall"){const list=(act==="check"?db.wish.filter(w=>w.id===b.dataset.id):db.wish.filter(w=>!w.deleted&&w.status!=="got"&&w.marketCheck!=="requested")).filter(w=>!GearLogic.saleRestricted(w));list.forEach(w=>{w.marketCheck="requested";w.marketCheckAt=now();w.updatedAt=now()});await persist();toast(list.length?`Queued ${list.length} for a price check`:"Nothing to queue");render();return}

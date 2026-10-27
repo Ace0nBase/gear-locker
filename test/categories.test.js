@@ -7,7 +7,7 @@ import {
   saleRestricted, migrateCategoryName, migrateRecordCategories,
   settleLookup, settleDeal, keepManualPrice, stampManualPrices, countedValue, csvExportField, applyMarketPrices,
   magShelfPending, answerMagShelf, beltRigPending, answerBeltRig, magazinesBeltPending, answerMagazinesBelt,
-  clearMagazineAutoPrices, slotAllowsCategory, starterSlotScore, keepMovedCategory, mergeByServerTime, mergeCategoryAnswers,
+  clearMagazineAutoPrices, slotAllowsCategory, starterSlotScore, explicitCategoryChoice, keepMovedCategory, mergeByServerTime, mergeCategoryAnswers,
   photoIdBlocked, photoIdHardBlocked, photoIdBlockReason, photoIdSuggestion, pricedPhotoCategories,
 } from "../js/logic.js";
 import { SEED_ITEMS } from "../seed-data.mjs";
@@ -383,7 +383,7 @@ test("a migrated seed kit keeps the Range Day loader score", () => {
   assert.equal(starterSlotScore(loaderSlot, loader), 8);
   const migrated = migrateRecordCategories(SEED_ITEMS, "2026-10-27T12:00:00.000Z").records;
   const movedLoader = migrated.find(i => i.id === "loader");
-  assert.equal(movedLoader.category, "Magazines");
+  assert.equal(movedLoader.category, "Ammo Storage & Loaders");
   assert.equal(starterSlotScore(loaderSlot, movedLoader), 8);
   assert.equal(starterSlotScore(ammocanSlot, migrated.find(i => i.id === "ammocan")), 8);
   assert.equal(starterSlotScore(snapSlot, migrated.find(i => i.id === "snapcaps")), 8);
@@ -452,6 +452,42 @@ test("a fresh device applies saved move answers before the old id is renamed", (
   assert.equal(again.records.find(r => r.id === "other").category, "Belts");
   assert.equal(again.records.find(r => r.id === "kept").category, "Armor & Carriers");
   assert.equal(again.records.find(r => r.id === "chosen").category, "Pouches");
+});
+
+test("a wishlist save replaces the saved move and keeps the chosen shelf", () => {
+  const old = { prompt: "belt", action: "move", category: "Armor & Carriers", at: "2026-10-27T12:00:00.000Z" };
+  const stamp = "2026-10-27T18:00:00.000Z";
+  assert.equal(explicitCategoryChoice(null, "Belts & Rigs", "Belts", stamp), null);
+  assert.equal(explicitCategoryChoice(old, "Armor & Carriers", "Armor & Carriers", stamp), null);
+  const choice = explicitCategoryChoice(old, "Armor & Carriers", "Belts", stamp);
+  assert.equal(choice.answer.prompt, "belt");
+  assert.equal(choice.answer.action, "move");
+  assert.equal(choice.answer.category, "Belts");
+  assert.equal(choice.answer.at, stamp);
+  assert.equal(choice.movedAt, stamp);
+  const wish = { id: "rig", name: "Rigger belt", category: "Belts", movedAt: choice.movedAt, updatedAt: stamp };
+  const kept = migrateRecordCategories([wish], "2026-10-27T18:00:00.300Z", { rig: choice.answer });
+  assert.equal(kept.records[0].category, "Belts");
+  assert.equal(kept.records[0].movedAt, stamp);
+  const snapped = migrateRecordCategories(
+    [{ id: "rig", name: "Rigger belt", category: "Belts", updatedAt: stamp }],
+    "2026-10-27T18:00:00.300Z",
+    { rig: old },
+  );
+  assert.equal(snapped.records[0].category, "Armor & Carriers");
+  const cleared = explicitCategoryChoice(
+    { prompt: "magazines", action: "move", category: "Pouches", at: "2026-10-27T12:00:00.000Z" },
+    "Pouches",
+    "Magazines",
+    stamp,
+  );
+  assert.equal(cleared.answer.category, "Magazines");
+  const pouch = migrateRecordCategories(
+    [{ id: "pouch", name: "KYWI", category: "Magazines", movedAt: cleared.movedAt }],
+    "2026-10-27T18:00:00.300Z",
+    { pouch: cleared.answer },
+  );
+  assert.equal(pouch.records[0].category, "Magazines");
 });
 
 test("every checklist slot accepts the old and new ids and scores like main", () => {
