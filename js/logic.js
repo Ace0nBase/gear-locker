@@ -716,6 +716,13 @@ export function signOutConfirmNeeded(settled) {
   return settled === false;
 }
 
+// Spreadsheet apps run a cell that starts with these. A leading apostrophe forces text.
+export function csvCell(value) {
+  let text = String(value ?? "");
+  if (/^[=+\-@\t\r]/.test(text)) text = "'" + text;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
 const ARMORY_ARMS = new Set(["FA", "SU", "OP", "WL", "LA", "KN"]);
 const TOOLISH = /multi.?tool|leatherman|gerber|\bsaw\b|shovel|plier|wrench|screwdriver|sharpener|machete|e-?tool/i;
 
@@ -760,7 +767,7 @@ const GearLogic = {
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
-  countedValue, csvExportField, publicWeightNote, lookupAnswerRestricted, localDay,
+  countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
 };

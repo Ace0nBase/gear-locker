@@ -4,7 +4,7 @@ import {
   clearUserLocal, shareItemFields, decideAccess, chargeDecision, quotaKey, alertQuotaKey,
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
-  saleRestricted, countedValue, csvExportField, publicWeightNote, lookupAnswerRestricted, localDay,
+  saleRestricted, countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   keepSignedIn, firestoreMemoryOnly, settleOrTimeout, signOutConfirmNeeded, SIGN_OUT_WAIT_MS, armorySubject, armoryLookupBlocked, photoIdBlocked,
 } from "../js/logic.js";
 
@@ -354,6 +354,18 @@ test("never send Armory items blocks records and weapon-mounted gear, and photo 
   assert.equal(photoIdBlocked(true, { category: "NVG & Optics", name: "Binoculars" }), false);
   assert.equal(photoIdBlocked(true, { category: "Firearms", name: "Rifle" }), true);
   assert.equal(photoIdBlocked(true, onRifle), true);
+});
+
+test("csv cells neutralize spreadsheet formulas and stay quoted", () => {
+  for (const ch of ["=", "+", "-", "@", "\t", "\r"]) {
+    assert.equal(csvCell(ch + "1+1"), `"'${ch}1+1"`);
+  }
+  assert.equal(csvCell('=say "hi", there'), `"'=say ""hi"", there"`);
+  assert.equal(csvCell("plain"), '"plain"');
+  assert.equal(csvCell("a=b"), '"a=b"');
+  assert.equal(csvCell("a,b\nline"), '"a,b\nline"');
+  assert.equal(csvCell(null), '""');
+  assert.equal(csvCell(12), '"12"');
 });
 
 test("kit merge uses the server stamp and keeps a pending local edit", () => {

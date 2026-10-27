@@ -293,7 +293,7 @@ window.addEventListener("afterprint",()=>{printingKit=false});
 $("csvBtn").onclick=()=>{
   const items=live();if(!items.length){toast("Add some gear first");return}
   const cols=["category","qty","name","brand","color","condition","retailNew","value","paid","weight","setupOn","location","notes","priceSource","priceDate"];
-  const q=v=>`"${String(v??"").replace(/"/g,'""')}"`;
+  const q=v=>GearLogic.csvCell(v);
   const sorted=CATS.flatMap(c=>items.filter(i=>i.category===c).sort((a,b)=>(a.name||"").localeCompare(b.name||"")));
   const csv="﻿"+[["Category","Qty","Item","Brand/Model","Color","Condition","New retail","Value each","Paid each","Weight (oz)","Set up on","Stored","Notes","Price source","Price date"].map(q).join(","),...sorted.map(i=>cols.map(k=>q(GearLogic.csvExportField(i,k))).join(","))].join("\r\n");
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`war-box-inventory-${today()}.csv`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);
