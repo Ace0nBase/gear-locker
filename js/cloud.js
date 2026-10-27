@@ -224,7 +224,7 @@ var APP_VERSION="29";try{document.getElementById("ver").textContent="v"+APP_VERS
 if("serviceWorker" in navigator&&GearLogic.serviceWorkerAllowed(location,window.GEAR_QA)){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const chk=()=>reg.update().catch(()=>{});document.addEventListener("visibilitychange",()=>{if(!document.hidden)chk()});setInterval(chk,20*60e3);chk()}).catch(()=>{});
-  navigator.serviceWorker.addEventListener("controllerchange",()=>{if(!hadSW||reloading)return;reloading=true;if(!anySheetOpen())location.reload();else toast("Gear Locker updated. Close and reopen to finish.",6000)});
+  navigator.serviceWorker.addEventListener("controllerchange",()=>{if(!hadSW||reloading)return;reloading=true;if(!anySheetOpen())location.reload();else toast("War Box updated. Close and reopen to finish.",6000)});
 }
 
 /* ---------- item detail ---------- */

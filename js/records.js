@@ -243,7 +243,7 @@ RENDER.loans=()=>{
     fld("itemId","Item",d.itemId,{type:"select",span:2,opts:[[ "",itemBlank ],...avail.map(i=>[i.id,i.name])]})+fld("borrower","Borrowed by",d.borrower,{req:1,ph:"Name"})+fld("contact","Contact",d.contact,{ph:"Phone or email"})+
     fld("out","Lent on",d.out,{type:"date"})+fld("due","Due back",d.due,{type:"date"})+fld("returned","Returned on",d.returned,{type:"date"})+fld("cond","Condition when lent",d.cond,{ph:"Good, no marks"})+fld("notes","Notes",d.notes,{span:4})):"";
   const nm=x=>esc(itemById(x.itemId)?.name||x.itemName||"(deleted item)");
-  $("loansView").innerHTML=`<div class="vhead"><div><h2>Loans</h2><p>Who has your gear and when it's due back. Add a friend's Gear Locker email and the loan shows up in their app too.</p></div><button class="btn" type="button" data-act="new">+ Lend item</button></div>
+  $("loansView").innerHTML=`<div class="vhead"><div><h2>Loans</h2><p>Who has your gear and when it's due back. Add a friend's War Box email and the loan shows up in their app too.</p></div><button class="btn" type="button" data-act="new">+ Lend item</button></div>
   ${form}
   ${out.length?`<div class="slotsHead">Out now <span>${out.length}</span></div><div class="scroll"><table class="tbl"><thead><tr><th>Item</th><th>Borrowed by</th><th>Lent</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>${out.map(x=>{const over=x.due&&x.due<today();return `<tr class="click" data-act="edit" data-id="${esc(x.id)}"><td><b>${nm(x)}</b></td><td>${esc(x.borrower)}${x.contact?`<small>${esc(x.contact)}</small>`:""}</td><td>${esc(fmtDate(x.out))}</td><td>${esc(fmtDate(x.due))}</td><td>${over?`<span class="pill gap">Overdue</span>`:`<span class="pill warn">Out</span>`}</td><td><button class="btn ghost" type="button" data-act="returned" data-id="${esc(x.id)}">Returned</button></td></tr>`}).join("")}</tbody></table></div>`
   :`<div class="empty"><b>Nothing on loan</b>When you lend something out, click <em>+ Lend item</em> so you know who has it.</div>`}
@@ -258,7 +258,7 @@ DEL.loans=async d=>{await removeC("loans",d.id)};
 ACT.loans=async(act,b)=>{if(act==="returned"){const x=L("loans").find(y=>y.id===b.dataset.id);if(!x)return;await upsertC("loans",{...x,returned:today()});toast("Marked returned");render()}};
 
 /* ---------- tabs ---------- */
-var TABS=[["inv","Inventory"],["arms","Arms Room"],["kits","Kits"],["range","Range Log"],["dope","DOPE"],["ammo","Ammo"],["comms","Comms"],["maint","Maintenance"],["wish","Wishlist"],["loans","Loans"]];
+var TABS=[["inv","Inventory"],["arms","Armory"],["kits","Kits"],["range","Range Log"],["dope","DOPE"],["ammo","Ammo"],["comms","Comms"],["maint","Maintenance"],["wish","Wishlist"],["loans","Loans"]];
 var viewId=k=>k==="kits"?"kitView":k+"View";
 var curTab="inv";
 function badgeFor(k){
@@ -272,6 +272,7 @@ function updateBadges(){var el=$("tabs");if(!el)return;var x=el.scrollLeft;el.in
 $("tabs").onclick=e=>{const b=e.target.closest("[data-tab]");if(b)showTab(b.dataset.tab)};
 function afterRender(){document.body.classList.toggle("nolookups",!lookupsOn());updateBadges();if(curTab==="arms")renderArms();else if(curTab==="kits")renderKits();else if(COLOF[curTab])renderExtra()}
 function showTab(k){
+  if(k==="armory")k="arms";
   if(!TABS.some(t=>t[0]===k))k="inv";
   curTab=k;TABS.forEach(([t])=>{$(viewId(t)).hidden=t!==k});
   ["printBtn","csvBtn","addBtn"].forEach(id=>$(id).hidden=k!=="inv");

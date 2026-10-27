@@ -8,7 +8,7 @@ all.forEach(i=>{try{delete i._kinds}catch{}});
 var ammoName=a=>[a.caliber,a.brand,a.load].filter(Boolean).join(" ");
 {const _r=RENDER.ammo;RENDER.ammo=()=>{_r();const v=$("ammoView");const recs=L("ammo");
   const st=v.querySelector(".stats");if(st){const paidStat=[...st.querySelectorAll(".stat")].find(s=>/Ammo value/.test(s.textContent));if(paidStat)paidStat.querySelector("span").textContent="What I paid"}
-  const head=v.querySelector(".vhead > div");head?.insertAdjacentHTML("beforeend",`<p class="hint" style="margin:4px 0 0">Ammo stays out of your inventory total. Cost per round is what you paid for that line. Gear Locker does not look up ammo prices or stores.</p>`);
+  const head=v.querySelector(".vhead > div");head?.insertAdjacentHTML("beforeend",`<p class="hint" style="margin:4px 0 0">Ammo stays out of your inventory total. Cost per round is what you paid for that line. War Box does not look up ammo prices or stores.</p>`);
   if(!recs.length)return;
   const cards=recs.slice().sort((a,b)=>(a.caliber||"").localeCompare(b.caliber||"")).map(a=>{const paid=+a.cpr&&+a.rounds?(+a.cpr)*(+a.rounds):0;
     return `<div class="ammoP"><div class="apTop"><b>${esc(ammoName(a)||"Ammo")}</b><small>${(+a.rounds||0).toLocaleString()} rds${a.location?" · "+esc(a.location):""}</small></div>
@@ -150,7 +150,7 @@ ACT.comms=async(act,b,e)=>{
     for(const g of picks)for(const [nm,fr,svc,note] of COMMON[g]){if(have.has(mhz(fr)))continue;await upsertC("freqs",{name:nm,short:nm,rx:mhz(fr),duplex:TX_OK(svc)?"":"off",mode:svc==="Ham"||svc==="NOAA weather"||svc==="Marine"?"FM":"NFM",power:"High",service:svc,group:g,notes:note||""});n++}
     toast(n?`Added ${n} channels`:"You already have those");render();return}
   if(act==="cexport"){const rid=b.dataset.r;const r=rid&&itemById(rid);const list=freqsSorted().filter(f=>!rid||(f.radios||{})[rid]);if(!list.length){toast("No frequencies to export");return}
-    const cs=commsSet();const name=`${(r?r.name:"gear-locker-freqs").replace(/[^\w\-]+/g,"_")}_${today()}.csv`;await saveFile(name,chirpCsv(list,+cs.start||0),"text/csv");toast(`Exported ${list.length} channel${list.length>1?"s":""} for CHIRP`,4000);return}
+    const cs=commsSet();const name=`${(r?r.name:"war-box-freqs").replace(/[^\w\-]+/g,"_")}_${today()}.csv`;await saveFile(name,chirpCsv(list,+cs.start||0),"text/csv");toast(`Exported ${list.length} channel${list.length>1?"s":""} for CHIRP`,4000);return}
   if(act==="cprint"){printFreqs();return}
   if(act==="pnew"){paceEd={};renderExtra();return}
   if(act==="pedit"){const p=L("pace").find(x=>x.id===b.dataset.id);if(p){paceEd=JSON.parse(JSON.stringify(p));renderExtra()}return}

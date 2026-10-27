@@ -6,13 +6,17 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://www.gstatic.com https://www.google.com; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://gear-locker-api.ace0nbase.workers.dev https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://www.google.com https://www.gstatic.com https://*.firebaseapp.com http://127.0.0.1:8787 http://127.0.0.1:8080 http://127.0.0.1:9099 http://127.0.0.1:9199 http://localhost:8787 http://localhost:8080 http://localhost:9099 http://localhost:9199 ws://127.0.0.1:8080 ws://localhost:8080; frame-src https://www.google.com https://www.recaptcha.net https://*.firebaseapp.com; worker-src 'self'; manifest-src 'self'; form-action 'self'">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Gear Locker</title>
-<link rel="icon" href="icon-192.png">
+<title>War Box</title>
+<meta name="application-name" content="War Box">
+<meta name="description" content="War Box is a private inventory for the gear you already own.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="favicon-16.png" sizes="16x16" type="image/png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Gear Locker">
+<meta name="apple-mobile-web-app-title" content="War Box">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#4a572e">
 <link rel="stylesheet" href="css/app.css">
@@ -20,7 +24,7 @@
 <body>
 <div class="gate" id="gate" hidden>
   <form id="gateForm" autocomplete="on">
-    <h1>Gear Locker</h1>
+    <h1>War Box</h1>
     <p id="gateMsg">Sign in to open your locker.</p>
     <div id="gateFields" hidden>
     <div class="f"><label for="gEmail">Email</label><input id="gEmail" type="email" autocomplete="username" required></div>
@@ -38,7 +42,7 @@
 <div class="wrap">
   <header>
     <div>
-      <h1>Gear Locker</h1>
+      <h1>War Box</h1>
       <div class="sub" id="sub">KIT INVENTORY</div>
       <div class="acct" id="acct" hidden><span class="sync" id="syncDot"></span><span id="acctTxt"></span><button type="button" id="signOut">Sign out</button><span class="ver" id="ver"></span><span class="ver" id="keepLive" hidden>Online only on this device</span></div>
     </div>
@@ -52,7 +56,7 @@
   <nav class="tabs" id="tabs" role="tablist"></nav>
 
   <div class="banner" id="connect" hidden>
-    <p id="connectMsg">Choose where Gear Locker saves your gear. Pick the <b>Gear Locker</b> folder (Desktop › FOLDERS › Gear Locker). Market checks read and update the file there.</p>
+    <p id="connectMsg">Choose where War Box saves your gear. Pick the <b>War Box</b> folder (Desktop › FOLDERS › War Box). Market checks read and update the file there.</p>
     <span class="vbtns"><button class="btn" id="connectBtn" type="button">Choose folder</button><button class="later" id="connectLater" type="button">Not now</button></span>
   </div>
 
@@ -116,7 +120,7 @@
     <div class="f span2 nogun"><label for="fGun">Goes with firearm</label><select id="fGun"></select></div>
     <div class="f fire"><label for="fCal">Caliber</label><input id="fCal" list="calibers" placeholder="5.56 NATO"></div>
     <div class="f fire"><label for="fBase">Rounds fired before tracking</label><input id="fBase" type="number" min="0" step="1" placeholder="0"></div>
-    <div class="f span2"><label for="fArm">Serial record (Arms Room)</label><select id="fArm"><option value="no">Not on the record</option><option value="FA">Firearm</option><option value="SU">Suppressor</option><option value="OP">Optic / sight</option><option value="WL">Weapon light</option><option value="LA">Laser / NVG / thermal</option><option value="KN">Knife</option></select></div>
+    <div class="f span2"><label for="fArm">Serial record (Armory)</label><select id="fArm"><option value="no">Not on the record</option><option value="FA">Firearm</option><option value="SU">Suppressor</option><option value="OP">Optic / sight</option><option value="WL">Weapon light</option><option value="LA">Laser / NVG / thermal</option><option value="KN">Knife</option></select></div>
     <div class="f rec" data-recs="FA SU OP WL LA"><label for="fSerial">Serial number</label><input id="fSerial" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Exactly as stamped"></div>
     <div class="f rec"><label for="fArmId">Record ID</label><input id="fArmId" autocapitalize="characters" placeholder="Auto"></div>
     <div class="f rec"><label for="fArmType" id="fArmTypeL">Type</label><input id="fArmType" placeholder="Rifle, pistol, RD, 1-6x…"></div>

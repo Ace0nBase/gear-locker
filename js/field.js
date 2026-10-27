@@ -110,7 +110,7 @@ $("battSheet").addEventListener("click",async e=>{const b=e.target.closest("[dat
   const i=b?.dataset?.id&&all.find(x=>x.id===b.dataset.id&&!x.deleted);
   if(act==="battnow"&&i){i.battChanged=today();if(!i.battType){const g=battGuess(i);if(g){i.battType=g.type;i.battCount=g.count}}i.updatedAt=now();await persist();toast(`${i.name}: logged`);renderExtra();updateBadges();return}
   if(act==="battedit"&&i){battEdit=i.id;renderBattSheet();return}
-  if(act==="battlook"&&i){if(GearLogic.armoryLookupBlocked(!!kits._settings?.privateArms,GearLogic.armorySubject(i,i.mountedOn&&itemById(i.mountedOn)))){toast("Battery lookup skips Arms Room items.");renderExtra();return}b.disabled=true;b.textContent="Looking…";try{const j=await apiPost("/battery",{name:i.name,brand:i.brand||"",category:i.category||"",type:i.armType||""});const r=j.result||{};
+  if(act==="battlook"&&i){if(GearLogic.armoryLookupBlocked(!!kits._settings?.privateArms,GearLogic.armorySubject(i,i.mountedOn&&itemById(i.mountedOn)))){toast("Battery lookup skips Armory items.");renderExtra();return}b.disabled=true;b.textContent="Looking…";try{const j=await apiPost("/battery",{name:i.name,brand:i.brand||"",category:i.category||"",type:i.armType||""});const r=j.result||{};
       if(r.none){i.battNone=true;toast(`${i.name} doesn't use batteries`)}else{if(r.battery)i.battType=r.battery;if(+r.count)i.battCount=+r.count;if(+r.swapMonths)i.battMonths=+r.swapMonths;if(r.life)i.battLife=r.life;toast(`${i.name}: ${r.count||1}× ${r.battery||"?"}, change every ${r.swapMonths||"?"} months`,5000)}
       i.battLooked=true;i.updatedAt=now();await persist()}catch(err){toast("Battery lookup: "+err.message,5000)}renderExtra();return}
   return _am?_am(act,b):undefined}}
@@ -196,7 +196,7 @@ async function micOn(){
       sp.onaudioprocess=ev=>{const c=ev.inputBuffer.getChannelData(0);const t0=TM.ctx.currentTime-c.length/TM.ctx.sampleRate;const th=dbToLin(TM.set.th);for(let i=0;i<c.length;i++){const v=Math.abs(c[i]);if(v>pk)pk=v;const t=t0+i/TM.ctx.sampleRate;if(v>=th&&t>=arm&&!(t>=TM.fb.mf&&t<=TM.fb.mt)&&t-last>TM.set.hold){last=t;onDet({shot:t,lvl:v})}}n+=c.length;if(n>=TM.ctx.sampleRate*0.04){onDet({peak:pk});pk=0;n=0}};
       TM.node=sp;sp.connect(TM.ctx.destination)}
     TM.src.connect(TM.node);pushTm();return true;
-  }catch(err){toast(err.name==="NotAllowedError"?"Allow microphone access for Gear Locker in Settings to use the timer":"Mic error: "+err.message,6000);return false}
+  }catch(err){toast(err.name==="NotAllowedError"?"Allow microphone access for War Box in Settings to use the timer":"Mic error: "+err.message,6000);return false}
 }
 function micOff(){try{TM.stream?.getTracks().forEach(t=>t.stop())}catch{}try{TM.ctx?.close()}catch{}TM.ctx=TM.stream=TM.node=TM.src=null;try{TM.wake?.release()}catch{}TM.wake=null}
 function pushTm(m){const msg={th:dbToLin(TM.set.th),hold:TM.set.hold,...(m||{})};if(TM.useWorklet)TM.node?.port.postMessage(msg);else TM.fb?.set(msg)}

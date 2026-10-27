@@ -1,4 +1,4 @@
-/* ---------- Arms Room: serial records ---------- */
+/* ---------- Armory: serial records ---------- */
 var ARM={
   FA:{label:"Firearms",one:"Firearm",cat:"Firearms",type:"Type / action"},
   SU:{label:"Suppressors",one:"Suppressor",cat:"Suppressors",type:"Caliber rating"},
@@ -27,7 +27,7 @@ function renderArms(){
   const secs=ARM_KEYS.map(k=>({k,rows:armRows(k)}));
   const n=secs.reduce((a,s)=>a+s.rows.length,0),val=secs.reduce((a,s)=>a+s.rows.reduce((b,i)=>b+GearLogic.countedValue(i)*(+i.qty||1),0),0);
   const noSer=secs.reduce((a,s)=>a+s.rows.filter(i=>!i.serial&&s.k!=="KN").length,0);
-  v.innerHTML=`<div class="vhead"><div><h2>Arms Room</h2><p>Serial numbers and records for your guns, suppressors, optics, lights, lasers and knives, for insurance and theft reports. Only you can see this when signed in.</p></div>
+  v.innerHTML=`<div class="vhead"><div><h2>Armory</h2><p>Serial numbers and records for your guns, suppressors, optics, lights, lasers and knives, for insurance and theft reports. Only you can see this when signed in.</p></div>
     <div class="vbtns"><button class="btn ghost" type="button" data-arm="ser">${showSer?"Hide serials":"Show serials"}</button><button class="btn ghost" type="button" data-arm="import">Import record</button><button class="btn ghost" type="button" data-arm="print">Print record</button><button class="btn" type="button" data-arm="new" id="armAdd">+ Add</button></div></div>
   <section class="stats armsStats"><div class="stat"><b>${noSer}</b><span>Missing serial</span></div><div class="stat"><b>${n}</b><span>On record</span></div><div class="stat"><b>${money(val)}</b><span>Value</span></div><div class="stat"><b>${(()=>{const pd=secs.reduce((a,s)=>a+s.rows.reduce((b,i)=>b+(+i.paid||0)*(+i.qty||1),0),0);return pd?money(pd):"—"})()}</b><span>What I paid</span></div></section>
   ${n?secs.filter(s=>s.rows.length).map(s=>{const sv=s.rows.reduce((b,i)=>b+GearLogic.countedValue(i)*(+i.qty||1),0);
@@ -170,7 +170,7 @@ async function doImport(){
     }
   });
   p.rows.forEach(r=>{if(!r.gun||!r.id)return;const it=all.find(i=>i.id===r.id);const gid=idMap[r.gun]||r.gun;if(it&&gid&&gid!==it.id){it.mountedOn=gid;it.updatedAt=t}});
-  const n=p.rows.length;armImport=null;render();renderArms();await persist();toast(`Imported ${n} items into the Arms Room`,4000);
+  const n=p.rows.length;armImport=null;render();renderArms();await persist();toast(`Imported ${n} items into the Armory`,4000);
 }
 $("armsView").addEventListener("click",async e=>{
   const row=e.target.closest(".armRow[data-id]");if(row){openDetail(all.find(i=>i.id===row.dataset.id));return}
@@ -317,11 +317,11 @@ $("swapSheet").addEventListener("click",async e=>{
 
 /* identify unknown gear from a photo */
 function shrinkImage(file,max=1024){return new Promise((res,rej)=>{const img=new Image();img.onload=()=>{const s=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement("canvas");c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);c.getContext("2d").drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(img.src);res(c.toDataURL("image/jpeg",0.82).split(",")[1])};img.onerror=()=>rej(new Error("Couldn't open that photo"));img.src=URL.createObjectURL(file)})}
-$("idBtn").onclick=()=>{const draft=photoDraft();if(GearLogic.photoIdBlocked(!!kits._settings?.privateArms,draft)){toast(String(draft.category||"").trim()? "Photo ID stays off for Arms Room items.":"Choose a category before photo ID.");return}if(!window.LOOKUP_URL||!cloudUser){toast("Sign in to use photo ID");return}$("idFile").click()};
+$("idBtn").onclick=()=>{const draft=photoDraft();if(GearLogic.photoIdBlocked(!!kits._settings?.privateArms,draft)){toast(String(draft.category||"").trim()?"Photo ID stays off for Armory items.":"Choose a category before photo ID.");return}if(!window.LOOKUP_URL||!cloudUser){toast("Sign in to use photo ID");return}$("idFile").click()};
 $("idFile").addEventListener("change",async e=>{
   const f=e.target.files[0];e.target.value="";if(!f)return;
   const draft=photoDraft();
-  if(GearLogic.photoIdBlocked(!!kits._settings?.privateArms,draft)){toast(String(draft.category||"").trim()?"Photo ID stays off for Arms Room items.":"Choose a category before photo ID.");return}
+  if(GearLogic.photoIdBlocked(!!kits._settings?.privateArms,draft)){toast(String(draft.category||"").trim()?"Photo ID stays off for Armory items.":"Choose a category before photo ID.");return}
   const out=$("idOut");out.hidden=false;out.innerHTML=`<span class="tag">Looking at your photo…</span>`;$("idBtn").disabled=true;
   try{
     const img=await shrinkImage(f);const tok=await firebase.auth().currentUser.getIdToken();
@@ -380,7 +380,7 @@ async function publishShare(){
   try{await fsdb.collection("shares").doc(sid).set(doc)}catch(e){toast("Couldn't create the link: "+(e.code==="permission-denied"?"sharing isn't switched on yet":e.message),6000);return}
   kits={...kits,_shares:{...(kits._shares||{}),[s.kind+":"+s.id]:sid}};await persist();
   s.sid=sid;s.link=shareUrl(sid);renderShare();
-  try{if(navigator.share){await navigator.share({title:s.title+" · Gear Locker",text:`${s.from?s.from+"'s ":""}${s.title}`,url:s.link});return}}catch(e){if(e.name==="AbortError")return}
+  try{if(navigator.share){await navigator.share({title:s.title+" · War Box",text:`${s.from?s.from+"'s ":""}${s.title}`,url:s.link});return}}catch(e){if(e.name==="AbortError")return}
   try{await navigator.clipboard.writeText(s.link);toast("Link copied. Paste it in a text.")}catch{$("shLink")?.select();toast("Copy the link and send it")}
 }
 $("shareSheet").addEventListener("click",async e=>{
@@ -406,11 +406,11 @@ async function showSharedPage(){
     const val=items.reduce((a,i)=>a+(+i.value||0)*(+i.qty||1),0),paid=items.reduce((a,i)=>a+(+i.paid||0)*(+i.qty||1),0);
     const line=(i,depth)=>`<div class="shItem" style="margin-left:${Math.min(depth,4)*18}px">${depth?`<span class="shOn">on ${esc(items.find(x=>x.id===i.parent)?.name||"")}</span>`:""}<b>${i.qty>1?i.qty+"× ":""}${esc(i.name)}${i.nick?` <span class="tag">${esc(i.nick)}</span>`:""}</b><small>${esc([i.brand,i.color,i.caliber,i.weight!=null?fmtWt(i.weight):"",d.prices&&i.value?"worth "+money(i.value):"",d.prices&&i.paid?"paid "+money(i.paid):""].filter(Boolean).join(" · "))}</small></div>`+kids(i.id).map(k=>line(k,depth+1)).join("");
     const roots=items.filter(i=>!i.parent||!items.some(x=>x.id===i.parent));
-    v.innerHTML=`<header><div><div class="sub">GEAR LOCKER · SHARED${d.from?" BY "+esc(d.from.toUpperCase()):""}</div><h1>${esc(d.title||"Gear")}</h1></div></header>
+    v.innerHTML=`<header><div><div class="sub">WAR BOX · SHARED${d.from?" BY "+esc(d.from.toUpperCase()):""}</div><h1>${esc(d.title||"Gear")}</h1></div></header>
      <section class="stats"><div class="stat"><b>${items.length}</b><span>Items</span></div><div class="stat"><b>${wt?fmtWt(wt):"—"}</b><span>Weight${wn<items.length&&wt?` (${wn}/${items.length})`:""}</span></div>${d.prices?`<div class="stat"><b>${money(val)}</b><span>Value</span></div><div class="stat"><b>${paid?money(paid):"—"}</b><span>Paid</span></div>`:""}</section>
      <div class="shList">${roots.map(r=>line(r,0)).join("")}</div>
-     <p class="hint" style="margin-top:28px">Updated ${esc(new Date(d.updatedAt||Date.now()).toLocaleDateString())}. <a href="${esc(location.pathname)}">Make your own Gear Locker</a></p>`;
-    document.title=(d.title||"Gear")+" · Gear Locker";
+     <p class="hint" style="margin-top:28px">Updated ${esc(new Date(d.updatedAt||Date.now()).toLocaleDateString())}. <a href="${esc(location.pathname)}">Make your own War Box</a></p>`;
+    document.title=(d.title||"Gear")+" · War Box";
   }catch(e){v.innerHTML=`<div class="empty"><b>Can't open this link</b>${esc(e.code==="permission-denied"?"This link was turned off or doesn't exist.":e.message||"")}</div>`}
 }
 

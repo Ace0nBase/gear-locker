@@ -1,4 +1,4 @@
-// Gear Locker offline cache: keeps the app itself available with no signal. Your gear data syncs separately through Firebase.
+// Offline cache: keeps the app itself available with no signal. Your gear data syncs separately through Firebase.
 const CACHE = "gear-locker-v29";
 const SHELL = [
   "./",
@@ -22,8 +22,12 @@ const SHELL = [
   "./js/comms.js",
   "./icon-192.png",
   "./icon-512.png",
-  "./icon-maskable-512.png",
+  "./maskable-192.png",
+  "./maskable-512.png",
   "./apple-touch-icon.png",
+  "./favicon.svg",
+  "./favicon-32.png",
+  "./favicon-16.png",
 ];
 self.addEventListener("install", e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).catch(() => {})); });
 self.addEventListener("activate", e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));

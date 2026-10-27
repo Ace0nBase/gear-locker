@@ -312,7 +312,7 @@ test("keep-signed-in off uses a memory cache and sign-out confirms only when a s
   assert.equal(await settleOrTimeout(Promise.reject(new Error("failed")), 50), false);
 });
 
-test("never send arms room items blocks records and weapon-mounted gear, and photo ID waits for a category", () => {
+test("never send Armory items blocks records and weapon-mounted gear, and photo ID waits for a category", () => {
   assert.equal(armoryLookupBlocked(false, { category: "Firearms", name: "Rifle" }), false);
   assert.equal(armoryLookupBlocked(true, { category: "Firearms", name: "Rifle" }), true);
   assert.equal(armoryLookupBlocked(true, { category: "Firearms", arm: "no", name: "Rifle" }), true);

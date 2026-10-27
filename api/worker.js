@@ -1,4 +1,4 @@
-// Gear Locker lookup API (Cloudflare Worker).
+// Lookup API (Cloudflare Worker).
 // POST /lookup  { items: [{ id, name, brand, category, condition, color, notes, kind? }] }
 // Header: Authorization: Bearer <Firebase ID token from the signed-in app user>
 // Returns { results: [{ id, ok, retailNew, usedLow, usedHigh, value, weightOz, priceNote, weightNote, sources }] }

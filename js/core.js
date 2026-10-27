@@ -46,7 +46,7 @@ async function writeFile(){
   if(disk){all=merge(all,disk.items);kits=mergeKits(kits,disk.kits);COLS.forEach(c=>db[c]=merge(db[c],disk.db[c]))}
   const fh=await dir.getFileHandle(FILE,{create:true});
   const w=await fh.createWritable();
-  await w.write(JSON.stringify({app:"Gear Locker",version:1,savedAt:now(),items:all,kits,...db},null,2));
+  await w.write(JSON.stringify({app:"War Box",version:1,savedAt:now(),items:all,kits,...db},null,2));
   await w.close();
 }
 async function syncFromDisk(){
@@ -59,24 +59,25 @@ async function persist(){
   try{await pushCloudSoon()}catch{}
   if(!dir){$("status").textContent=cloudUser?"":"Saved on this device only.";return}
   try{await writeFile();mirror();$("status").textContent=`Saved to ${dir.name}\\${FILE} · ${new Date().toLocaleTimeString()}`}
-  catch{$("status").textContent="Couldn't write to the Gear Locker folder. Click Choose folder to reconnect.";showConnect(true)}
+  catch{$("status").textContent="Couldn't write to the save folder. Click Choose folder to reconnect.";showConnect(true)}
 }
 function showConnect(reconnect){if(window.FIREBASE_CONFIG)return;
   if(!window.showDirectoryPicker)return;
   try{if(!reconnect&&localStorage.getItem("gearLocker.noFolder")==="1")return}catch{}
   $("connect").hidden=false;
   $("connectBtn").textContent=reconnect?"Reconnect folder":"Choose folder";
-  $("connectMsg").innerHTML=reconnect?"Gear Locker needs your OK to open its save file in <b>Gear Locker</b> again. Click Reconnect folder.":"Optional: keep a backup file of your locker in a folder on this computer. On the PC that runs the price and weight lookups, pick the <b>Gear Locker</b> folder.";
+  $("connectMsg").innerHTML=reconnect?"War Box needs your OK to open its save file in the <b>War Box</b> folder again. Click Reconnect folder.":"Optional: keep a backup file of your gear in a folder on this computer. On the PC that runs the price and weight lookups, pick the <b>War Box</b> folder.";
 }
 $("connectLater").onclick=()=>{try{localStorage.setItem("gearLocker.noFolder","1")}catch{};$("connect").hidden=true};
 $("connectBtn").onclick=async()=>{
   try{
     let h=await kv("get","dir").catch(()=>null);
     if(h&&(await h.requestPermission({mode:"readwrite"}))==="granted"){dir=h}
-    else{ if(!window.showDirectoryPicker){$("connectMsg").textContent="This browser can't save to a folder. Open Gear Locker with the desktop shortcut (it uses Microsoft Edge).";return}
+    else{ if(!window.showDirectoryPicker){$("connectMsg").textContent="This browser can't save to a folder. Open War Box with the desktop shortcut (it uses Microsoft Edge).";return}
       dir=await window.showDirectoryPicker({id:"gearlocker",mode:"readwrite"}); await kv("put","dir",dir); }
     $("connect").hidden=true;
-    if(dir.name==="Gear Locker")kits={...kits,_settings:{...(kits._settings||{}),lookups:true,updatedAt:now()}};
+    // A folder saved under the previous name still turns lookups on. The picker id above stays so the browser keeps that permission.
+    if(dir.name==="War Box"||dir.name==="Gear Locker")kits={...kits,_settings:{...(kits._settings||{}),lookups:true,updatedAt:now()}};
     await syncFromDisk(); await persist(); render();
     toast("Connected to "+dir.name);
   }catch(e){if(e?.name!=="AbortError")toast("Couldn't open that folder. Try again.")}
@@ -275,7 +276,7 @@ $("bulkMktBtn").onclick=async()=>{
 /* ---------- print + export ---------- */
 function buildPrint(){
   const items=live(),totQty=items.reduce((a,i)=>a+(+i.qty||0),0),totVal=items.reduce((a,i)=>a+(+i.qty||0)*GearLogic.countedValue(i),0);
-  let h=`<div class="ph"><div><h1>GEAR LOCKER — INVENTORY</h1><small>Printed ${new Date().toLocaleDateString()} · ${items.length} line items · ${totQty} pieces · Value ${money(totVal)}</small></div><small>PRIVATE — PERSONAL PROPERTY RECORD</small></div>`;
+  let h=`<div class="ph"><div><h1>WAR BOX — INVENTORY</h1><small>Printed ${new Date().toLocaleDateString()} · ${items.length} line items · ${totQty} pieces · Value ${money(totVal)}</small></div><small>PRIVATE — PERSONAL PROPERTY RECORD</small></div>`;
   CATS.forEach(c=>{const g=items.filter(i=>i.category===c).sort((a,b)=>(a.name||"").localeCompare(b.name||""));if(!g.length)return;
     const gq=g.reduce((a,i)=>a+(+i.qty||0),0),gv=g.reduce((a,i)=>a+(+i.qty||0)*GearLogic.countedValue(i),0);
     h+=`<table><thead><tr class="cat"><th colspan="9">${esc(c.toUpperCase())} — ${gq} pcs${gv?" · "+money(gv):""}</th></tr><tr><th>✓</th><th>Qty</th><th>Item</th><th>Brand / model</th><th>Color</th><th>Set up on</th><th>Stored</th><th>Cond.</th><th class="r">Value</th></tr></thead><tbody>`+
@@ -293,7 +294,7 @@ $("csvBtn").onclick=()=>{
   const q=v=>`"${String(v??"").replace(/"/g,'""')}"`;
   const sorted=CATS.flatMap(c=>items.filter(i=>i.category===c).sort((a,b)=>(a.name||"").localeCompare(b.name||"")));
   const csv="﻿"+[["Category","Qty","Item","Brand/Model","Color","Condition","New retail","Value each","Paid each","Weight (oz)","Set up on","Stored","Notes","Price source","Price date"].map(q).join(","),...sorted.map(i=>cols.map(k=>q(GearLogic.csvExportField(i,k))).join(","))].join("\r\n");
-  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`gear-inventory-${today()}.csv`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`war-box-inventory-${today()}.csv`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);
 };
 
 /* ---------- kits ---------- */

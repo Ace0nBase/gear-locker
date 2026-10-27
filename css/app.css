@@ -1,7 +1,7 @@
 /* Layout: equipment manifest — summary strip, add/edit drawer, then items grouped by category like a packing list */
 :root{
   --bg:#f3f2ec; --surface:#fbfaf6; --ink:#24271f; --muted:#6a6d5f; --line:#d9d7cb;
-  --accent:#5b6b3a; --accent-ink:#fbfaf6; --coyote:#9a7b4f; --chip:#e8e6da; --danger:#a23b2c; --warn-bg:#efe6cf;
+  --accent:#A8865A; --accent-ink:#1F1F1C; --coyote:#9a7b4f; --chip:#e8e6da; --danger:#a23b2c; --warn-bg:#efe6cf;
   --display:"Bahnschrift","Arial Narrow",Arial,sans-serif;
   --body:"Segoe UI",system-ui,-apple-system,sans-serif;
   --mono:Consolas,"Cascadia Mono",ui-monospace,monospace;
@@ -9,7 +9,7 @@
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#171915; --surface:#20231d; --ink:#e7e6dc; --muted:#9a9d8c; --line:#343829;
-  --accent:#9db06a; --accent-ink:#171915; --coyote:#c9a674; --chip:#2b2f25; --danger:#e07a68; --warn-bg:#2f2b1f; color-scheme:dark}}
+  --accent:#BC9A6C; --accent-ink:#171915; --coyote:#c9a674; --chip:#2b2f25; --danger:#e07a68; --warn-bg:#2f2b1f; color-scheme:dark}}
 *{box-sizing:border-box}
 html,body{margin:0}
 body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.45}
