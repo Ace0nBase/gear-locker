@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
-  GEAR_CATEGORIES, LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, PRICE_BACKSTOP,
+  GEAR_CATEGORIES, LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, MAGAZINES_CATEGORY, LEGACY_MAGAZINES_CATEGORY, PRICE_BACKSTOP,
   saleRestricted, migrateCategoryName, migrateRecordCategories,
   settleLookup, settleDeal, keepManualPrice, stampManualPrices, countedValue, csvExportField, applyMarketPrices,
   magShelfPending, answerMagShelf,
@@ -15,8 +15,8 @@ const priced = {
   sources: [{ label: "Shelf", url: "https://example.com/item" }],
 };
 
-test("Magazines & Belts and Triggers & Parts are weight-only, and the item name is not used", () => {
-  for (const category of ["Magazines & Belts", "magazines & belts", "Triggers & Parts", "TRIGGERS & PARTS"]) {
+test("Magazines and Triggers & Parts are weight-only, and the item name is not used", () => {
+  for (const category of ["Magazines", "magazines", "Magazines & Belts", "magazines & belts", "Triggers & Parts", "TRIGGERS & PARTS"]) {
     const item = { category, name: "Garden clip", brand: "Acme", paid: 18 };
     assert.equal(saleRestricted(item), true, category);
     const settled = settleLookup(item, priced);
@@ -36,11 +36,16 @@ test("Magazines & Belts and Triggers & Parts are weight-only, and the item name 
   assert.equal(saleRestricted({ category: "Misc", name: "auto sear" }), false);
   assert.equal(saleRestricted({ category: "Pouches", name: "30 round magazine" }), false);
   assert.equal(saleRestricted({ category: "Belts & Rigs", name: "belt" }), false);
+  assert.equal(saleRestricted({ category: "Belts & Rigs", name: "duty belt" }), false);
+  assert.equal(saleRestricted({ category: "Belts & Rigs", name: "battle belt" }), false);
+  assert.equal(saleRestricted({ category: "Belts & Rigs", name: "rigger's belt" }), false);
+  assert.equal(saleRestricted({ category: "Belts & Rigs", name: "linked ammunition belt" }), false);
+  assert.equal(saleRestricted({ category: "Ammunition", name: "linked belt" }), true);
   assert.equal(saleRestricted({ category: "Knives & Tools", name: "trigger" }), false);
 });
 
 test("a typed price and what I paid stay on a weight-only shelf", () => {
-  for (const category of ["Magazines & Belts", "Triggers & Parts", "Firearms"]) {
+  for (const category of ["Magazines", "Magazines & Belts", "Triggers & Parts", "Firearms"]) {
     const typed = keepManualPrice({
       category, name: "Box", paid: 42, condition: "Good",
       retailNew: 80, value: 70, priceSource: "manual", valueSource: "manual", link: "https://example.com/buy",
@@ -115,6 +120,40 @@ test("the old storage category string migrates and keeps its other fields", () =
   assert.equal(again.records, out.records);
 });
 
+test("Magazines & Belts renames in place and keeps what was paid", () => {
+  assert.equal(MAGAZINES_CATEGORY, "Magazines");
+  assert.equal(LEGACY_MAGAZINES_CATEGORY, "Magazines & Belts");
+  assert.equal(migrateCategoryName(LEGACY_MAGAZINES_CATEGORY), MAGAZINES_CATEGORY);
+  assert.equal(migrateCategoryName(" magazines & belts "), MAGAZINES_CATEGORY);
+  assert.equal(migrateCategoryName(MAGAZINES_CATEGORY), MAGAZINES_CATEGORY);
+  const stamp = "2026-10-27T12:00:00.000Z";
+  const out = migrateRecordCategories([
+    { id: "link", category: LEGACY_MAGAZINES_CATEGORY, name: "M249 linked belt", paid: 40, value: 35, valueSource: "manual" },
+    { id: "pmag", category: "magazines & belts", name: "PMAG 30", paid: 14 },
+    { id: "battle", category: "Belts & Rigs", name: "battle belt", paid: 80 },
+    { id: "duty", category: "Belts & Rigs", name: "duty belt", paid: 55 },
+    { id: "rigger", category: "Belts & Rigs", name: "rigger's belt", paid: 60 },
+  ], stamp);
+  assert.equal(out.changed, true);
+  assert.equal(out.records[0].category, MAGAZINES_CATEGORY);
+  assert.equal(out.records[0].name, "M249 linked belt");
+  assert.equal(out.records[0].paid, 40);
+  assert.equal(out.records[0].value, 35);
+  assert.equal(out.records[0].migratedFromMagShelf, undefined);
+  assert.equal(saleRestricted(out.records[0]), true);
+  assert.equal(out.records[1].category, MAGAZINES_CATEGORY);
+  assert.equal(out.records[1].paid, 14);
+  assert.equal(out.records[1].migratedFromMagShelf, undefined);
+  for (const row of out.records.slice(2)) {
+    assert.equal(row.category, "Belts & Rigs", row.name);
+    assert.equal(saleRestricted(row), false, row.name);
+    assert.equal(row.paid > 0, true, row.name);
+  }
+  const again = migrateRecordCategories(out.records, "later");
+  assert.equal(again.changed, false);
+  assert.equal(again.records, out.records);
+});
+
 test("the old shelf keeps market data and does not move an item because of its name", () => {
   const stamp = "2026-10-27T12:00:00.000Z";
   const sources = [{ label: "Shop", url: "https://example.com/can" }];
@@ -154,7 +193,7 @@ test("the old shelf keeps market data and does not move an item because of its n
   assert.equal(kept.records[0].marketSources, sources);
   assert.equal(countedValue(kept.records[0]), 14);
   const moved = answerMagShelf(out.records, "move", "can", "2026-10-27T13:00:00.000Z");
-  assert.equal(moved.records[0].category, "Magazines & Belts");
+  assert.equal(moved.records[0].category, MAGAZINES_CATEGORY);
   assert.equal(magShelfPending(moved.records[0]), false);
   assert.equal(moved.records[0].paid, 12);
   assert.equal(moved.records[0].link, "");
@@ -165,8 +204,8 @@ test("the old shelf keeps market data and does not move an item because of its n
     { id: "b", category: STORAGE_CATEGORY, migratedFromMagShelf: true, name: "Two", paid: 2 },
     { id: "c", category: "Pouches", name: "mag", paid: 3 },
   ], "move-all", "", stamp);
-  assert.equal(allMoved.records[0].category, "Magazines & Belts");
-  assert.equal(allMoved.records[1].category, "Magazines & Belts");
+  assert.equal(allMoved.records[0].category, MAGAZINES_CATEGORY);
+  assert.equal(allMoved.records[1].category, MAGAZINES_CATEGORY);
   assert.equal(allMoved.records[2].category, "Pouches");
   assert.equal(allMoved.records[2].name, "mag");
 });
@@ -193,6 +232,7 @@ test("photo ID is blocked for firearm records even when the armory opt-out is of
     assert.equal(photoIdBlocked(true, item), true, JSON.stringify(item));
     assert.equal(photoIdBlockReason(false, item), "Photo ID isn't available for this record.");
   }
+  assert.equal(photoIdBlocked(false, { category: "Magazines", name: "Box" }), false);
   assert.equal(photoIdBlocked(false, { category: "Magazines & Belts", name: "Box" }), false);
   assert.equal(photoIdBlocked(false, { category: "NVG & Optics", name: "Red dot", arm: "OP" }), false);
   assert.equal(photoIdBlocked(true, { category: "NVG & Optics", name: "Red dot", arm: "OP" }), true);
@@ -202,7 +242,7 @@ test("photo ID is blocked for firearm records even when the armory opt-out is of
 
 test("photo ID never offers a restricted category as a priced suggestion", () => {
   const pricedCats = pricedPhotoCategories();
-  for (const name of ["Firearms", "Suppressors", "Magazines & Belts", "Triggers & Parts"]) {
+  for (const name of ["Firearms", "Suppressors", "Ammunition", "Magazines", "Triggers & Parts"]) {
     assert.equal(pricedCats.includes(name), false, name);
     assert.equal(photoIdSuggestion(name), "");
   }
@@ -211,15 +251,21 @@ test("photo ID never offers a restricted category as a priced suggestion", () =>
   assert.equal(photoIdSuggestion("Belts & Rigs"), "Belts & Rigs");
   assert.equal(photoIdSuggestion("Not a category"), "");
   assert.equal(photoIdSuggestion(""), "");
-  assert.ok(GEAR_CATEGORIES.includes("Magazines & Belts"));
+  assert.ok(GEAR_CATEGORIES.includes(MAGAZINES_CATEGORY));
+  assert.equal(GEAR_CATEGORIES.includes(LEGACY_MAGAZINES_CATEGORY), false);
+  assert.ok(GEAR_CATEGORIES.includes("Ammunition"));
+  assert.ok(GEAR_CATEGORIES.includes("Belts & Rigs"));
   assert.ok(GEAR_CATEGORIES.includes("Triggers & Parts"));
   assert.ok(GEAR_CATEGORIES.includes(STORAGE_CATEGORY));
   assert.equal(GEAR_CATEGORIES.includes(LEGACY_STORAGE_CATEGORY), false);
 });
 
-test("the price prompt backstop names magazines over 30 rounds, ammunition belts, and auto-fire devices", () => {
+test("the price prompt backstop names magazines over 30 rounds, linked ammunition belts, and auto-fire devices", () => {
   assert.match(PRICE_BACKSTOP, /magazine over 30 rounds/);
-  assert.match(PRICE_BACKSTOP, /an ammunition \(linked\) belt/);
+  assert.match(PRICE_BACKSTOP, /linked ammunition belt is ammunition/);
+  assert.match(PRICE_BACKSTOP, /duty belt/);
+  assert.match(PRICE_BACKSTOP, /battle belt/);
+  assert.match(PRICE_BACKSTOP, /rigger's belt/);
   assert.doesNotMatch(PRICE_BACKSTOP, /\ba belt\b/);
   assert.match(PRICE_BACKSTOP, /auto-fire device/);
   assert.match(PRICE_BACKSTOP, /bump stocks/);

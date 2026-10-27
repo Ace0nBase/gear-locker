@@ -74,7 +74,7 @@ Item: ${name}
 Brand / model: ${brand}
 Category: ${it.category || "unknown"}
 
-Use web search only for the maker's listed weight (at most 2 searches). Do not price firearms, suppressors, frames, lower receivers, ammunition, magazines, belts, or trigger parts.
+Use web search only for the maker's listed weight (at most 2 searches). Do not price firearms, suppressors, frames, lower receivers, ammunition, magazines, linked ammunition belts, or trigger parts.
 Set retailNew, usedLow, usedHigh, and value to null. Set priceNote to "" and sources to [].
 weightOz = the weight of ONE unit in ounces (1 lb = 16 oz, 1 g = 0.035274 oz), rounded to 0.1. If sizes differ and none is given, use size Medium and say so in weightNote. The weight note must not include a price or a store name.
 
@@ -183,7 +183,7 @@ async function identify(env, img, hint) {
   const priced = pricedPhotoCategories(CATS);
   const ask = `This photo shows one piece of tactical, outdoor, shooting or medical gear that the owner wants to add to their inventory app.${hint ? ` They called it: "${hint}".` : ""}
 Identify it. Look for logos, labels, tags, stitching patterns and distinctive design to name the maker and model if you can; if you can't tell the maker, say what kind of item it is.
-If the photo is a firearm, suppressor, lower receiver, magazine, ammunition belt, trigger part, or auto-fire device, set category to "". Do not mention a price or a place to buy it.
+If the photo is a firearm, suppressor, lower receiver, magazine, linked ammunition belt, trigger part, or auto-fire device, set category to "". A linked ammunition belt is ammunition. A duty belt, battle belt, or rigger's belt can be Belts & Rigs. Do not mention a price or a place to buy it.
 Reply with ONLY this JSON object:
 {"name": "short item name, e.g. 'Double M4 mag pouch' or 'IFAK pouch'", "brand": "maker and model if identifiable with reasonable confidence, else empty string", "category": one of ${JSON.stringify(priced)} or "", "color": "color or camo pattern", "confidence": "high|medium|low", "summary": "one short sentence on what it looks like and what gave it away"}`;
   const r = await fetch("https://api.anthropic.com/v1/messages", {

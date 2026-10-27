@@ -97,9 +97,9 @@ function showMagShelfPrompt(){
   const rows=magShelfRows();
   if(!rows.length){el.hidden=true;if(typeof syncLock==="function")syncLock();return}
   el.querySelector(".panel").innerHTML=`<h2>These were on Mags &amp; Ammo Storage</h2>
-    <p class="hint">They are now under Ammo Storage &amp; Loaders. Prices and store links stay off until you answer. Move a magazine or a belt to Magazines &amp; Belts if it belongs there. That shelf does not look up prices or stores. Nothing moves because of its name.</p>
-    <div class="links">${rows.map(r=>`<div class="pk"><span class="pkn"><b>${esc(r.name||"Untitled")}</b><small>${esc([r.brand,r.category].filter(Boolean).join(" · "))}</small></span><button class="btn ghost" type="button" data-mag="move" data-id="${esc(r.id)}">Move to Magazines &amp; Belts</button></div>`).join("")}</div>
-    <div class="actions"><button class="btn ghost" type="button" data-mag="dismiss">Dismiss</button><button class="btn" type="button" data-mag="move-all">Move all to Magazines &amp; Belts</button></div>`;
+    <p class="hint">They are now under Ammo Storage &amp; Loaders. Prices and store links stay off until you answer. Move a magazine to Magazines if it belongs there. That shelf does not look up prices or stores. A linked ammunition belt is Ammunition, which is not priced or linked. A duty belt, battle belt, or rigger's belt stays on Belts &amp; Rigs. Nothing moves because of its name. Dismiss keeps them on Ammo Storage &amp; Loaders, with prices and store links on.</p>
+    <div class="links">${rows.map(r=>`<div class="pk"><span class="pkn"><b>${esc(r.name||"Untitled")}</b><small>${esc([r.brand,r.category].filter(Boolean).join(" · "))}</small></span><button class="btn ghost" type="button" data-mag="move" data-id="${esc(r.id)}">Move to Magazines</button></div>`).join("")}</div>
+    <div class="actions"><button class="btn ghost" type="button" data-mag="dismiss">Dismiss</button><button class="btn" type="button" data-mag="move-all">Move all to Magazines</button></div>`;
   el.hidden=false;if(typeof syncLock==="function")syncLock();
 }
 async function applyMagShelfAnswer(action,id){
@@ -342,9 +342,9 @@ var S={ // slot library: [label, categories, keywords, tip, exclude]
  carrier:["Plate carrier / chest rig",["Armor & Carriers","Belts & Rigs"],["plate carrier","carrier","jpc","avs","apc","chest rig","spc","fcpc","lv-119","slickster","micro rig","mk3","mk4"],"A carrier or chest rig to run mags and med up front.",["belt"]],
  plates:["Armor plates",["Armor & Carriers"],["plates","plate set","level iii","level iv","lvl iii","lvl iv","iiia","sapi","esapi","armor insert","hesco","rmr"],"Rifle-rated plates sized for your carrier.",["carrier","bag","pouch"]],
  belt:["Battle belt",["Belts & Rigs"],["belt"],"A padded or rigid gun belt for holster, pistol mags and TQ.",[]],
- riflemag:["Rifle mag pouches",["Pouches","Ammo Storage & Loaders","Magazines & Belts","Armor & Carriers"],["m4","5.56","556","rifle mag","ar mag","ar-15","kywi","mag pouch","magazine pouch","triple mag","double mag","7.62","308","placard","tacos"],"Pouches for at least 3 rifle mags.",["pistol"]],
- pistolmag:["Pistol mag pouch",["Pouches","Ammo Storage & Loaders","Magazines & Belts"],["pistol mag","pistol","9mm","handgun","glock"],"One or two pistol mag pouches on the belt.",[]],
- mags:["Rifle magazines",["Ammo Storage & Loaders","Magazines & Belts"],["pmag","magazine","mags","lancer","gen m3","5.56","556","ar-15","ar15","m4","7.62","308"],"Enough loaded mags to fill your pouches.",["pouch","pistol","glock","9mm","handgun","p320","sig 365","m&p","loader"]],
+ riflemag:["Rifle mag pouches",["Pouches","Ammo Storage & Loaders","Magazines","Armor & Carriers"],["m4","5.56","556","rifle mag","ar mag","ar-15","kywi","mag pouch","magazine pouch","triple mag","double mag","7.62","308","placard","tacos"],"Pouches for at least 3 rifle mags.",["pistol"]],
+ pistolmag:["Pistol mag pouch",["Pouches","Ammo Storage & Loaders","Magazines"],["pistol mag","pistol","9mm","handgun","glock"],"One or two pistol mag pouches on the belt.",[]],
+ mags:["Rifle magazines",["Ammo Storage & Loaders","Magazines"],["pmag","magazine","mags","lancer","gen m3","5.56","556","ar-15","ar15","m4","7.62","308"],"Enough loaded mags to fill your pouches.",["pouch","pistol","glock","9mm","handgun","p320","sig 365","m&p","loader"]],
  ifak:["IFAK / trauma kit",["Medical","Pouches"],["ifak","trauma","med kit","medical kit","blowout","first aid","medical pouch"],"A stocked IFAK: gauze, pressure dressing, chest seals.",[]],
  tq:["Tourniquet",["Medical"],["tourniquet","tq","cat gen","sof-t","sof t","sam xt","rmt"],"At least one TQ reachable with either hand.",["holder","pouch"]],
  helmet:["Helmet",["Helmet & Head"],["helmet","ops-core","opscore","high cut","bump","team wendy"],"Ballistic or bump helmet.",["cover","mount","bag"]],
@@ -380,11 +380,11 @@ var S={ // slot library: [label, categories, keywords, tip, exclude]
  rangebag:["Range bag",["Cases & Bags","Packs & Bags"],["range bag","range backpack","shooting bag"],"A bag for ammo, targets and tools.",[]],
  guncase:["Rifle case / bag",["Cases & Bags"],["rifle case","rifle bag","gun case","gun bag","soft case","hard case","double rifle","sbr bag","discreet","long gun","pelican 1700","pelican 1720","pelican 1750","rifle"],"A padded case or bag to transport the long gun.",["pistol","range bag"]],
  pistolcase:["Pistol case",["Cases & Bags"],["pistol case","handgun case","pistol rug","pistol bag","pistol"],"A lockable pistol case or rug.",["holster","mag","rifle"]],
- ammocan:["Ammo can / ammo bag",["Ammo Storage & Loaders","Magazines & Belts","Cases & Bags"],["ammo can","ammo box","ammo bag","ammo crate","ammo"],"Ammo for the day, plus extra.",[]],
- pistolmags:["Pistol magazines",["Ammo Storage & Loaders","Magazines & Belts"],["pistol","glock","9mm","handgun","p320","sig 365","m&p","45 acp",".45"],"At least 3–4 pistol mags.",["pouch","loader","case","holster"]],
+ ammocan:["Ammo can / ammo bag",["Ammo Storage & Loaders","Magazines","Cases & Bags"],["ammo can","ammo box","ammo bag","ammo crate","ammo"],"Ammo for the day, plus extra.",[]],
+ pistolmags:["Pistol magazines",["Ammo Storage & Loaders","Magazines"],["pistol","glock","9mm","handgun","p320","sig 365","m&p","45 acp",".45"],"At least 3–4 pistol mags.",["pouch","loader","case","holster"]],
  timer:["Shot timer",["Misc","Knives & Tools"],["shot timer","timer","pact","amg","ced7000","special pie","competition electronics"],"A shot timer to measure drills.",[]],
  targets:["Targets & stapler",["Misc"],["target","stapler","pasters","staple","steel","ipsc","uspsa","b-8","b8"],"Targets, pasters and a stapler or clips.",[]],
- loader:["Mag loader",["Ammo Storage & Loaders","Magazines & Belts","Knives & Tools"],["loader","uplula","maglula","lula","speed loader","stripper"],"A mag loader saves your thumbs.",[]],
+ loader:["Mag loader",["Ammo Storage & Loaders","Magazines","Knives & Tools"],["loader","uplula","maglula","lula","speed loader","stripper"],"A mag loader saves your thumbs.",[]],
  notebook:["Data book / notebook",["Misc"],["data book","databook","dope","notebook","rite in the rain","log book","logbook","notepad"],"Something to log drills, dope or frequencies.",[]],
  bipod:["Bipod / rear bag",["NVG & Optics","Misc","Cases & Bags"],["bipod","rear bag","squeeze bag","harris","atlas","game changer","shooting pillow","tripod"],"Stable support for precision shooting.",[]],
  mat:["Shooting mat",["Misc","Cases & Bags"],["shooting mat","mat","drag bag"],"A mat for prone positions.",[]],
@@ -392,7 +392,7 @@ var S={ // slot library: [label, categories, keywords, tip, exclude]
  kneepads:["Knee / elbow pads",["Clothing & Boots","Misc"],["knee pad","kneepad","elbow pad","knee pads","arc'teryx pad"],"Pads for kneeling and prone work.",[]],
  simgear:["FoF mask / protection",["Helmet & Head","Misc"],["sim","fof","force on force","force-on-force","paint","utm","simunition","fof mask","neck protector","groin"],"Sim mask, neck and groin protection.",[]],
  trainer:["Training weapon",["Misc"],["blue gun","rings","sirt","training pistol","trainer","airsoft","gbb","laser trainer","dummy gun","inert"],"A training or sim gun.",[]],
- snapcaps:["Snap caps / dummy rounds",["Ammo Storage & Loaders","Magazines & Belts","Misc"],["snap cap","dummy round","dummy rounds","a-zoom","azoom","inert round"],"For malfunction drills and dry fire.",[]],
+ snapcaps:["Snap caps / dummy rounds",["Ammo Storage & Loaders","Magazines","Misc"],["snap cap","dummy round","dummy rounds","a-zoom","azoom","inert round"],"For malfunction drills and dry fire.",[]],
  traumabag:["Trauma bag / med kit",["Medical","Cases & Bags","Packs & Bags"],["trauma bag","med bag","aid bag","medic","first aid kit","stomp","jump kit"],"A larger med bag for the team.",[]],
  antenna:["Spare / upgraded antenna",["Comms & Radios"],["antenna","whip","nagoya","diamond","yagi","j-pole","jpole","roll-up","slim jim"],"A better antenna is the cheapest range boost.",[]],
  ptt:["PTT / radio cables",["Comms & Radios"],["ptt","push to talk","downlead","radio cable","adapter","kenwood plug"],"PTT and cable to tie radio into the headset.",[]],
@@ -440,7 +440,7 @@ function score(kit,slotId,i){
   const [, cats, kws, , ex]=S[slotId]; const t=itemText(i);
   if(i.category==="Firearms")return 0;
   if(ex.some(k=>t.includes(k)))return 0;
-  const kw=kws.some(k=>hasKw(t,k)), cat=cats.includes(i.category);
+  const kw=kws.some(k=>hasKw(t,k)), cat=cats.includes(GearLogic.migrateCategoryName(i.category));
   if(!kw)return 0;
   let sc=5+(cat?2:0)+colorFit(kit,i,slotId)*2;
   if(i.condition==="New"||i.condition==="Good")sc+=1; if(i.condition==="Needs-repair")sc-=3;

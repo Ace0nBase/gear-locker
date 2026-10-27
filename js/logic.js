@@ -303,18 +303,25 @@ function categoryKey(value) {
 
 export const LEGACY_STORAGE_CATEGORY = "Mags & Ammo Storage";
 export const STORAGE_CATEGORY = "Ammo Storage & Loaders";
+export const LEGACY_MAGAZINES_CATEGORY = "Magazines & Belts";
+export const MAGAZINES_CATEGORY = "Magazines";
 const LEGACY_STORAGE_KEY = categoryKey(LEGACY_STORAGE_CATEGORY);
 const STORAGE_KEY = categoryKey(STORAGE_CATEGORY);
+const LEGACY_MAGAZINES_KEY = categoryKey(LEGACY_MAGAZINES_CATEGORY);
 const WEIGHT_ONLY_CATEGORY_KEYS = new Set([
-  categoryKey("Magazines & Belts"),
+  categoryKey(MAGAZINES_CATEGORY),
   categoryKey("Triggers & Parts"),
 ]);
 
-// The old shelf name becomes Ammo Storage & Loaders. Matching is the whole category, not a word inside it.
+// The old storage shelf becomes Ammo Storage & Loaders. Magazines & Belts becomes Magazines.
+// Matching is the whole category. The item name is not read.
 export function migrateCategoryName(category) {
   if (category == null) return category;
   const raw = String(category);
-  if (raw && categoryKey(raw) === LEGACY_STORAGE_KEY) return STORAGE_CATEGORY;
+  if (!raw) return raw;
+  const key = categoryKey(raw);
+  if (key === LEGACY_STORAGE_KEY) return STORAGE_CATEGORY;
+  if (key === LEGACY_MAGAZINES_KEY) return MAGAZINES_CATEGORY;
   return raw;
 }
 
@@ -326,7 +333,9 @@ export function migrateRecordCategories(records, stamp) {
     const category = migrateCategoryName(row.category);
     if (category === row.category) return row;
     changed = true;
-    return { ...row, category, migratedFromMagShelf: true, updatedAt: stamp || row.updatedAt || "" };
+    const copy = { ...row, category, updatedAt: stamp || row.updatedAt || "" };
+    if (categoryKey(row.category) === LEGACY_STORAGE_KEY) copy.migratedFromMagShelf = true;
+    return copy;
   });
   return { records: changed ? next : list, changed };
 }
@@ -351,7 +360,7 @@ export function answerMagShelf(records, action, id, stamp) {
       return copy;
     }
     const moved = keepManualPrice(
-      { ...row, category: "Magazines & Belts" },
+      { ...row, category: MAGAZINES_CATEGORY },
       { retailWasManual: row.priceSource === "manual", valueWasManual: row.valueSource === "manual" },
     );
     delete moved.migratedFromMagShelf;
@@ -362,7 +371,8 @@ export function answerMagShelf(records, action, id, stamp) {
 }
 
 // Automatic prices stop at the firearm, suppressor, ammunition, lower-receiver,
-// magazine-and-belt, and trigger-part shelves, and at a firearm or suppressor record.
+// magazine, and trigger-part shelves, and at a firearm or suppressor record.
+// A linked ammunition belt is ammunition. A duty, battle, or rigger's belt is Belts & Rigs.
 // Ammo storage and loaders stay priced. The item name is not checked.
 export function saleRestricted(item) {
   if (!item || typeof item !== "object") return false;
@@ -380,7 +390,7 @@ export function saleRestricted(item) {
   return false;
 }
 
-export const GEAR_CATEGORIES = ["Firearms","Suppressors","Magazines & Belts","Triggers & Parts","Armor & Carriers","Belts & Rigs","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Ammo Storage & Loaders","Cleaning & Maintenance","Misc"];
+export const GEAR_CATEGORIES = ["Firearms","Suppressors","Ammunition","Magazines","Triggers & Parts","Armor & Carriers","Belts & Rigs","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Ammo Storage & Loaders","Cleaning & Maintenance","Misc"];
 
 // Categories Photo ID may fill in. Restricted shelves are left blank so they are not offered as priced.
 export function pricedPhotoCategories(categories) {
@@ -394,7 +404,7 @@ export function photoIdSuggestion(category, categories) {
 }
 
 // The priced lookup tells the model to withhold a price for these, without the app guessing from the item name.
-export const PRICE_BACKSTOP = "If the item is a magazine over 30 rounds, an ammunition (linked) belt, or an auto-fire device (bump stocks, auto sears, or similar), return no price and no sources. Set retailNew, usedLow, usedHigh, and value to null. Set priceNote to \"\" and sources to []. Do not name a store or a seller.";
+export const PRICE_BACKSTOP = "If the item is a magazine over 30 rounds, or an auto-fire device (bump stocks, auto sears, or similar), return no price and no sources. A linked ammunition belt is ammunition, so return no price and no sources for it too. A duty belt, a battle belt, or a rigger's belt is ordinary gear and can be priced. Set retailNew, usedLow, usedHigh, and value to null when you withhold a price. Set priceNote to \"\" and sources to []. Do not name a store or a seller.";
 
 // Firearm marketplaces and firearm or ammunition retailers, matched by domain.
 // Stores that also sell gear drop only a firearm, ammunition, or suppressor path segment.
@@ -947,7 +957,7 @@ const GearLogic = {
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
-  LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, GEAR_CATEGORIES, PRICE_BACKSTOP,
+  LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, LEGACY_MAGAZINES_CATEGORY, MAGAZINES_CATEGORY, GEAR_CATEGORIES, PRICE_BACKSTOP,
   migrateCategoryName, migrateRecordCategories, magShelfPending, answerMagShelf, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, photoIdBlockReason,
   timerShotAccepted, radioService, radioTxLabel, mergeFieldConflict,
 };
