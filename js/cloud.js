@@ -229,14 +229,6 @@ function lendRedactPatch(data,email){
   if(!borrower)return null;
   return {borrowerEmail:"",borrowerEmailLower:"",updatedAt:now(),serverUpdatedAt:firebase.firestore.FieldValue.serverTimestamp()};
 }
-async function queryDocs(make){
-  try{return await make().get()}
-  catch(e){
-    const code=e&&e.code||"";
-    if(code==="permission-denied"||code==="failed-precondition")return {docs:[]};
-    throw e;
-  }
-}
 async function deleteDocRefs(refs){
   const list=(refs||[]).filter(Boolean);
   for(let i=0;i<list.length;i+=400){
@@ -282,35 +274,28 @@ async function deleteMyAccount(password,signal){
     if(shareRefs.length)removedAny=true;
     await deleteDocRefs(shareRefs);
     const email=String(u.email||"");
-    const loanSnaps=[];
+    const lendDocs=[];
+    const lendSeen=new Set();
     if(email){
-      loanSnaps.push(await queryDocs(function(){return fsdb.collectionGroup("loans").where("friendEmail","==",email)}));
-      const lower=email.toLowerCase();
-      if(lower!==email)loanSnaps.push(await queryDocs(function(){return fsdb.collectionGroup("loans").where("friendEmail","==",lower)}));
+      const exact=await fsdb.collection("lends").where("borrowerEmail","==",email).get();
+      exact.docs.forEach(function(d){if(!lendSeen.has(d.id)){lendSeen.add(d.id);lendDocs.push(d)}});
+      if(email===email.toLowerCase()){
+        const lowerSnap=await fsdb.collection("lends").where("borrowerEmailLower","==",email).get();
+        lowerSnap.docs.forEach(function(d){if(!lendSeen.has(d.id)){lendSeen.add(d.id);lendDocs.push(d)}});
+      }
     }
-    const loanPatches=[];
-    const loanSeen=new Set();
-    loanSnaps.forEach(function(snap){(snap.docs||[]).forEach(function(d){
-      if(loanSeen.has(d.ref.path))return;
-      loanSeen.add(d.ref.path);
-      const patch=emailPatch(d.data(),email,["friendEmail"]);
-      if(patch)loanPatches.push([d.ref,patch]);
-    })});
+    const targets=GearLogic.loanTargetsFromLends(lendDocs.map(function(d){return {id:d.id,lender:(d.data()||{}).lender}}));
+    if(!targets.ok)throw new Error("lend");
+    const loanPatches=targets.paths.map(function(p){
+      return [fsdb.collection("users").doc(p.lender).collection("loans").doc(p.loanId),{friendEmail:"",updatedAt:now(),serverUpdatedAt:firebase.firestore.FieldValue.serverTimestamp()}];
+    });
     if(loanPatches.length)removedAny=true;
     await updateDocRefs(loanPatches);
-    const lendSnaps=[];
-    if(email){
-      lendSnaps.push(await queryDocs(function(){return fsdb.collection("lends").where("borrowerEmail","==",email)}));
-      lendSnaps.push(await queryDocs(function(){return fsdb.collection("lends").where("borrowerEmailLower","==",email.toLowerCase())}));
-    }
     const lendPatches=[];
-    const lendSeen=new Set();
-    lendSnaps.forEach(function(snap){(snap.docs||[]).forEach(function(d){
-      if(lendSeen.has(d.id))return;
-      lendSeen.add(d.id);
+    lendDocs.forEach(function(d){
       const patch=lendRedactPatch(d.data(),email);
       if(patch)lendPatches.push([d.ref,patch]);
-    })});
+    });
     if(lendPatches.length)removedAny=true;
     await updateDocRefs(lendPatches);
     const lends=await fsdb.collection("lends").where(GearLogic.accountDeletePlan(u.uid).lendField,"==",u.uid).get();
@@ -321,12 +306,9 @@ async function deleteMyAccount(password,signal){
     if(!tombSnap.exists)await tomb.set({uid:u.uid,at:now()});
     removedAny=true;
   }catch(e){
-    const code=e&&e.code||"";
-    if(code!=="permission-denied"){
-      if(!removedAny){accountDeleting=false;throw new Error(gearMsg)}
-      showDeleteFailure(gearMsg);
-      throw new Error(gearMsg);
-    }
+    if(!removedAny)accountDeleting=false;
+    else showDeleteFailure(gearMsg);
+    throw new Error(gearMsg);
   }
   let tok;
   try{tok=await u.getIdToken(true)}catch(e){showDeleteFailure(signInMsg);throw new Error(signInMsg)}
@@ -336,7 +318,9 @@ async function deleteMyAccount(password,signal){
     const msg=e&&e.name==="AbortError"?"That took too long. Try deleting the account again.":signInMsg;
     showDeleteFailure(msg);throw new Error(msg);
   }
-  if(!res.ok){const j=await res.json().catch(()=>({}));const msg=j.error||signInMsg;showDeleteFailure(msg);throw new Error(msg)}
+  const deletedBody=await res.json().catch(()=>({}));
+  if(!res.ok){const msg=deletedBody.error||signInMsg;showDeleteFailure(msg);throw new Error(msg)}
+  try{sessionStorage.setItem("gearLocker.accountDeleted","Your account is deleted.")}catch(e){}
   try{GearLogic.clearUserLocal(localStorage)}catch(e){}
   try{await firebase.auth().signOut()}catch(e){}
   try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch(e){}
@@ -355,7 +339,9 @@ async function startCloud(){
   auth.onAuthStateChanged(async u=>{
     if(!u){
       cloudUser=null;if(tombUnsub){try{tombUnsub()}catch(e){}tombUnsub=null}cloudUnsubs.forEach(x=>x());cloudUnsubs=[];
-      $("gate").hidden=false;$("acct").hidden=true;$("gateFields").hidden=false;$("gateMsg").textContent="Sign in to open War Box.";refreshVerify();syncKeepNote();
+      var deletedNote="";
+      try{deletedNote=sessionStorage.getItem("gearLocker.accountDeleted")||"";if(deletedNote)sessionStorage.removeItem("gearLocker.accountDeleted")}catch(e){}
+      $("gate").hidden=false;$("acct").hidden=true;$("gateFields").hidden=false;$("gateMsg").textContent=deletedNote||"Sign in to open War Box.";refreshVerify();syncKeepNote();
       return;
     }
     const switched=localStorage.getItem("gearLocker.uid")&&localStorage.getItem("gearLocker.uid")!==u.uid;

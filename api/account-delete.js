@@ -2,7 +2,7 @@
 // Rules allow that owner to list and delete their shares, locker, and lends, and to clear their email.
 // 404 means the row is already gone. The auth user is deleted only after this returns ok.
 
-import { USER_COLLECTIONS } from "../js/logic.js";
+import { USER_COLLECTIONS, loanTargetsFromLends } from "../js/logic.js";
 
 const GEAR_STILL_HERE = "Couldn't finish removing your gear. Your sign-in is still here. Try again.";
 
@@ -35,7 +35,6 @@ async function runQuery(fetchImpl, idToken, root, structuredQuery) {
     method: "POST",
     body: JSON.stringify({ structuredQuery }),
   });
-  if (res.status === 403) return [];
   if (res.status !== 200) throw new Error("query");
   return docsOf(res.data);
 }
@@ -100,18 +99,59 @@ async function clearFields(fetchImpl, idToken, name, fields) {
   const stamp = new Date().toISOString();
   for (const field of fields) body.fields[field] = { stringValue: field === "updatedAt" ? stamp : "" };
   const res = await callFs(fetchImpl, idToken, docUrl(name) + "?" + mask, { method: "PATCH", body: JSON.stringify(body) });
-  if (res.status === 200 || res.status === 404 || res.status === 403) return;
+  if (res.status === 200 || res.status === 404) return;
   throw new Error("patch");
 }
 
-async function redactQuery(fetchImpl, idToken, root, collectionId, field, value, fields) {
-  if (!value) return;
-  await forEachMatch(fetchImpl, idToken, root, {
-    from: [{ collectionId, allDescendants: collectionId === "loans" }],
-    where: equalFilter(field, value),
-  }, async docs => {
-    for (const doc of docs) await clearFields(fetchImpl, idToken, doc.name, fields);
+function stringField(doc, field) {
+  const value = doc && doc.fields && doc.fields[field];
+  return value && typeof value.stringValue === "string" ? value.stringValue : "";
+}
+
+function docId(doc) {
+  const parts = String((doc && doc.name) || "").split("/");
+  return parts[parts.length - 1] || "";
+}
+
+async function collectQuery(fetchImpl, idToken, root, structuredQuery) {
+  const found = [];
+  await forEachMatch(fetchImpl, idToken, root, structuredQuery, async docs => {
+    found.push(...docs);
   });
+  return found;
+}
+
+function loanDocName(project, lender, loanId) {
+  return "projects/" + project + "/databases/(default)/documents/users/" + lender + "/loans/" + loanId;
+}
+
+async function redactBorrowed(fetchImpl, idToken, project, root, email) {
+  const want = String(email || "");
+  if (!want) return;
+  const lower = want.toLowerCase();
+  const queries = [equalFilter("borrowerEmail", want)];
+  if (lower === want) queries.push(equalFilter("borrowerEmailLower", lower));
+  const docs = [];
+  const seen = new Set();
+  for (const where of queries) {
+    const page = await collectQuery(fetchImpl, idToken, root, {
+      from: [{ collectionId: "lends" }],
+      where,
+    });
+    for (const doc of page) {
+      if (!doc || !doc.name || seen.has(doc.name)) continue;
+      seen.add(doc.name);
+      docs.push(doc);
+    }
+  }
+  const plan = loanTargetsFromLends(docs.map(doc => ({ id: docId(doc), lender: stringField(doc, "lender") })));
+  if (!plan.ok) throw new Error("lend");
+  for (const path of plan.paths) {
+    await clearFields(fetchImpl, idToken, loanDocName(project, path.lender, path.loanId), ["friendEmail", "updatedAt"]);
+  }
+  for (const doc of docs) {
+    await clearFields(fetchImpl, idToken, doc.name, ["borrowerEmail", "borrowerEmailLower", "updatedAt"]);
+  }
 }
 
 export async function deleteUserFirestore(env, idToken, user, fetchImpl) {
@@ -133,11 +173,7 @@ export async function deleteUserFirestore(env, idToken, user, fetchImpl) {
       from: [{ collectionId: "lends" }],
       where: equalFilter("lender", uid),
     });
-    const lower = email.toLowerCase();
-    await redactQuery(fetchFn, idToken, root, "loans", "friendEmail", email, ["friendEmail", "updatedAt"]);
-    if (lower && lower !== email) await redactQuery(fetchFn, idToken, root, "loans", "friendEmail", lower, ["friendEmail", "updatedAt"]);
-    await redactQuery(fetchFn, idToken, root, "lends", "borrowerEmail", email, ["borrowerEmail", "borrowerEmailLower", "updatedAt"]);
-    await redactQuery(fetchFn, idToken, root, "lends", "borrowerEmailLower", lower, ["borrowerEmail", "borrowerEmailLower", "updatedAt"]);
+    await redactBorrowed(fetchFn, idToken, project, root, email);
     return { ok: true };
   } catch {
     return { ok: false, error: GEAR_STILL_HERE };

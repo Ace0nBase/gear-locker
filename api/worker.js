@@ -14,7 +14,7 @@
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel } from "../js/logic.js";
+import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, SEARCH_RESULT_TOKENS } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
 
@@ -145,40 +145,62 @@ function findJson(text, keys) {
   return null;
 }
 
-async function callClaude(env, model, it) {
-  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }];
+function loopCeiling(env, model, messages, maxTokens, searches) {
+  const n = Math.max(0, Math.floor(+searches || 0));
+  return estimateSpendMicro({
+    input_tokens: estimateInputTokens(JSON.stringify(messages)) + n * SEARCH_RESULT_TOKENS,
+    output_tokens: clampMaxTokens(maxTokens),
+    web_search_requests: n,
+  }, ratesForModel(env, model));
+}
+async function callClaude(env, model, it, budget) {
+  const spec = MODEL_CALLS.lookup;
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: spec.searches }];
   const messages = [{ role: "user", content: prompt(it) }];
-  const send = async () => {
+  const send = async (maxTokens, withTools) => {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: claudeBody(model, { max_tokens: MODEL_CALLS.lookup.maxTokens, tools, messages }),
+      body: claudeBody(model, { max_tokens: maxTokens, ...(withTools ? { tools } : {}), messages }),
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.status = r.status; e.usage = usageFromResponse(data); throw e; }
     return data;
   };
   const all = [];
-  let data;
+  let data = null;
   let usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
-  // A long web-search turn can pause; continue it until Claude finishes.
-  for (let i = 0; i < 4; i++) {
-    try { data = await send(); }
-    catch (e) { e.usage = addUsage(usage, e.usage); throw e; }
-    usage = addUsage(usage, usageFromResponse(data));
+  let spent = budget && budget.spent || 0;
+  const limit = budget && budget.limit;
+  let askedJson = false;
+  for (let i = 0; i < spec.rounds; i++) {
+    const searching = !askedJson && (i === 0 || (data && data.stop_reason === "pause_turn"));
+    const searches = searching ? spec.searches : 0;
+    if (limit != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, searches), limit)) break;
+    try { data = await send(spec.maxTokens, searching); }
+    catch (e) {
+      const roundUsage = e.usage;
+      usage = addUsage(usage, roundUsage);
+      spent += spendOf(env, model, roundUsage);
+      e.usage = usage;
+      e.spent = spent;
+      throw e;
+    }
+    const roundUsage = usageFromResponse(data);
+    usage = addUsage(usage, roundUsage);
+    spent += spendOf(env, model, roundUsage);
     all.push(...(data.content || []));
-    if (data.stop_reason !== "pause_turn") break;
-    messages.push({ role: "assistant", content: data.content });
+    if (data.stop_reason === "pause_turn") {
+      messages.push({ role: "assistant", content: data.content });
+      continue;
+    }
+    if (findJson(textOf(data.content)) || askedJson) break;
+    askedJson = true;
+    const prev = (data.content || []).filter(b => b.type !== "text" || (b.text || "").trim());
+    if (prev.length) messages.push({ role: "assistant", content: prev });
+    messages.push({ role: "user", content: "Now reply with ONLY the JSON object described above, filled in from what you found. No other text." });
   }
-  if (findJson(textOf(data.content))) return { content: all, final: data.content, usage };
-  // No JSON yet: ask once more for just the JSON, from what it already found.
-  const prev = (data.content || []).filter(b => b.type !== "text" || (b.text || "").trim());
-  if (prev.length) messages.push({ role: "assistant", content: prev });
-  messages.push({ role: "user", content: "Now reply with ONLY the JSON object described above, filled in from what you found. No other text." });
-  data = await send();
-  usage = addUsage(usage, usageFromResponse(data));
-  all.push(...(data.content || []));
-  return { content: all, final: data.content, usage };
+  return { content: all, final: data && data.content, usage, spent };
 }
 function parseResult(data) {
   const blocks = data.content || [];
@@ -239,28 +261,28 @@ Use web search (at most 2 searches). Check TacSwap listings, eBay Buy It Now lis
 When done, reply with ONLY this JSON object:
 {"price": number|null, "where": "site or seller, e.g. 'TacSwap' or 'Amazon'", "url": "https link to the listing", "condition": "new|used|like new", "note": "one short sentence, e.g. 'Used, good condition, ships free'"}`;
 }
-function priceRouteBlocked(it) {
-  const category = String((it && it.category) || "");
-  if (category === "Magazines" || category === "Magazines & Belts") return true;
-  return saleRestricted(it || {});
-}
-async function dealCheck(env, w) {
+async function dealCheck(env, w, budget) {
   if (saleRestricted(w)) return { price: null, where: "", url: "", condition: "", note: "", date: localDay(new Date()), hit: false, usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 } };
-  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
+  const spec = MODEL_CALLS.deal;
+  const model = env.MODEL || "claude-haiku-5-5";
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: spec.searches }];
   const messages = [{ role: "user", content: dealPrompt(w) }];
-  let data, all = [], usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
-  for (let i = 0; i < 3; i++) {
+  let data, all = [], usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0;
+  for (let i = 0; i < spec.rounds; i++) {
+    if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, spec.searches), budget)) break;
     const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
       headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: claudeBody(env.MODEL || "claude-haiku-5-5", { max_tokens: MODEL_CALLS.deal.maxTokens, tools, messages }) });
+      body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) });
     data = await r.json().catch(() => ({}));
-    usage = addUsage(usage, usageFromResponse(data));
+    const roundUsage = usageFromResponse(data);
+    usage = addUsage(usage, roundUsage);
+    spent += spendOf(env, model, roundUsage);
     if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
     all.push(...(data.content || []));
     if (data.stop_reason !== "pause_turn") break;
     messages.push({ role: "assistant", content: data.content });
   }
-  const j = pickModelAnswer(textOf(data.content));
+  const j = data ? pickModelAnswer(textOf(data.content)) : null;
   const settled = settleDeal(w, j);
   return { ...settled, date: localDay(new Date()), hit: settled.price != null && settled.price <= +w.target, usage };
 }
@@ -355,6 +377,28 @@ async function clearUsageCounters(env, uid) {
   await clearUsageForUser(env, uid);
   await deleteUserKv(env, uid);
 }
+const CLEANUP_PREFIX = "cleanup:";
+async function queueUsageCleanup(env, uid) {
+  if (!env.WATCH || !uid) throw new Error("cleanup");
+  await env.WATCH.put(CLEANUP_PREFIX + uid, JSON.stringify({ uid, at: new Date().toISOString() }));
+}
+async function retryQueuedCleanups(env) {
+  if (!env.WATCH) return 0;
+  let cursor, done = 0;
+  do {
+    const page = await env.WATCH.list({ prefix: CLEANUP_PREFIX, cursor });
+    for (const k of page.keys || []) {
+      const uid = k.name.slice(CLEANUP_PREFIX.length);
+      try {
+        await clearUsageCounters(env, uid);
+        await env.WATCH.delete(k.name);
+        done++;
+      } catch { /* the next hourly run tries again */ }
+    }
+    cursor = page.list_complete ? null : page.cursor;
+  } while (cursor);
+  return done;
+}
 async function retryOnce(fn) {
   try {
     await fn();
@@ -438,7 +482,7 @@ async function runDueWatches(env, budget) {
     if (!hold.ok) continue;
     const wasHit = !!(w.best && w.best.hit);
     try {
-      const b = await dealCheck(env, w);
+      const b = await dealCheck(env, w, hold.reserved || null);
       const spentUsage = b.usage;
       delete b.usage;
       w.best = b; w.lastErr = "";
@@ -457,32 +501,37 @@ async function runDueWatches(env, budget) {
 }
 
 /* ---------- battery facts for a device ---------- */
-async function batteryLookup(env, d) {
+async function batteryLookup(env, d, budget) {
   const ask = `What battery does this device use, and how long does it normally last?
 Device: ${d.brand} ${d.name} (${d.category}${d.type ? ", " + d.type : ""})
 Use web search (at most 2 searches) on the maker's spec page or manual. If it uses no battery at all (iron sights, tritium/fiber optic, non-illuminated magnifier), say so.
 swapMonths = a sensible replacement interval for someone who relies on it (e.g. EOTech CR123 ~3 months, Aimpoint T2 CR2032 ~12 months, weapon-light CR123s ~6 months, rechargeables = how often to top up, in months, can be 0.5).
 Reply with ONLY this JSON:
 {"none": false, "battery": "e.g. CR123A, CR2032, AA, built-in rechargeable", "count": number, "life": "short note, e.g. '50,000 hrs at setting 8' or '1.5 hrs on high'", "swapMonths": number}`;
-  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
+  const spec = MODEL_CALLS.battery;
+  const model = env.MODEL || "claude-haiku-5-5";
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: spec.searches }];
   const messages = [{ role: "user", content: ask }];
-  let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
-  for (let i = 0; i < 3; i++) {
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(env.MODEL || "claude-haiku-5-5", { max_tokens: MODEL_CALLS.battery.maxTokens, tools, messages }) });
+  let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0;
+  for (let i = 0; i < spec.rounds; i++) {
+    if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, spec.searches), budget)) break;
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) });
     data = await r.json().catch(() => ({}));
-    usage = addUsage(usage, usageFromResponse(data));
+    const roundUsage = usageFromResponse(data);
+    usage = addUsage(usage, roundUsage);
+    spent += spendOf(env, model, roundUsage);
     if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
     if (data.stop_reason !== "pause_turn") break;
     messages.push({ role: "assistant", content: data.content });
   }
-  const t = textOf(data.content).replace(/```(?:json)?/gi, "");
+  const t = data ? textOf(data.content).replace(/```(?:json)?/gi, "") : "";
   let j = null; for (const c of (t.match(/\{[\s\S]*?\}/g) || []).reverse()) { try { const o = JSON.parse(c); if ("battery" in o || "none" in o) { j = o; break } } catch {} }
   if (!j) { const e = new Error("couldn't read the battery answer"); e.usage = usage; throw e; }
   return { result: { none: !!j.none, battery: String(j.battery || "").slice(0, 40), count: Math.max(0, Math.min(8, +j.count || 1)), life: String(j.life || "").slice(0, 80), swapMonths: Math.max(0.25, Math.min(60, +j.swapMonths || 6)) }, usage };
 }
 
 /* ---------- PACE plan builder ---------- */
-async function paceBuild(env, b) {
+async function paceBuild(env, b, budget) {
   const fl = b.freqs.map(f => `${f.i}: ${f.name} | ${f.rx} MHz${f.duplex === "+" || f.duplex === "-" ? ` ${f.duplex}${f.offset}` : f.duplex === "split" ? ` tx ${f.tx}` : f.duplex === "off" ? " rx-only" : " simplex"}${f.tone ? " " + f.tone : ""} | ${f.mode} | ${f.service}${f.group ? " | " + f.group : ""}${f.notes ? " | " + f.notes : ""}${f.onRadio ? " | programmed" : " | not on a radio"}`).join("\n");
   const ask = `Build a practical communications PACE plan (Primary, Alternate, Contingency, Emergency).
 
@@ -515,25 +564,35 @@ Reply with ONLY this JSON:
  "checkin":"schedule, e.g. 'Top of each hour, 5-min listen window'","rally":"advice for picking a rally point (don't invent an address)","codes":"2-3 simple code words",
  "newFreqs":[{"name":"short name","rx":"146.940","duplex":"+|-|","offset":"0.600","tone":"103.5 or empty","mode":"FM","service":"Ham|GMRS|NOAA weather|MURS|FRS","notes":"where/what, e.g. 'W4XX repeater, Jacksonville'","source":"site name"}],
  "gaps":["short things they're missing, e.g. 'No one else is licensed: get them GMRS radios or ham licenses'"]}`;
-  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
+  const spec = MODEL_CALLS.pace;
+  const model = env.MODEL || "claude-haiku-5-5";
+  const searches = b.location ? spec.searches : 0;
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: spec.searches }];
   const messages = [{ role: "user", content: ask }];
-  let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
-  for (let i = 0; i < 4; i++) {
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(env.MODEL || "claude-haiku-5-5", { max_tokens: MODEL_CALLS.pace.maxTokens, ...(b.location ? { tools } : {}), messages }) });
+  let data = null, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0;
+  for (let i = 0; i < spec.rounds; i++) {
+    if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, searches), budget)) break;
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, ...(searches ? { tools } : {}), messages }) });
     data = await r.json().catch(() => ({}));
-    usage = addUsage(usage, usageFromResponse(data));
+    const roundUsage = usageFromResponse(data);
+    usage = addUsage(usage, roundUsage);
+    spent += spendOf(env, model, roundUsage);
     if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
     if (data.stop_reason !== "pause_turn") break;
     messages.push({ role: "assistant", content: data.content });
   }
-  let j = findJson(textOf(data.content), ["steps"]);
-  if (!j) {
-    messages.push({ role: "assistant", content: data.content.filter(x => x.type !== "text" || (x.text || "").trim()) });
+  let j = data ? findJson(textOf(data.content), ["steps"]) : null;
+  if (!j && data && (budget == null || roundFits(spent, loopCeiling(env, model, messages, MODEL_CALLS.paceFollow.maxTokens, 0), budget))) {
+    messages.push({ role: "assistant", content: (data.content || []).filter(x => x.type !== "text" || (x.text || "").trim()) });
     messages.push({ role: "user", content: "Now reply with ONLY the JSON object described above. No other text." });
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(env.MODEL || "claude-haiku-5-5", { max_tokens: MODEL_CALLS.paceFollow.maxTokens, messages }) });
-    data = await r.json().catch(() => ({}));
-    usage = addUsage(usage, usageFromResponse(data));
-    j = findJson(textOf(data.content || []), ["steps"]);
+    if (budget == null || roundFits(spent, loopCeiling(env, model, messages, MODEL_CALLS.paceFollow.maxTokens, 0), budget)) {
+      const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: MODEL_CALLS.paceFollow.maxTokens, messages }) });
+      data = await r.json().catch(() => ({}));
+      const roundUsage = usageFromResponse(data);
+      usage = addUsage(usage, roundUsage);
+      spent += spendOf(env, model, roundUsage);
+      j = findJson(textOf(data.content || []), ["steps"]);
+    }
   }
   if (!j || typeof j.steps !== "object") { const e = new Error("couldn't read the plan, try again"); e.usage = usage; throw e; }
   const S = (v, n) => String(v ?? "").slice(0, n);
@@ -542,7 +601,7 @@ Reply with ONLY this JSON:
   for (const k of ["p", "a", "c", "e"]) { const s = j.steps[k] || {}; steps[k] = { method: S(s.method, 30), f: Number.isInteger(s.f) && s.f >= 0 && s.f < b.freqs.length ? s.f : null, n: Number.isInteger(s.n) && s.n >= 0 && s.n < nf.length ? s.n : null, detail: S(s.detail, 200), when: S(s.when, 120) }; }
   return { result: { name: S(j.name, 40), summary: S(j.summary, 200), steps, checkin: S(j.checkin, 120), rally: S(j.rally, 160), codes: S(j.codes, 160), newFreqs: nf, gaps: (Array.isArray(j.gaps) ? j.gaps : []).slice(0, 6).map(g => S(g, 160)) }, usage };
 }
-async function lookupOne(env, it) {
+async function lookupOne(env, it, budget) {
   const clean = {
     id: String(it.id || "").slice(0, 80), name: String(it.name || "").slice(0, 120), brand: String(it.brand || "").slice(0, 120),
     category: String(it.category || "").slice(0, 60), condition: String(it.condition || "Good").slice(0, 20), color: String(it.color || "").slice(0, 40),
@@ -554,29 +613,33 @@ async function lookupOne(env, it) {
   if (clean.kind === "wish" && saleRestricted(clean)) return { id: clean.id, ok: false, error: "Price search skips this item.", usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spendMicro: 0 };
   let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spendMicro = 0;
   const primary = env.MODEL || "claude-haiku-5-5";
+  const limit = budget == null ? null : budget;
+  const fallbackCeiling = () => loopCeiling(env, env.FALLBACK_MODEL, [{ role: "user", content: prompt(clean) }], MODEL_CALLS.lookup.maxTokens, MODEL_CALLS.lookup.searches);
   try {
-    data = await callClaude(env, primary, clean);
+    data = await callClaude(env, primary, clean, { limit, spent: 0 });
     usage = addUsage(usage, data.usage);
-    spendMicro += spendOf(env, primary, data.usage);
+    spendMicro = data.spent || 0;
   }
   catch (e) {
     usage = addUsage(usage, e.usage);
-    spendMicro += spendOf(env, primary, e.usage);
-    if (env.FALLBACK_MODEL && (e.status === 400 || e.status === 404)) {
+    spendMicro = e.spent != null ? e.spent : spendOf(env, primary, e.usage);
+    if (env.FALLBACK_MODEL && (e.status === 400 || e.status === 404) && (limit == null || roundFits(spendMicro, fallbackCeiling(), limit))) {
       try {
-        data = await callClaude(env, env.FALLBACK_MODEL, clean);
+        data = await callClaude(env, env.FALLBACK_MODEL, clean, { limit, spent: spendMicro });
         usage = addUsage(usage, data.usage);
-        spendMicro += spendOf(env, env.FALLBACK_MODEL, data.usage);
+        spendMicro = data.spent || spendMicro;
       }
       catch (e2) {
-        spendMicro += spendOf(env, env.FALLBACK_MODEL, e2.usage);
+        spendMicro = e2.spent != null ? e2.spent : spendMicro + spendOf(env, env.FALLBACK_MODEL, e2.usage);
         e2.usage = addUsage(usage, e2.usage);
         e2.spendMicro = spendMicro;
         throw e2;
       }
     } else { e.usage = usage; e.spendMicro = spendMicro; throw e; }
   }
-  const parsed = parseResult(data);
+  let parsed;
+  try { parsed = parseResult(data); }
+  catch (e) { e.usage = usage; e.spendMicro = spendMicro; throw e; }
   const settled = settleLookup(clean, parsed);
   if (!settled.apply) { const e = new Error("couldn't read the lookup answer, try again"); e.usage = usage; e.spendMicro = spendMicro; throw e; }
   const { apply, ...fields } = settled;
@@ -612,9 +675,9 @@ export default {
         const removed = await deleteAuthUser(env, idToken);
         if (!removed.ok) return json({ error: removed.error }, 502, h);
         const countersGone = await retryOnce(() => clearUsageCounters(env, accountUser.sub));
-        if (!countersGone) return json({ error: "Couldn't finish deleting the account. Try again." }, 502, h);
+        if (!countersGone) await retryOnce(() => queueUsageCleanup(env, accountUser.sub));
         deleteRevenueCatCustomer(env, accountUser.sub);
-        return json({ ok: true }, 200, h);
+        return json({ ok: true, deleted: true, cleanup: countersGone ? "done" : "pending" }, 200, h);
       } catch { return json({ error: "Couldn't finish deleting the account. Try again." }, 502, h); }
     }
     if (!ROUTES.includes(url.pathname) || req.method !== "POST") return json({ error: "Not found" }, 404, h);
@@ -676,7 +739,7 @@ export default {
         const watchHold = await reserveCall(env, user, "deal", 1, { alertAdd: 1, inputTokens: estimateInputTokens(JSON.stringify(body)) });
         if (!watchHold.ok) return json({ error: watchHold.error || "Try again tomorrow." }, watchHold.status || 429, h);
         try {
-          const b = await dealCheck(env, w);
+          const b = await dealCheck(env, w, watchHold.reserved || null);
           await finishCall(env, watchHold.id, watchHold.reserved, b.usage);
           delete b.usage;
           w.best = b; w.lastErr = "";
@@ -695,7 +758,7 @@ export default {
       const paceHold = await reserveCall(env, user, "pace", 1, { inputTokens: estimateInputTokens(JSON.stringify(b)) });
       if (!paceHold.ok) return json({ error: paceHold.error }, paceHold.status, h);
       try {
-        const built = await paceBuild(env, b);
+        const built = await paceBuild(env, b, paceHold.reserved || null);
         await finishCall(env, paceHold.id, paceHold.reserved, built.usage);
         return json({ result: built.result }, 200, h);
       }
@@ -706,7 +769,7 @@ export default {
       const battHold = await reserveCall(env, user, "battery", 1, { inputTokens: estimateInputTokens(JSON.stringify(body)) });
       if (!battHold.ok) return json({ error: battHold.error }, battHold.status, h);
       try {
-        const found = await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) });
+        const found = await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) }, battHold.reserved || null);
         await finishCall(env, battHold.id, battHold.reserved, found.usage);
         return json({ result: found.result }, 200, h);
       }
@@ -732,11 +795,12 @@ export default {
     const max = +(env.MAX_ITEMS || 4);
     const items = Array.isArray(body.items) ? body.items.slice(0, max) : [];
     if (!items.length) return json({ error: "No items" }, 400, h);
-    const reserveMicro = items.reduce((sum, it) => sum + callHoldMicro(env, "lookup", estimateInputTokens(prompt(it))), 0);
+    const budgets = items.map(it => callHoldMicro(env, "lookup", estimateInputTokens(JSON.stringify([{ role: "user", content: prompt(it) }]))));
+    const reserveMicro = budgets.reduce((sum, n) => sum + n, 0);
     const lookBill = await reserveCall(env, user, "lookup", items.length, { reserveMicro });
     if (!lookBill.ok) return json({ error: lookBill.error }, lookBill.status, h);
 
-    const packed = await Promise.all(items.map(it => lookupOne(env, it).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160), usage: e.usage, spendMicro: e.spendMicro }))));
+    const packed = await Promise.all(items.map((it, i) => lookupOne(env, it, lookBill.reserved ? budgets[i] : null).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160), usage: e.usage, spendMicro: e.spendMicro }))));
     let actual = 0;
     const results = packed.map(r => {
       actual += Math.max(0, Math.round(Number.isFinite(+r.spendMicro) ? +r.spendMicro : estimateSpendMicro(r.usage, spendRates(env))));
@@ -753,7 +817,9 @@ export default {
   async scheduled(event, rawEnv, ctx) {
     const env = { ...DEFAULTS };
     for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
-    if (!env.ANTHROPIC_API_KEY) return;
-    ctx.waitUntil(runDueWatches(env, +(env.WATCH_BATCH || 6)));
+    ctx.waitUntil((async () => {
+      await retryQueuedCleanups(env);
+      if (env.ANTHROPIC_API_KEY) await runDueWatches(env, +(env.WATCH_BATCH || 6));
+    })());
   },
 };

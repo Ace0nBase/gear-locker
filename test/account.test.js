@@ -6,6 +6,7 @@ import {
   deleteRevenueCatCustomer, accountDeletePlan, USER_COLLECTIONS,
   signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
   clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, priciestRates, spendRates, applyReserve, applyReconcile,
+  SEARCH_RESULT_TOKENS, roundFits, loanTargetsFromLends,
   deleteRetryRoute, runDeleteAttempt, SERVER_DELETE_STEPS, LOOKUPS_PAUSED,
 } from "../js/logic.js";
 import { UsageLedger } from "../api/usage-ledger.js";
@@ -113,20 +114,71 @@ test("a free spend hold is the worst case from the output cap and the search cou
   assert.equal(clampMaxTokens(4000), 4000);
   assert.equal(clampMaxTokens(0), 1);
   const usage = operationWorstUsage("lookup");
-  assert.equal(usage.output_tokens, MODEL_CALLS.lookup.maxTokens * MODEL_CALLS.lookup.rounds * MODEL_CALLS.lookup.calls);
-  assert.equal(usage.web_search_requests, MODEL_CALLS.lookup.searches * MODEL_CALLS.lookup.rounds * MODEL_CALLS.lookup.calls);
-  assert.equal(usage.input_tokens, MODEL_CALLS.lookup.promptTokens * MODEL_CALLS.lookup.rounds * MODEL_CALLS.lookup.calls);
+  const spec = MODEL_CALLS.lookup;
+  let echoed = 0;
+  for (let i = 0; i < spec.rounds; i++) echoed += spec.promptTokens + i * spec.maxTokens + (i + 1) * spec.searches * SEARCH_RESULT_TOKENS;
+  assert.equal(MODEL_CALLS.lookup.searches, 3);
+  assert.equal(MODEL_CALLS.lookup.rounds, 5);
+  assert.equal(MODEL_CALLS.deal.searches, 2);
+  assert.equal(MODEL_CALLS.deal.rounds, 3);
+  assert.equal(MODEL_CALLS.battery.searches, 2);
+  assert.equal(MODEL_CALLS.battery.rounds, 3);
+  assert.equal(MODEL_CALLS.pace.searches, 2);
+  assert.equal(MODEL_CALLS.pace.rounds, 4);
+  assert.equal(usage.output_tokens, spec.maxTokens * spec.rounds * spec.calls);
+  assert.equal(usage.web_search_requests, spec.searches * spec.rounds * spec.calls);
+  assert.equal(usage.input_tokens, echoed * spec.calls);
+  assert.ok(usage.input_tokens > spec.promptTokens * spec.rounds * spec.calls);
   assert.equal(lookupReserveMicro({}), estimateSpendMicro(usage, priciestRates({})));
   assert.ok(priciestRates({}).outputPerMillion > spendRates({}).outputPerMillion);
   assert.deepEqual(priciestRates({ FALLBACK_MODEL: "" }), spendRates({ FALLBACK_MODEL: "" }));
-  assert.equal(operationWorstUsage("lookup", 100).input_tokens, 100 * MODEL_CALLS.lookup.rounds * MODEL_CALLS.lookup.calls);
+  let small = 0;
+  for (let i = 0; i < spec.rounds; i++) small += 100 + i * spec.maxTokens + (i + 1) * spec.searches * SEARCH_RESULT_TOKENS;
+  assert.equal(operationWorstUsage("lookup", 100).input_tokens, small * spec.calls);
   assert.ok(callHoldMicro({}, "lookup", 100) < callHoldMicro({}, "lookup"));
   assert.equal(worstCaseSpendMicro({}, "lookup"), lookupReserveMicro({}));
-  assert.equal(lookupReserveMicro({ SPEND_RESERVE_USD: "3" }), 3e6);
-  assert.equal(lookupReserveMicro({ SPEND_RESERVE_USD: "0.01" }), lookupReserveMicro({}));
+  const bareHold = lookupReserveMicro({});
+  assert.equal(lookupReserveMicro({ SPEND_RESERVE_USD: "0.01" }), bareHold);
+  assert.equal(lookupReserveMicro({ SPEND_RESERVE_USD: "1000" }), Math.max(bareHold, 1000e6));
+  assert.equal(roundFits(3e6, 1e6, 4e6), true);
+  assert.equal(roundFits(3e6, 1.1e6, 4e6), false);
   const over = applyReconcile({ spend: 10e6, daily: 1, month: 1, alert: 0 }, { reserved: 2e6, actual: 9e6 });
   assert.equal(over.billed, 9e6);
   assert.equal(over.state.spend, 17e6);
+});
+
+test("parallel lookups at the real per-call max never end above the cap", async () => {
+  const per = callHoldMicro({ FALLBACK_MODEL: "claude-sonnet-5-5" }, "lookup", 4000);
+  const cap = per * 3 + 10;
+  const sql = fakeSql();
+  const ledger = ledgerWith(sql);
+  const results = await Promise.all(Array.from({ length: 10 }, (_, i) => Promise.resolve().then(() => ledger.reserve({
+    id: "p" + i,
+    reserve: per,
+    cap,
+    dailyAdd: 1,
+    dailyLimit: 40,
+    monthAdd: 1,
+    monthLimit: 40,
+    dailyKey: "q:u:day",
+    monthKey: "m:u:month",
+  }))));
+  const ok = results.filter(row => row.ok);
+  assert.equal(ok.length, 3);
+  for (const row of ok) {
+    const rec = ledger.reconcile({ id: row.id, actual: per });
+    assert.ok(rec.spend <= cap);
+  }
+  assert.ok(sql.rows.get("spend:free") <= cap);
+});
+
+test("a borrowed lend names the private loan, and a loan with no lend has no path", () => {
+  assert.deepEqual(loanTargetsFromLends([
+    { id: "loan1", lender: "owner" },
+    { id: "loan1", lender: "owner" },
+  ]), { ok: true, paths: [{ lender: "owner", loanId: "loan1" }] });
+  assert.deepEqual(loanTargetsFromLends([]), { ok: true, paths: [] });
+  assert.equal(loanTargetsFromLends([{ id: "loan1" }]).ok, false);
 });
 
 test("loan redaction clears only a matching email and ignores the item name", () => {
@@ -355,6 +407,105 @@ test("server cleanup pages 305 shares before it finishes", async () => {
   assert.equal(deleted.length, 305);
   assert.ok(shareQueries >= 2);
   assert.ok(lendQueries >= 1);
+});
+
+test("a borrowed lend clears the lender loan, and a query error is not an empty list", async () => {
+  const lendName = "projects/demo/databases/(default)/documents/lends/loan1";
+  const loanName = "projects/demo/databases/(default)/documents/users/owner/loans/loan1";
+  const patches = [];
+  const lendDoc = {
+    name: lendName,
+    fields: {
+      lender: { stringValue: "owner" },
+      borrowerEmail: { stringValue: "a@b.co" },
+    },
+  };
+  const fetchImpl = async (url, opts) => {
+    const method = (opts && opts.method) || "GET";
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    const json = (status, data) => ({ status, json: async () => data });
+    if (method === "PATCH") {
+      patches.push({ url: String(url), body });
+      return json(200, {});
+    }
+    if (method === "DELETE") return json(200, {});
+    if (String(url).includes(":runQuery")) {
+      const q = body.structuredQuery;
+      const field = q.where.fieldFilter.field.fieldPath;
+      const value = q.where.fieldFilter.value.stringValue;
+      if (q.from[0].collectionId === "lends" && field === "borrowerEmail" && value === "a@b.co") {
+        return json(200, [{ document: lendDoc }]);
+      }
+      return json(200, [{}]);
+    }
+    return json(200, { documents: [] });
+  };
+  const env = { FIREBASE_PROJECT: "demo" };
+  const cleared = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, fetchImpl);
+  assert.equal(cleared.ok, true);
+  const loanPatch = patches.find(p => p.url.includes("users/owner/loans/loan1"));
+  assert.ok(loanPatch);
+  assert.equal(loanPatch.body.fields.friendEmail.stringValue, "");
+  assert.ok(patches.some(p => p.url.includes("lends/loan1")));
+  assert.equal(patches.some(p => p.url.includes("/loans/") && !p.url.includes("users/owner/loans/loan1")), false);
+
+  const none = [];
+  const empty = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, async (url, opts) => {
+    const method = (opts && opts.method) || "GET";
+    if (method === "PATCH") { none.push(String(url)); return { status: 200, json: async () => ({}) }; }
+    if (String(url).includes(":runQuery")) return { status: 200, json: async () => [{}] };
+    return { status: 200, json: async () => ({ documents: [] }) };
+  });
+  assert.equal(empty.ok, true);
+  assert.deepEqual(none, []);
+
+  const denied = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, async (url, opts) => {
+    const method = (opts && opts.method) || "GET";
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    if (String(url).includes(":runQuery")) {
+      const q = body.structuredQuery;
+      if (q.from[0].collectionId === "lends" && q.where.fieldFilter.field.fieldPath === "borrowerEmail") {
+        return { status: 403, json: async () => ({ error: { status: "PERMISSION_DENIED" } }) };
+      }
+      return { status: 200, json: async () => [{}] };
+    }
+    if (method === "PATCH") return { status: 200, json: async () => ({}) };
+    return { status: 200, json: async () => ({ documents: [] }) };
+  });
+  assert.equal(denied.ok, false);
+  assert.match(denied.error, /sign-in is still here/);
+
+  const blockedLoan = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, async (url, opts) => {
+    const method = (opts && opts.method) || "GET";
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    if (method === "PATCH" && String(url).includes("users/owner/loans/loan1")) {
+      return { status: 403, json: async () => ({}) };
+    }
+    if (String(url).includes(":runQuery")) {
+      const q = body.structuredQuery;
+      if (q.from[0].collectionId === "lends" && q.where.fieldFilter.field.fieldPath === "borrowerEmail") {
+        return { status: 200, json: async () => [{ document: lendDoc }] };
+      }
+      return { status: 200, json: async () => [{}] };
+    }
+    return { status: 200, json: async () => ({ documents: [] }) };
+  });
+  assert.equal(blockedLoan.ok, false);
+
+  const brokenLend = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, async (url, opts) => {
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    if (String(url).includes(":runQuery")) {
+      const q = body.structuredQuery;
+      if (q.from[0].collectionId === "lends" && q.where.fieldFilter.field.fieldPath === "borrowerEmail") {
+        return { status: 200, json: async () => [{ document: { name: lendName, fields: {} } }] };
+      }
+      return { status: 200, json: async () => [{}] };
+    }
+    if ((opts && opts.method) === "PATCH") return { status: 200, json: async () => ({}) };
+    return { status: 200, json: async () => ({ documents: [] }) };
+  });
+  assert.equal(brokenLend.ok, false);
+  assert.equal(loanName.includes("users/owner/loans/loan1"), true);
 });
 
 test("server cleanup treats a missing document as already gone", async () => {

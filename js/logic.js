@@ -369,8 +369,17 @@ export function clampMaxTokens(n) {
   return Math.min(MAX_OUTPUT_TOKENS, v);
 }
 
+// Two characters per token overestimates Claude's count, so the hold stays above the bill.
 export function estimateInputTokens(text) {
-  return Math.max(0, Math.ceil(String(text == null ? "" : text).length / 4));
+  return Math.max(0, Math.ceil(String(text == null ? "" : text).length / 2));
+}
+
+// Each web search can come back this large, and later rounds send those results again.
+export const SEARCH_RESULT_TOKENS = 16000;
+
+export function roundFits(spentMicro, nextMicro, holdMicro) {
+  if (holdMicro == null) return true;
+  return Math.max(0, Math.round(+spentMicro || 0)) + Math.max(0, Math.round(+nextMicro || 0)) <= Math.max(0, Math.round(+holdMicro || 0));
 }
 
 // rounds counts every continuation, including the last JSON turn.
@@ -384,7 +393,22 @@ export const MODEL_CALLS = {
   paceFollow: { maxTokens: 3000, searches: 0, rounds: 1, calls: 1, promptTokens: 8000 },
 };
 
-// Hold = real input, resent each round and on the fallback, plus every search, plus max output.
+// One model call. Later rounds re-send the prompt, earlier output, and earlier search results.
+// Each searching round can also bill fresh result tokens on that response (web_search_tokens).
+function oneCallUsage(input, rounds, maxTokens, searches) {
+  let input_tokens = 0;
+  for (let i = 0; i < rounds; i++) {
+    const resent = i * maxTokens + i * searches * SEARCH_RESULT_TOKENS;
+    input_tokens += input + resent + searches * SEARCH_RESULT_TOKENS;
+  }
+  return {
+    input_tokens,
+    output_tokens: maxTokens * rounds,
+    web_search_requests: searches * rounds,
+  };
+}
+
+// Hold = real input, search results re-sent on later rounds, and max output, including a fallback call.
 export function worstCaseUsage(spec) {
   spec = spec || {};
   const maxTokens = clampMaxTokens(spec.maxTokens);
@@ -394,11 +418,10 @@ export function worstCaseUsage(spec) {
   const input = Math.max(0, Math.floor(spec.inputTokens == null
     ? (spec.promptTokens == null ? 8000 : +spec.promptTokens)
     : +spec.inputTokens));
-  return {
-    input_tokens: input * rounds * calls,
-    output_tokens: maxTokens * rounds * calls,
-    web_search_requests: searches * rounds * calls,
-  };
+  let total = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
+  const once = oneCallUsage(input, rounds, maxTokens, searches);
+  for (let i = 0; i < calls; i++) total = addUsage(total, once);
+  return total;
 }
 
 export function operationWorstUsage(name, inputTokens) {
@@ -631,6 +654,23 @@ export function serverRow(row) {
   const copy = { ...(row || {}) };
   delete copy.offlinePending;
   return copy;
+}
+
+// The borrower's lend rows name the lender and the loan id. A private loan with no lend has no path.
+export function loanTargetsFromLends(lends) {
+  const paths = [];
+  const seen = new Set();
+  for (const lend of lends || []) {
+    if (!lend) continue;
+    const loanId = String(lend.id || "").trim();
+    const lender = String(lend.lender || "").trim();
+    if (!loanId || !lender || /[/\s]/.test(loanId) || /[/\s]/.test(lender)) return { ok: false, paths: [] };
+    const key = lender + "/" + loanId;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    paths.push({ lender, loanId });
+  }
+  return { ok: true, paths };
 }
 
 // A recovered loan keeps the item name when the inventory link is gone.
@@ -1665,7 +1705,7 @@ const GearLogic = {
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, LOOKUPS_PAUSED,
-  reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, deleteRetryRoute,
+  reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, deleteRetryRoute,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, bulkLookupIds, singleLookupIds, applyMarketPrices,

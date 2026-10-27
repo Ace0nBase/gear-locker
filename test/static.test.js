@@ -216,6 +216,9 @@ test("local test mode blocks the Google popup script and the page does not allow
   const delBody = delFn.slice(delStart, delStop);
   assert.ok(delBody.indexOf("deleteRetryRoute") < delBody.indexOf('where("owner","=="'));
   assert.ok(delBody.indexOf("deleteRetryRoute") < delBody.indexOf('"/account/delete"'));
+  assert.doesNotMatch(delBody, /collectionGroup\("loans"\)/);
+  assert.match(delBody, /loanTargetsFromLends/);
+  assert.match(delBody, /Your account is deleted/);
   assert.match(read("js/core.js"), /Dismiss keeps them on Ammo Storage &amp; Loaders, with prices and store links on\./);
   assert.match(read("js/cloud.js"), /showDeleteFailure/);
   assert.match(read("js/security.js"), /That took too long\. Try deleting the account again\./);
