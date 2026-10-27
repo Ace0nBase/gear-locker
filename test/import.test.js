@@ -180,6 +180,7 @@ test("restricted shelves keep What I paid and drop market value columns", () => 
     ["Ferrowind", "Box mag", "Magazine", "", "", "25.00", "40"],
     ["Ferrowind", "Flat", "Trigger", "", "", "89", "120"],
     ["Ferrowind", "Lower", "Lower receiver", "SAMPLE-2002", "5.56", "149.99", "300"],
+    ["Ferrowind", "Ranger", "Rifle", "SAMPLE-0007", "5.56", "899.50", ""],
   ];
   const parsed = readCsvText(rows.map(r => r.join(",")).join("\n"));
   const plan = planImport(parsed.tables, { now: "2026-10-27T00:00:00.000Z", importId: "01RESTRICTEDPAID00001" });
@@ -201,20 +202,23 @@ test("restricted shelves keep What I paid and drop market value columns", () => 
   const trig = plan.items.find(i => i.category === "Triggers & Parts");
   const lower = plan.items.find(i => i.category === "Lower receiver");
   const rifle = plan.items.find(i => i.category === "Firearms");
+  const can = plan.items.find(i => i.category === "Suppressors");
   assert.equal(saleRestricted(mag), true);
   assert.equal(saleRestricted(trig), true);
+  assert.equal(saleRestricted(rifle), true);
   assert.equal(importSkipsLookup(mag), true);
   assert.equal(importSkipsLookup(trig), true);
   assert.equal(photoIdHardBlocked(mag), false);
   assert.equal(photoIdHardBlocked(trig), false);
   assert.equal(photoIdHardBlocked(lower), true);
   assert.equal(photoIdHardBlocked(rifle), true);
+  assert.equal(photoIdHardBlocked(can), true);
   assert.equal(photoIdSuggestion("Magazines & Belts"), "");
   assert.equal(photoIdSuggestion("Triggers & Parts"), "");
   assert.equal(photoIdSuggestion("Firearms"), "");
   assert.equal(photoIdSuggestion("Suppressors"), "");
   assert.equal(photoIdSuggestion("Ammo Storage & Loaders"), "Ammo Storage & Loaders");
-  for (const item of [mag, trig, lower, rifle]) {
+  for (const item of [mag, trig, lower, rifle, can]) {
     const priced = applyMarketPrices(item, {
       retailNew: 10, value: 9, usedLow: 1, sources: [{ url: "https://example.com/a", label: "store" }], priceNote: "on sale",
     }, "2026-10-27");
