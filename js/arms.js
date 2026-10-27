@@ -204,6 +204,18 @@ function photoDraft(){const mountedOn=$("fMount")?.value||"";const host=mountedO
 function syncPhotoId(){const blocked=GearLogic.photoIdBlocked(!!kits._settings?.privateArms,photoDraft());$("idBtn").hidden=blocked;if(blocked)$("idOut").hidden=true}
 $("fArm").addEventListener("change",recFields);
 $("fCat").addEventListener("change",recFields);$("fName").addEventListener("change",recFields);
+var lastArmCat="";
+function armFollowsCategory(){
+  if($("fArm").dataset.touched){lastArmCat=$("fCat").value;return}
+  const current=$("fArm").value==="no"?"":$("fArm").value;
+  const autoLast=lastArmCat==="Firearms"?"FA":lastArmCat==="Suppressors"?"SU":"";
+  if(current!==autoLast){lastArmCat=$("fCat").value;return}
+  const next=autoArm({category:$("fCat").value,name:$("fName").value,brand:$("fBrand").value})||"no";
+  if($("fArm").value!==next){$("fArm").value=next;recFields()}
+  lastArmCat=$("fCat").value;
+  if(typeof syncSaleFields==="function")syncSaleFields();
+}
+$("fCat").addEventListener("change",armFollowsCategory);
 $("fMount")?.addEventListener("change",()=>{if(typeof syncPhotoId==="function")syncPhotoId()});
 var REC_IDS={fArmId:"armId",fSerial:"serial",fArmType:"armType",fAcq:"acquired",fFrom:"acquiredFrom",fBbl:"bbl",fForm:"nfaForm",fStamp:"stampDate",fAdapter:"adapter",fArmMount:"armMount",fBatt:"battery",fBlade:"bladeLen",fSteel:"steel",fHandle:"handle",fMarks:"markings"};
 var _openForm=openForm;
@@ -212,6 +224,7 @@ openForm=function(item){
   $("fArm").value=item?(item.arm||""):"";
   Object.entries(REC_IDS).forEach(([el,k])=>$(el).value=item?.[k]||"");
   if(!item&&kits._settings?.privateArms){$("fCat").value="";if(typeof fireFields==="function")fireFields()}
+  lastArmCat=$("fCat").value;
   recFields();if(typeof syncSaleFields==="function")syncSaleFields();
 };
 var _readForm=readForm;

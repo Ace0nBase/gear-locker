@@ -320,21 +320,64 @@ export function saleRestricted(item) {
 }
 
 // Firearm marketplaces and firearm or ammunition retailers, matched by domain.
-// Brownells also sells gear, so only its firearm, ammunition, and suppressor pages drop.
-const GUN_MARKET_HOST = /(^|\.)((gunbroker|armslist|gunsamerica|palmettostatearmory|ammoseek|luckygunner|silencershop|wikiarms|cheaperthandirt|grabagun|budsgunshop|aimsurplus|kygunco|classicfirearms|impactguns|gunsinternational|galleryofguns)\.com|guns\.com|gun\.deals)$/i;
-const BROWNELLS_FIREARM = /firearm|ammo|ammunition|suppress|silencer|\blowers?\b|receivers?|rifles?|pistols?|shotguns?|handguns?|reloading|\bnfa\b|cartridges?/i;
+// Stores that also sell gear drop only their firearm, ammunition, and suppressor pages.
+const GUN_MARKET_HOST = /(^|\.)((gunbroker|armslist|gunsamerica|palmettostatearmory|ammoseek|luckygunner|silencershop|wikiarms|cheaperthandirt|grabagun|budsgunshop|aimsurplus|kygunco|classicfirearms|impactguns|gunsinternational|galleryofguns|slickguns|truegunvalue|targetsportsusa|ammunitiondepot|ammobuy|silencercentral|capitolarmory)\.com|guns\.com|gun\.deals|ammo\.com|psa\.com)$/i;
+const SHORTENER_HOST = /^(bit\.ly|tinyurl\.com|t\.co|goo\.gl|ow\.ly|rebrand\.ly|cutt\.ly|is\.gd)$/i;
+const GEAR_STORE_HOST = /(^|\.)(brownells|primaryarms|natchezss|natchez|cabelas|basspro|sportsmans|sportsmanswarehouse)\.com$/i;
+const FIREARM_PATH = /firearm|ammo|ammunition|suppress|silencer|\blowers?\b|receivers?|rifles?|pistols?|shotguns?|handguns?|reloading|\bnfa\b|cartridges?|\bguns\b/i;
+const LINK_TOKEN = /https?:\/\/[^\s<>"']+|\b(?:www\.)?(?:[a-z0-9-]+\.)+(?:com|deals|ly|gl|gd|co)\b[^\s<>"']*/gi;
 
 function parsedUrl(value) {
   try { return new URL(String(value)); } catch { return null; }
 }
 
-export function gunMarketUrl(value) {
-  const url = parsedUrl(value);
-  if (!url || !/^https?:$/i.test(url.protocol)) return false;
-  const host = url.hostname.replace(/^www\./i, "");
+function normalizeHost(host) {
+  return String(host || "").toLowerCase().replace(/^www\./, "").replace(/\.+$/, "");
+}
+
+function toHttpUrl(value) {
+  const text = String(value || "").trim().replace(/[),.;]+$/, "");
+  if (!text) return null;
+  const direct = parsedUrl(text);
+  if (direct && /^https?:$/i.test(direct.protocol)) return direct;
+  if (/^(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[/:?#]|$)/i.test(text)) {
+    const withScheme = parsedUrl("https://" + text);
+    if (withScheme && /^https?:$/i.test(withScheme.protocol)) return withScheme;
+  }
+  return null;
+}
+
+function pathText(url) {
+  try { return decodeURIComponent(url.pathname || ""); } catch { return url.pathname || ""; }
+}
+
+function hostBlocked(url) {
+  if (!url) return false;
+  const host = normalizeHost(url.hostname);
+  if (!host) return false;
+  if (SHORTENER_HOST.test(host)) return true;
   if (GUN_MARKET_HOST.test(host)) return true;
-  if (/(^|\.)brownells\.com$/i.test(host) && BROWNELLS_FIREARM.test(decodeURIComponent(url.pathname))) return true;
+  if (GEAR_STORE_HOST.test(host) && FIREARM_PATH.test(pathText(url))) return true;
   return false;
+}
+
+function unwrapRedirects(url, hops) {
+  if (!url || hops > 3) return url;
+  const host = normalizeHost(url.hostname);
+  if (host === "google.com" && (url.pathname === "/url" || url.pathname.startsWith("/url/"))) {
+    const target = url.searchParams.get("q") || url.searchParams.get("u") || url.searchParams.get("url");
+    const next = target ? toHttpUrl(target) : null;
+    if (next && next.href !== url.href) return unwrapRedirects(next, hops + 1);
+  }
+  return url;
+}
+
+export function gunMarketUrl(value) {
+  const raw = toHttpUrl(value);
+  if (!raw) return false;
+  if (hostBlocked(raw)) return true;
+  const target = unwrapRedirects(raw, 0);
+  return target !== raw && hostBlocked(target);
 }
 
 export function stripGunMarketSources(sources) {
@@ -345,7 +388,7 @@ export function stripGunMarketSources(sources) {
 }
 
 export function stripGunMarketText(note) {
-  return String(note || "").replace(/https?:\/\/\S+/gi, url => gunMarketUrl(url.replace(/[),.;]+$/, "")) ? "" : url).replace(/\s{2,}/g, " ").trim();
+  return String(note || "").replace(LINK_TOKEN, token => gunMarketUrl(token.replace(/[),.;]+$/, "")) ? "" : token).replace(/\s{2,}/g, " ").trim();
 }
 
 // True when the answer still carries a firearm-retailer link. A price note, a size, or cents do not count.
@@ -430,9 +473,13 @@ export function settleLookup(item, parsed) {
   };
 }
 
-// A typed price on a blocked item stays. A leftover market price does not.
-export function keepManualPrice(item, valueTouched) {
+// Same condition factors the form uses when a typed retail price fills the insured value.
+const CONDITION_FACTOR = { New: 0.9, Good: 0.7, Used: 0.55, Worn: 0.4, "Needs-repair": 0.2 };
+
+// A number the user typed on a blocked item stays. A prefilled market price does not become a typed price.
+export function keepManualPrice(item, touch) {
   if (!item || typeof item !== "object" || !saleRestricted(item)) return item;
+  const flags = touch && typeof touch === "object" ? touch : {};
   const out = { ...item, marketSources: [] };
   delete out.priceNote;
   delete out.usedLow;
@@ -441,7 +488,10 @@ export function keepManualPrice(item, valueTouched) {
   if ("link" in out) out.link = "";
   const retail = Math.max(0, Math.round(+out.retailNew || 0));
   const value = Math.max(0, Math.round(+out.value || 0));
-  if (retail > 0) {
+  const retailDirty = !!flags.retail;
+  const valueDirty = !!flags.value;
+  const keepRetail = retail > 0 && (retailDirty || !!flags.retailWasManual);
+  if (keepRetail) {
     out.retailNew = retail;
     out.priceSource = "manual";
   } else {
@@ -449,7 +499,9 @@ export function keepManualPrice(item, valueTouched) {
     delete out.priceSource;
     delete out.priceDate;
   }
-  if (value > 0 && (valueTouched || out.valueSource === "manual" || retail > 0)) {
+  const factor = CONDITION_FACTOR[out.condition] ?? 0.6;
+  const derived = keepRetail && retailDirty && !valueDirty && value > 0 && value === Math.round(retail * factor);
+  if (value > 0 && (valueDirty || !!flags.valueWasManual || derived)) {
     out.value = value;
     out.valueSource = "manual";
   } else {
@@ -473,7 +525,7 @@ export function settleDeal(item, parsed) {
   const price = isFinite(+clean.price) && +clean.price > 0 ? Math.round(+clean.price * 100) / 100 : null;
   return {
     price, where, url, condition: String(clean.condition || "").slice(0, 20),
-    note: String(clean.note || "").slice(0, 160), restricted: false,
+    note: stripGunMarketText(clean.note).slice(0, 160), restricted: false,
   };
 }
 

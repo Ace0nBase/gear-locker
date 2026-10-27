@@ -308,7 +308,7 @@ function applyLookup(id,res){
   if(res.weightOz!=null&&isFinite(+res.weightOz)&&+res.weightOz>0&&it.weightSource!=="manual"){it.weight=Math.round(+res.weightOz*10)/10;it.weightSource="lookup";it.weightStatus="done";it.weightNote=restricted?GearLogic.publicWeightNote(res.weightNote||""):GearLogic.stripGunMarketText(res.weightNote||"").slice(0,80)}
   else if(it.weight==null||it.weight==="")it.weightStatus="notfound";
   it.marketCheck="done";delete it.lookupError;it.updatedAt=now();
-  if(!$("form").hidden&&editing&&editing.id===it.id){editing=it;$("fRetail").value=(restricted&&it.priceSource!=="manual")?"":(it.retailNew||"");if(!valueTouched)$("fVal").value=(restricted&&it.valueSource!=="manual")?"":(it.value||"");if(!$("fWt").value&&it.weight!=null)$("fWt").value=it.weight;showPrice(it)}
+  if(!$("form").hidden&&editing&&editing.id===it.id){editing=it;$("fRetail").value=(restricted&&it.priceSource!=="manual")?"":(it.retailNew||"");if(!valueDirty)$("fVal").value=(restricted&&it.valueSource!=="manual")?"":(it.value||"");if(!$("fWt").value&&it.weight!=null)$("fWt").value=it.weight;showPrice(it)}
   return true;
 }
 async function runLookups(ids,quiet){
@@ -329,14 +329,15 @@ async function runLookups(ids,quiet){
 }
 var _saveCurrent=saveCurrent;
 saveCurrent=async function(extra){
-  const before=editing?{...editing}:null;const manualVal=valueTouched&&$("fVal").value!=="";
+  const before=editing?{...editing}:null;const valueTyped=valueDirty&&$("fVal").value!=="";
   const rec=await _saveCurrent(extra);if(!rec)return rec;
-  if(manualVal&&(!before||+before.value!==+rec.value))rec.valueSource="manual";
-  else if(!manualVal&&rec.valueSource==="manual"&&!$("fVal").value)delete rec.valueSource;
+  if(valueTyped&&(!before||+before.value!==+rec.value))rec.valueSource="manual";
+  else if(!valueTyped&&rec.valueSource==="manual"&&!$("fVal").value)delete rec.valueSource;
   if(rec.valueSource!==before?.valueSource)await persist();
   const restricted=GearLogic.saleRestricted(rec);
   if(restricted){
-    const kept=GearLogic.keepManualPrice(rec,manualVal);
+    const kept=GearLogic.keepManualPrice(rec,{retail:!!retailDirty,value:!!valueDirty,retailWasManual:!!(before&&before.priceSource==="manual"),valueWasManual:!!(before&&before.valueSource==="manual")});
+    Object.keys(rec).forEach(k=>{if(!(k in kept))delete rec[k]});
     Object.assign(rec,kept);
     const idx=all.findIndex(i=>i.id===rec.id);if(idx>=0)all[idx]=rec;
     await persist();

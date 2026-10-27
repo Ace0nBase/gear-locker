@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { saleRestricted, lookupAnswerRestricted, pickModelAnswer, settleLookup, settleDeal, countedValue, csvExportField, keepManualPrice, gunMarketUrl, publicWeightNote } from "../js/logic.js";
+import { saleRestricted, lookupAnswerRestricted, pickModelAnswer, settleLookup, settleDeal, countedValue, csvExportField, keepManualPrice, gunMarketUrl, stripGunMarketText, publicWeightNote } from "../js/logic.js";
 
 test("firearm, suppressor, ammunition, and lower-receiver shelves are weight-only", () => {
   const blocked = [
@@ -50,9 +50,9 @@ test("branded gear with a model number still prices in ordinary categories", () 
   });
 });
 
-test("a blocked shelf keeps a typed price and drops a market price", () => {
-  const rifle = { category: "Firearms", name: "North line", retailNew: 1800, value: 1500, priceSource: "market", valueSource: "market" };
-  const typed = keepManualPrice({ ...rifle, priceSource: "manual", valueSource: "manual" }, true);
+test("a blocked shelf keeps a typed price and drops a prefilled market price", () => {
+  const rifle = { category: "Firearms", name: "North line", condition: "Good", retailNew: 1800, value: 1500, priceSource: "market", valueSource: "market" };
+  const typed = keepManualPrice({ ...rifle, priceSource: "manual", valueSource: "manual" }, { retail: false, value: false, retailWasManual: true, valueWasManual: true });
   assert.equal(typed.retailNew, 1800);
   assert.equal(typed.value, 1500);
   assert.equal(typed.priceSource, "manual");
@@ -61,14 +61,21 @@ test("a blocked shelf keeps a typed price and drops a market price", () => {
   assert.equal(csvExportField(typed, "retailNew"), 1800);
   assert.equal(csvExportField(typed, "value"), 1500);
 
-  const fromForm = keepManualPrice({ ...rifle, retailNew: 1800, value: 1500 }, true);
+  const fromForm = keepManualPrice({ ...rifle, retailNew: 1800, value: 1500 }, { retail: true, value: true, retailWasManual: false, valueWasManual: false });
   assert.equal(fromForm.priceSource, "manual");
   assert.equal(fromForm.valueSource, "manual");
   assert.equal(countedValue(fromForm), 1500);
 
-  const leftover = keepManualPrice({ ...rifle, retailNew: 0, value: 0 }, false);
+  const derived = keepManualPrice({ ...rifle, retailNew: 1800, value: 1260, priceSource: "market" }, { retail: true, value: false, retailWasManual: false, valueWasManual: false });
+  assert.equal(derived.retailNew, 1800);
+  assert.equal(derived.value, 1260);
+  assert.equal(derived.priceSource, "manual");
+  assert.equal(derived.valueSource, "manual");
+
+  const leftover = keepManualPrice({ ...rifle, retailNew: 0, value: 0 }, { retail: false, value: false });
   assert.equal(leftover.retailNew, 0);
   assert.equal(leftover.value, 0);
+  assert.equal(leftover.priceSource, undefined);
   assert.equal(countedValue(leftover), 0);
   assert.equal(csvExportField(leftover, "retailNew"), "");
 
@@ -87,6 +94,50 @@ test("a blocked shelf keeps a typed price and drops a market price", () => {
   });
   assert.equal(clientAsked.retailNew, null);
   assert.equal(clientAsked.weightNote, "maker spec 8 oz");
+});
+
+test("moving an auto-priced item onto a blocked shelf clears the price instead of converting it", () => {
+  const market = {
+    name: "North line", condition: "Good", retailNew: 40, value: 28,
+    priceSource: "market", valueSource: "market", priceDate: "2026-10-27",
+    priceNote: "Local shelf", usedLow: 20, usedHigh: 30,
+    marketSources: [{ label: "Local shelf", url: "https://example.com/gear" }],
+    link: "https://example.com/gear", deal: { price: 30 },
+  };
+  const quiet = { retail: false, value: false, retailWasManual: false, valueWasManual: false };
+  const paths = [
+    { category: "Firearms", arm: "" },
+    { category: "Suppressors", arm: "" },
+    { category: "Pouches", arm: "FA" },
+    { category: "Misc", arm: "SU" },
+  ];
+  paths.forEach(path => {
+    const cleared = keepManualPrice({ ...market, ...path }, quiet);
+    const label = path.category + " " + path.arm;
+    assert.equal(cleared.retailNew, 0, label);
+    assert.equal(cleared.value, 0, label);
+    assert.equal(cleared.priceSource, undefined, label);
+    assert.equal(cleared.valueSource, undefined, label);
+    assert.equal(cleared.priceDate, undefined, label);
+    assert.equal(cleared.priceNote, undefined, label);
+    assert.equal(cleared.deal, undefined, label);
+    assert.equal(cleared.link, "", label);
+    assert.deepEqual(cleared.marketSources, [], label);
+    assert.equal(countedValue(cleared), 0, label);
+    assert.equal(csvExportField(cleared, "retailNew"), "", label);
+    assert.equal(csvExportField(cleared, "value"), "", label);
+  });
+  const back = { ...keepManualPrice({ ...market, category: "Firearms" }, quiet), category: "Pouches", arm: "" };
+  assert.equal(saleRestricted(back), false);
+  assert.equal(back.priceSource, undefined);
+  assert.equal(back.valueSource, undefined);
+  const priced = settleLookup(back, {
+    retailNew: 40, value: 28, weightOz: 12,
+    sources: [{ label: "Local shelf", url: "https://example.com/gear" }],
+  });
+  assert.equal(priced.retailNew, 40);
+  assert.equal(priced.value, 28);
+  assert.equal(priced.sources.length, 1);
 });
 
 test("a firearm retailer link is removed in every category and the price stays", () => {
@@ -112,6 +163,7 @@ test("a firearm retailer link is removed in every category and the price stays",
   assert.equal(mixed.priceNote.includes("luckygunner"), false);
   assert.equal(lookupAnswerRestricted({ sources: mixed.sources }), false);
   assert.equal(gunMarketUrl("https://www.brownells.com/slings/harbor-sling/"), false);
+  assert.equal(gunMarketUrl("https://www.brownells.com/guns/north-line/"), true);
   assert.equal(gunMarketUrl("https://www.rei.com/kywi-556"), false);
   assert.equal(lookupAnswerRestricted({
     priceNote: "REI $229.50, fits a small frame",
@@ -125,6 +177,13 @@ test("a firearm retailer link is removed in every category and the price stays",
   assert.equal(deal.price, 40);
   assert.equal(deal.url, "");
   assert.match(deal.note, /40\.50/);
+  const noted = settleDeal(coat, {
+    price: 40, where: "Local shelf", url: "https://example.com/deal",
+    note: "Used $40.50, see gunbroker.com/item/1 and https://bit.ly/abc",
+  });
+  assert.equal(noted.price, 40);
+  assert.match(noted.note, /40\.50/);
+  assert.equal(/gunbroker|bit\.ly/i.test(noted.note), false);
   const blockedDeal = settleDeal({ category: "Ammo", name: "Practice box" }, {
     price: 1, url: "https://example.com/box", note: "in stock",
   });
@@ -146,6 +205,63 @@ test("more than one JSON object cannot return a marketplace link", () => {
   assert.equal(one.linksDropped, undefined);
   assert.equal(one.sources.length, 1);
   assert.equal(one.sources[0].url, "https://example.com/harbor");
+});
+
+test("bare domains, redirects, shorteners, and firearm-seller pages drop", () => {
+  assert.equal(stripGunMarketText("See gunbroker.com/item/1 today"), "See today");
+  assert.equal(stripGunMarketText("armslist.com"), "");
+  assert.equal(stripGunMarketText("www.psa.com"), "");
+  assert.equal(stripGunMarketText("Check GUNBROKER.COM. today"), "Check today");
+  assert.equal(stripGunMarketText("https://gunbroker.com./item/1"), "");
+  assert.equal(stripGunMarketText("fits a small frame $250.30"), "fits a small frame $250.30");
+  assert.equal(stripGunMarketText("maker spec 24.5 oz"), "maker spec 24.5 oz");
+  assert.equal(stripGunMarketText("Primary Arms page"), "Primary Arms page");
+  assert.equal(gunMarketUrl("https://www.google.com/url?q=https%3A%2F%2Fwww.gunbroker.com%2Fitem%2F1"), true);
+  assert.equal(gunMarketUrl("https://www.google.com/url?u=https%3A%2F%2Fexample.com%2Fgear"), false);
+  assert.equal(gunMarketUrl("https://www.google.com/url?url=https%3A%2F%2Fbit.ly%2Fabc"), true);
+  ["https://bit.ly/abc", "https://tinyurl.com/x", "https://t.co/x", "https://goo.gl/x", "https://ow.ly/x", "https://rebrand.ly/x", "https://cutt.ly/x", "https://is.gd/x"].forEach(url => {
+    assert.equal(gunMarketUrl(url), true, url);
+  });
+  assert.equal(gunMarketUrl("https://notaco.com/x"), false);
+  const sellers = [
+    "https://slickguns.com/1",
+    "https://truegunvalue.com/1",
+    "https://www.targetsportsusa.com/1",
+    "https://ammo.com/556",
+    "https://www.ammunitiondepot.com/1",
+    "https://ammobuy.com/1",
+    "https://www.silencercentral.com/1",
+    "https://capitolarmory.com/1",
+    "https://www.budsgunshop.com/1",
+    "https://grabagun.com/1",
+    "https://www.guns.com/1",
+    "https://www.classicfirearms.com/1",
+    "https://gun.deals/1",
+    "https://wikiarms.com/1",
+  ];
+  sellers.forEach(url => assert.equal(gunMarketUrl(url), true, url));
+  assert.equal(gunMarketUrl("https://www.sportsmans.com/shooting/firearms/north-line/"), true);
+  assert.equal(gunMarketUrl("https://www.sportsmanswarehouse.com/guns/north-line/"), true);
+  assert.equal(gunMarketUrl("https://www.sportsmans.com/camping/tent/"), false);
+  assert.equal(gunMarketUrl("https://www.primaryarms.com/guns/ar"), true);
+  assert.equal(gunMarketUrl("https://www.primaryarms.com/optics/red-dot"), false);
+  assert.equal(gunMarketUrl("https://www.natchezss.com/ammo/practice-box/"), true);
+  assert.equal(gunMarketUrl("https://www.natchezss.com/clothing/coat/"), false);
+  assert.equal(gunMarketUrl("https://www.cabelas.com/shop/en/firearms"), true);
+  assert.equal(gunMarketUrl("https://www.cabelas.com/shop/en/fishing"), false);
+  assert.equal(gunMarketUrl("https://www.basspro.com/shop/en/firearms"), true);
+  assert.equal(gunMarketUrl("https://www.basspro.com/shop/en/boats"), false);
+  const redirected = settleLookup({ category: "Comms & Radios", name: "Harbor HT-100" }, {
+    retailNew: 40, value: 28, priceNote: "Local shelf https://www.google.com/url?q=https%3A%2F%2Fgunbroker.com%2Fitem%2F1",
+    sources: [
+      { label: "Local shelf", url: "https://example.com/harbor" },
+      { label: "redirect", url: "https://www.google.com/url?u=https%3A%2F%2Fwww.guns.com%2F1" },
+      { label: "short", url: "https://bit.ly/abc" },
+    ],
+  });
+  assert.equal(redirected.retailNew, 40);
+  assert.equal(/gunbroker/i.test(redirected.priceNote), false);
+  assert.deepEqual(redirected.sources.map(s => s.label), ["Local shelf"]);
 });
 
 test("a restricted weight note drops spelled amounts and retailer words", () => {

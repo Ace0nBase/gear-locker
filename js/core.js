@@ -24,7 +24,7 @@ function withAppQuery(pairs){
   var s=q.toString();
   return publicAppUrl()+(s?"?"+s:"");
 }
-var all=[], filter="All", editing=null, delArmed=false, dir=null, valueTouched=false;
+var all=[], filter="All", editing=null, delArmed=false, dir=null, retailDirty=false, valueDirty=false;
 var live=()=>all.filter(i=>!i.deleted);
 $("fCat").innerHTML=`<option value="">Choose a category</option>`+CATS.map(c=>`<option>${esc(c)}</option>`).join("");
 function toast(t,ms){const el=$("toast");el.textContent=t;el.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>el.hidden=true,ms||2200)}
@@ -142,16 +142,24 @@ function syncSaleFields(){
   const lab=$("fVal").closest(".f")?.querySelector("label");if(lab)lab.textContent=restricted?"Insured value ($)":"Value each ($)";
   $("fVal").placeholder=restricted?"What you insure it for":"Auto from retail";
   if($("mktBtn")&&!lookingUp.has(editing?.id))$("mktBtn").textContent=restricted?"Look up weight":"Market check";
+  if(restricted&&!retailDirty&&!valueDirty){
+    if(!(editing&&editing.priceSource==="manual"))$("fRetail").value="";
+    if(!(editing&&editing.valueSource==="manual"))$("fVal").value="";
+  }else if(!restricted&&!retailDirty&&!valueDirty&&editing){
+    if($("fRetail").value===""&&editing.retailNew)$("fRetail").value=editing.retailNew;
+    if($("fVal").value===""&&editing.value)$("fVal").value=editing.value;
+  }
   if(restricted)showPrice(editing||saleDraft());
 }
 function autoValue(){
-  if(valueTouched)return;
+  if(valueDirty)return;
+  if(!retailDirty&&editing&&editing.value&&editing.retailNew&&Math.round(editing.retailNew*(FACTOR[editing.condition]??0.6))!==Math.round(editing.value))return;
   const r=parseFloat($("fRetail").value);
   if(r>0)$("fVal").value=Math.round(r*(FACTOR[$("fCond").value]??0.6));
 }
-$("fRetail").oninput=autoValue;$("fCond").onchange=()=>{autoValue();syncSaleFields()};
+$("fRetail").oninput=()=>{retailDirty=true;autoValue()};$("fCond").onchange=()=>{autoValue();syncSaleFields()};
 ["fName","fBrand","fCat","fCal","fArm"].forEach(id=>{const el=$(id);if(!el)return;el.addEventListener("input",syncSaleFields);el.addEventListener("change",syncSaleFields)});
-$("fVal").oninput=()=>{valueTouched=$("fVal").value!==""};
+$("fVal").oninput=()=>{valueDirty=$("fVal").value!==""};
 function marketSourceText(item){
   if(GearLogic.saleRestricted(item))return "";
   const rows=GearLogic.stripGunMarketSources(item&&item.marketSources);
@@ -180,7 +188,7 @@ function openForm(item){
   const blocked=!!(item&&GearLogic.saleRestricted(item));
   const manualRetail=blocked&&item.priceSource==="manual";
   const manualValue=blocked&&item.valueSource==="manual";
-  editing=item||null;delArmed=false;valueTouched=!!(item&&item.value&&(manualValue||!blocked)&&!(item.retailNew&&Math.round(item.retailNew*(FACTOR[item.condition]??0.6))===Math.round(item.value)&&!blocked));
+  editing=item||null;delArmed=false;retailDirty=false;valueDirty=false;
   $("formTitle").textContent=item?"Edit item":"Add item";
   $("fName").value=item?.name||"";$("fBrand").value=item?.brand||"";$("fCat").value=item?.category||(filter!=="All"?filter:"Pouches");
   $("fQty").value=item?.qty??1;$("fColor").value=item?.color||"";$("fCond").value=item?.condition||"Good";
