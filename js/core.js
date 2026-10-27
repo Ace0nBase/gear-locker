@@ -86,12 +86,39 @@ $("connectBtn").onclick=async()=>{
     toast("Connected to "+dir.name);
   }catch(e){if(e?.name!=="AbortError")toast("Couldn't open that folder. Try again.")}
 };
+function magShelfRows(){
+  const rows=[];
+  const take=list=>{(list||[]).forEach(r=>{if(r&&!r.deleted&&GearLogic.magShelfPending(r))rows.push(r)})};
+  take(all);COLS.forEach(c=>take(db[c]));
+  return rows;
+}
+function showMagShelfPrompt(){
+  const el=$("magSheet");if(!el)return;
+  const rows=magShelfRows();
+  if(!rows.length){el.hidden=true;if(typeof syncLock==="function")syncLock();return}
+  el.querySelector(".panel").innerHTML=`<h2>These were on Mags &amp; Ammo Storage</h2>
+    <p class="hint">They are now under Ammo Storage &amp; Loaders. Prices and store links stay off until you answer. Move a magazine or a belt to Magazines &amp; Belts if it belongs there. That shelf does not look up prices or stores. Nothing moves because of its name.</p>
+    <div class="links">${rows.map(r=>`<div class="pk"><span class="pkn"><b>${esc(r.name||"Untitled")}</b><small>${esc([r.brand,r.category].filter(Boolean).join(" · "))}</small></span><button class="btn ghost" type="button" data-mag="move" data-id="${esc(r.id)}">Move to Magazines &amp; Belts</button></div>`).join("")}</div>
+    <div class="actions"><button class="btn ghost" type="button" data-mag="dismiss">Dismiss</button><button class="btn" type="button" data-mag="move-all">Move all to Magazines &amp; Belts</button></div>`;
+  el.hidden=false;if(typeof syncLock==="function")syncLock();
+}
+async function applyMagShelfAnswer(action,id){
+  const stamp=now();
+  const take=list=>GearLogic.answerMagShelf(list,action,id,stamp).records;
+  all=take(all);COLS.forEach(c=>{db[c]=take(db[c])});
+  await persist();render();showMagShelfPrompt();
+}
+document.addEventListener("click",e=>{
+  const b=e.target.closest("#magSheet [data-mag]");if(!b)return;
+  e.preventDefault();applyMagShelfAnswer(b.dataset.mag,b.dataset.id||"");
+});
 function applyCategoryMigration(){
   const stamp=now();
   let changed=false;
   const touch=rows=>{const out=GearLogic.migrateRecordCategories(rows,stamp);if(out.changed)changed=true;return out.records};
   all=touch(all);
   COLS.forEach(c=>{db[c]=touch(db[c])});
+  if(typeof showMagShelfPrompt==="function")showMagShelfPrompt();
   return changed;
 }
 async function boot(){
@@ -142,7 +169,7 @@ function render(){
       <span class="nm">${esc(i.name)}${i.nick?` <span class="tag">${esc(i.nick)}</span>`:""}<small>${esc([i.brand,i.color,i.category==="Firearms"?(i.caliber?i.caliber+" · ":"")+roundsFired(i.id).toLocaleString()+" rds":"",wtText(i)].filter(Boolean).join(" · "))}</small><small class="where">${esc(i.category)}${i.mountedOn&&itemById(i.mountedOn)?" · on "+esc(itemById(i.mountedOn).name):""}${onLoan(i.id)?" · on loan":""}</small></span>
       <span class="meta">${esc(i.location||"—")}</span>
       <span class="cond ${esc(i.condition)}">${esc((i.condition||"").replace("-"," "))}</span>
-      <span class="val">${GearLogic.countedValue(i)?money(i.qty*GearLogic.countedValue(i)):"—"}${lookingUp.has(i.id)?`<span class="tag">looking up…</span>`:GearLogic.saleRestricted(i)?"":(i.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
+      <span class="val">${GearLogic.countedValue(i)?money(i.qty*GearLogic.countedValue(i)):"—"}${lookingUp.has(i.id)?`<span class="tag">looking up…</span>`:GearLogic.saleRestricted(i)||GearLogic.magShelfPending(i)?"":(i.marketCheck==="requested"&&!window.LOOKUP_URL)?`<span class="tag">check queued</span>`:i.priceSource==="market"?`<span class="tag">market</span>`:""}</span></button>`).join("")}</section>`}).join("");
 }
 
 /* ---------- pricing ---------- */
@@ -174,7 +201,7 @@ $("fRetail").oninput=()=>{retailDirty=true;autoValue()};$("fCond").onchange=()=>
 ["fName","fBrand","fCat","fCal","fArm"].forEach(id=>{const el=$(id);if(!el)return;el.addEventListener("input",syncSaleFields);el.addEventListener("change",syncSaleFields)});
 $("fVal").oninput=()=>{valueDirty=$("fVal").value!==""};
 function marketSourceText(item){
-  if(GearLogic.saleRestricted(item))return "";
+  if(GearLogic.saleRestricted(item)||GearLogic.magShelfPending(item))return "";
   const rows=GearLogic.stripGunMarketSources(item&&item.marketSources);
   return rows.map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label||"source")}</a>`).join(" · ");
 }
@@ -185,6 +212,7 @@ function showPrice(i){
     out.textContent="Type the price and the insured value yourself. They are saved with the item. Look up weight does not search stores.";
     return;
   }
+  if(i&&GearLogic.magShelfPending(i)){out.textContent="Prices and store links stay off until you answer the shelf question.";return}
   if(i&&lookingUp.has(i.id)){out.innerHTML=`<span class="tag">Looking up…</span><br>Checking eBay, TacSwap and store prices plus the weight.`;return}
   if(i?.marketCheck==="requested"&&!window.LOOKUP_URL){out.innerHTML=`<span class="tag">Market check queued</span><br>Real eBay, TacSwap and store prices fill in on the next check run.`;return}
   if(i?.priceSource==="market"){

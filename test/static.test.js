@@ -123,6 +123,11 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.doesNotMatch(read("js/stacks.js"), /combineDuplicates/);
   assert.match(read("js/stacks.js"), /mergeFieldConflict/);
   assert.match(read("css/app.css"), /\.lockBox \.link/);
+  assert.match(read("js/core.js"), /Move to Magazines &amp; Belts/);
+  assert.match(read("js/core.js"), /Move all to Magazines &amp; Belts/);
+  assert.match(read("js/core.js"), /data-mag="dismiss"/);
+  assert.match(read("js/logic.js"), /migratedFromMagShelf/);
+  assert.match(read("index.html"), /id="magSheet"/);
   assert.match(read("js/comms.js"), /GearLogic\.radioTxLabel/);
   assert.match(read("css/app.css"), /\.apShot\[hidden\]\{display:none\}/);
   assert.match(read("api/worker.js"), /publicWeightNote/);

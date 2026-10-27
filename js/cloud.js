@@ -240,7 +240,8 @@ function openDetail(i,quiet){
   const ln=onLoan(i.id);const tasks=maintRows().filter(r=>r.m.itemId===i.id);const ks=kitsUsing(i.id);
   const isGun=i.category==="Firearms";
   const restricted=GearLogic.saleRestricted(i);
-  const shownVal=restricted?GearLogic.countedValue(i):(+i.value||0);
+  const held=GearLogic.magShelfPending(i);
+  const shownVal=restricted||held?GearLogic.countedValue(i):(+i.value||0);
   const sess=isGun?L("sessions").filter(s=>(s.lines||[]).some(l=>l.firearmId===i.id)):[];
   const links=marketSourceText(i);
   const f=(label,val,sub,opt)=>(!val&&opt)?"":`<div><dt>${esc(label)}</dt><dd>${val||"—"}${sub?`<small>${sub}</small>`:""}</dd></div>`;
@@ -248,21 +249,21 @@ function openDetail(i,quiet){
   const wnote=restricted?GearLogic.publicWeightNote(i.weightNote||""):(i.weightNote||"");
   const priceState=restricted?(i.valueSource==="manual"&&shownVal?"Entered by you":(+i.value>0&&!shownVal?"Old lookup, not counted":"")):lookingUp.has(i.id)?"Looking up…":/^estimate/i.test(i.priceNote||"")&&i.priceSource==="market"?`Estimate ${esc(i.priceDate||"")}`:(i.marketCheck==="requested"&&!window.LOOKUP_URL)?"Market check queued":i.priceSource==="market"?`Market check ${esc(i.priceDate||"")}`:i.priceSource==="manual"?"Entered by you":"";
   const valueNote=i.valueSource==="manual"?"Entered by you":(i.priceSource==="manual"?"":priceState);
-  const canLookup=lookupsOn()&&(window.LOOKUP_URL||(!restricted&&i.marketCheck!=="requested"&&!isGun));
+  const canLookup=lookupsOn()&&!held&&(window.LOOKUP_URL||(!restricted&&i.marketCheck!=="requested"&&!isGun));
   $("detail").innerHTML=`
    <div class="dh"><div><h2>${esc(i.name)}${i.nick?` <span class="tag" style="font-size:.8rem">${esc(i.nick)}</span>`:""}</h2><div class="dsub">${esc([i.brand,i.color,i.category].filter(Boolean).join(" · "))}</div></div>
      <div class="vbtns"><button class="btn" type="button" data-dact="edit">Edit</button><button class="btn ghost" type="button" data-dact="share">Share</button>${canLookup?(lookingUp.has(i.id)?`<button class="btn ghost" type="button" disabled>Looking up…</button>`:`<button class="btn ghost" type="button" data-dact="mkt">${restricted||isGun?"Look up weight":"Market check"}</button>`):""}</div></div>
    <dl>
      ${f("Category",esc(i.category||""))}${f("Where it is",parent?`On <button class="lnk" type="button" data-dview="${esc(parent.id)}">${esc(parent.name)}</button>`:"Spare")}${f("Quantity",esc(String(+i.qty||0)))}${f("Condition",esc((i.condition||"").replace("-"," ")))}
      ${f(restricted?"Insured value":"Value each",shownVal?money(shownVal):"",valueNote)}${f("Total value",shownVal?money(shownVal*(+i.qty||1)):"")}${f("What I paid",i.paid?m2(i.paid):"",i.paid&&(+i.qty||1)>1?`${m2((+i.paid)*(+i.qty||1))} for all ${+i.qty}`:i.paid&&shownVal&&!restricted?(shownVal>=+i.paid?`worth ${money(shownVal-i.paid)} more now`:`worth ${money(i.paid-shownVal)} less now`):"",1)}
-     ${restricted?(i.priceSource==="manual"&&i.retailNew?f("New retail",money(i.retailNew),"Entered by you"):""):f("New retail",i.retailNew?money(i.retailNew):"","",1)+f("Used range",(i.usedLow||i.usedHigh)?`${money(i.usedLow)}–${money(i.usedHigh)}`:"","",1)}
+     ${!restricted&&!held?f("New retail",i.retailNew?money(i.retailNew):"","",1)+f("Used range",(i.usedLow||i.usedHigh)?`${money(i.usedLow)}–${money(i.usedHigh)}`:"","",1):(i.priceSource==="manual"&&i.retailNew?f("New retail",money(i.retailNew),"Entered by you"):"")}
      ${f("Weight each",wt,wnote?esc(wnote):i.weightSource==="manual"?"Entered by you":"")}${f("Stored at",esc(i.location||""))}
      ${f("Goes with",gun?`<button class="lnk" type="button" data-dview="${esc(gun.id)}">${esc(gun.name)}</button>`:"","",1)}
      
      ${isGun?f("Caliber",esc(i.caliber||""))+f("Rounds fired",roundsFired(i.id).toLocaleString(),sess.length?`${sess.length} logged session${sess.length>1?"s":""}`:""):""}
      ${f("On loan",ln?`${esc(ln.borrower)}`:"",ln?`since ${esc(fmtDate(ln.out))}${ln.due?` · due ${esc(fmtDate(ln.due))}`:""}`:"",1)}
    </dl>
-   ${!restricted&&(i.priceNote||links)?`<div class="sect"><h3>Market data</h3>${i.priceNote?`<div class="note">${esc(i.priceNote)}</div>`:""}${links?`<div class="links" style="margin-top:6px">${links}</div>`:""}</div>`:""}
+   ${!restricted&&!held&&(i.priceNote||links)?`<div class="sect"><h3>Market data</h3>${i.priceNote?`<div class="note">${esc(i.priceNote)}</div>`:""}${links?`<div class="links" style="margin-top:6px">${links}</div>`:""}</div>`:""}
    ${armDetail(i)}
    ${i.lookupError&&!lookingUp.has(i.id)?`<div class="sect"><h3>${restricted?"Weight lookup":"Market check"}</h3><div class="note">${esc(lookupFailMessage(i.lookupError))}</div></div>`:""}
    ${kids.length?`<div class="sect"><h3>Mounted on this (${kids.length})</h3><div class="links">${kids.map(k=>`<button class="lnk" type="button" data-dview="${esc(k.id)}">${esc(k.name)}</button>`).join("")}</div></div>`:""}
@@ -296,8 +297,9 @@ var lookupBody=i=>{const restricted=GearLogic.saleRestricted(i);return {id:i.id,
 function applyLookup(id,res){
   const it=all.find(x=>x.id===id);if(!it||it.deleted||!res||!res.ok)return false;
   const restricted=GearLogic.saleRestricted(it);
+  const held=GearLogic.magShelfPending(it);
   if(restricted){delete it.usedLow;delete it.usedHigh;delete it.priceNote;it.marketSources=[]}
-  else Object.assign(it,GearLogic.applyMarketPrices(it,res,today()));
+  else if(!held) Object.assign(it,GearLogic.applyMarketPrices(it,res,today()));
   if(res.weightOz!=null&&isFinite(+res.weightOz)&&+res.weightOz>0&&it.weightSource!=="manual"){it.weight=Math.round(+res.weightOz*10)/10;it.weightSource="lookup";it.weightStatus="done";it.weightNote=restricted?GearLogic.publicWeightNote(res.weightNote||""):GearLogic.stripGunMarketText(res.weightNote||"").slice(0,80)}
   else if(it.weight==null||it.weight==="")it.weightStatus="notfound";
   it.marketCheck="done";delete it.lookupError;it.updatedAt=now();
@@ -306,7 +308,7 @@ function applyLookup(id,res){
 }
 async function runLookups(ids,quiet){
   if(!window.LOOKUP_URL||!cloudUser)return;
-  ids=[...new Set(ids)].filter(id=>!lookingUp.has(id)&&all.some(i=>i.id===id&&!i.deleted));
+  ids=[...new Set(ids)].filter(id=>!lookingUp.has(id)&&all.some(i=>i.id===id&&!i.deleted&&!GearLogic.magShelfPending(i)));
   if(!ids.length)return;
   ids.forEach(id=>lookingUp.add(id));render();
   let ok=0,fail="";
@@ -327,17 +329,17 @@ saveCurrent=async function(extra){
   const restricted=GearLogic.saleRestricted(rec);
   const changed=!before||before.name!==rec.name||before.brand!==rec.brand||before.category!==rec.category||before.arm!==rec.arm||(!restricted&&before.condition!==rec.condition);
   const needs=restricted?(rec.weight==null||rec.weight===""):((rec.priceSource!=="manual"&&rec.priceSource!=="market")||rec.weight==null||rec.weight==="");
-  if(window.LOOKUP_URL&&cloudUser&&!extra&&(changed||needs))runLookups([rec.id],true).catch(()=>{});
+  if(window.LOOKUP_URL&&cloudUser&&!extra&&!GearLogic.magShelfPending(rec)&&(changed||needs))runLookups([rec.id],true).catch(()=>{});
   return rec;
 };
 if(window.LOOKUP_URL){
   $("mktBtn").onclick=async()=>{if(!$("form").reportValidity())return;const rec=await saveCurrent({});if(!rec)return;closeForm();formFrom=null;lookingUp.add(rec.id);openDetail(all.find(i=>i.id===rec.id),true);lookingUp.delete(rec.id);runLookups([rec.id])};
-  $("bulkMktBtn").onclick=()=>{const ids=live().filter(i=>{const restricted=GearLogic.saleRestricted(i);if(restricted)return i.weight==null||i.weight==="";return i.priceSource!=="market"||i.weight==null||i.weight===""}).map(i=>i.id);if(!ids.length){toast("Everything already has prices and weights");return}toast(`Looking up ${ids.length} item${ids.length>1?"s":""}…`);runLookups(ids)};
+  $("bulkMktBtn").onclick=()=>{const ids=live().filter(i=>{if(GearLogic.magShelfPending(i))return false;const restricted=GearLogic.saleRestricted(i);if(restricted)return i.weight==null||i.weight==="";return i.priceSource!=="market"||i.weight==null||i.weight===""}).map(i=>i.id);if(!ids.length){toast("Everything already has prices and weights");return}toast(`Looking up ${ids.length} item${ids.length>1?"s":""}…`);runLookups(ids)};
   $("bulkMktBtn").textContent="Look up all";
   const _wish=ACT.wish;
   ACT.wish=async(act,b)=>{
     if(act!=="check"&&act!=="checkall")return _wish(act,b);
-    const list=(act==="check"?db.wish.filter(w=>w.id===b.dataset.id):db.wish.filter(w=>!w.deleted&&w.status!=="got"&&w.priceSource!=="market")).filter(w=>w&&!GearLogic.saleRestricted(w));
+    const list=(act==="check"?db.wish.filter(w=>w.id===b.dataset.id):db.wish.filter(w=>!w.deleted&&w.status!=="got"&&w.priceSource!=="market")).filter(w=>w&&!GearLogic.saleRestricted(w)&&!GearLogic.magShelfPending(w));
     if(!list.length){toast("Nothing to price");return}
     toast(`Pricing ${list.length}…`);
     for(let k=0;k<list.length;k+=4){
@@ -352,7 +354,7 @@ if(window.LOOKUP_URL){
 
 /* ---------- sheets, scroll lock, add button ---------- */
 var lockY=0;
-function anySheetOpen(){return !$("secSheet").hidden||!$("timerSheet").hidden||!$("drillSheet").hidden||!$("battSheet").hidden||!$("buildSheet").hidden||!$("moveSheet").hidden||!$("form").hidden||!$("detail").hidden||!$("swapSheet").hidden||!$("shareSheet").hidden||!!document.querySelector(".view:not([hidden]) .edSheet")}
+function anySheetOpen(){return !$("secSheet").hidden||!$("magSheet").hidden||!$("timerSheet").hidden||!$("drillSheet").hidden||!$("battSheet").hidden||!$("buildSheet").hidden||!$("moveSheet").hidden||!$("form").hidden||!$("detail").hidden||!$("swapSheet").hidden||!$("shareSheet").hidden||!!document.querySelector(".view:not([hidden]) .edSheet")}
 function syncLock(){
   const want=anySheetOpen(),has=document.body.classList.contains("locked");
   if(want&&!has){lockY=window.scrollY;document.body.style.top=`-${lockY}px`;document.body.classList.add("locked")}

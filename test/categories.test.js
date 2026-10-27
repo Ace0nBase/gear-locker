@@ -5,6 +5,7 @@ import {
   GEAR_CATEGORIES, LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, PRICE_BACKSTOP,
   saleRestricted, migrateCategoryName, migrateRecordCategories,
   settleLookup, settleDeal, keepManualPrice, stampManualPrices, countedValue, csvExportField, applyMarketPrices,
+  magShelfPending, answerMagShelf,
   photoIdBlocked, photoIdHardBlocked, photoIdBlockReason, photoIdSuggestion, pricedPhotoCategories,
 } from "../js/logic.js";
 
@@ -105,11 +106,69 @@ test("the old storage category string migrates and keeps its other fields", () =
   assert.equal(out.records[0].category, STORAGE_CATEGORY);
   assert.equal(out.records[0].paid, 11);
   assert.equal(out.records[0].updatedAt, stamp);
+  assert.equal(out.records[0].migratedFromMagShelf, true);
   assert.equal(out.records[1].category, "Pouches");
   assert.equal(out.records[1].updatedAt, "old");
+  assert.equal(out.records[1].migratedFromMagShelf, undefined);
   const again = migrateRecordCategories(out.records, "later");
   assert.equal(again.changed, false);
   assert.equal(again.records, out.records);
+});
+
+test("the old shelf keeps market data and does not move an item because of its name", () => {
+  const stamp = "2026-10-27T12:00:00.000Z";
+  const sources = [{ label: "Shop", url: "https://example.com/can" }];
+  const out = migrateRecordCategories([
+    { id: "can", category: LEGACY_STORAGE_CATEGORY, name: "PMAG 30", priceSource: "market", retailNew: 18, value: 14, link: "https://example.com/can", marketSources: sources, paid: 12, marketCheck: "done" },
+    { id: "pouch", category: "Pouches", name: "mag pouch", priceSource: "market", retailNew: 22, link: "https://example.com/pouch" },
+    { id: "belt", category: "Belts & Rigs", name: "battle belt", priceSource: "market", retailNew: 80, link: "https://example.com/belt" },
+  ], stamp);
+  const can = out.records[0];
+  assert.equal(can.category, STORAGE_CATEGORY);
+  assert.equal(can.name, "PMAG 30");
+  assert.equal(magShelfPending(can), true);
+  assert.equal(can.priceSource, "market");
+  assert.equal(can.retailNew, 18);
+  assert.equal(can.link, "https://example.com/can");
+  assert.equal(can.marketSources, sources);
+  assert.equal(can.marketCheck, "done");
+  assert.equal(can.paid, 12);
+  assert.equal(saleRestricted(can), false);
+  assert.equal(out.records[1].category, "Pouches");
+  assert.equal(magShelfPending(out.records[1]), false);
+  assert.equal(out.records[2].category, "Belts & Rigs");
+  assert.equal(countedValue(can), 0);
+  assert.equal(countedValue({ ...can, valueSource: "manual", value: 14 }), 14);
+  assert.equal(csvExportField(can, "retailNew"), "");
+  const pricedAgain = applyMarketPrices(can, { retailNew: 99, value: 80, sources: [{ label: "Other", url: "https://example.com/other" }] }, "2026-10-28");
+  assert.equal(pricedAgain.retailNew, 18);
+  assert.equal(pricedAgain.marketSources, sources);
+  const deal = settleDeal(can, { price: 9, url: "https://example.com/deal", where: "Shop" });
+  assert.equal(deal.price, null);
+  assert.equal(deal.url, "");
+  const kept = answerMagShelf(out.records, "dismiss", "", "2026-10-27T13:00:00.000Z");
+  assert.equal(magShelfPending(kept.records[0]), false);
+  assert.equal(kept.records[0].category, STORAGE_CATEGORY);
+  assert.equal(kept.records[0].priceSource, "market");
+  assert.equal(kept.records[0].link, "https://example.com/can");
+  assert.equal(kept.records[0].marketSources, sources);
+  assert.equal(countedValue(kept.records[0]), 14);
+  const moved = answerMagShelf(out.records, "move", "can", "2026-10-27T13:00:00.000Z");
+  assert.equal(moved.records[0].category, "Magazines & Belts");
+  assert.equal(magShelfPending(moved.records[0]), false);
+  assert.equal(moved.records[0].paid, 12);
+  assert.equal(moved.records[0].link, "");
+  assert.equal(moved.records[0].priceSource, undefined);
+  assert.equal(moved.records[1].category, "Pouches");
+  const allMoved = answerMagShelf([
+    { id: "a", category: STORAGE_CATEGORY, migratedFromMagShelf: true, name: "One", paid: 1, priceSource: "market", retailNew: 5 },
+    { id: "b", category: STORAGE_CATEGORY, migratedFromMagShelf: true, name: "Two", paid: 2 },
+    { id: "c", category: "Pouches", name: "mag", paid: 3 },
+  ], "move-all", "", stamp);
+  assert.equal(allMoved.records[0].category, "Magazines & Belts");
+  assert.equal(allMoved.records[1].category, "Magazines & Belts");
+  assert.equal(allMoved.records[2].category, "Pouches");
+  assert.equal(allMoved.records[2].name, "mag");
 });
 
 test("photo ID is blocked for firearm records even when the armory opt-out is off", () => {
@@ -158,9 +217,10 @@ test("photo ID never offers a restricted category as a priced suggestion", () =>
   assert.equal(GEAR_CATEGORIES.includes(LEGACY_STORAGE_CATEGORY), false);
 });
 
-test("the price prompt backstop names magazines over 30 rounds, belts, and auto-fire devices", () => {
+test("the price prompt backstop names magazines over 30 rounds, ammunition belts, and auto-fire devices", () => {
   assert.match(PRICE_BACKSTOP, /magazine over 30 rounds/);
-  assert.match(PRICE_BACKSTOP, /belt/);
+  assert.match(PRICE_BACKSTOP, /an ammunition \(linked\) belt/);
+  assert.doesNotMatch(PRICE_BACKSTOP, /\ba belt\b/);
   assert.match(PRICE_BACKSTOP, /auto-fire device/);
   assert.match(PRICE_BACKSTOP, /bump stocks/);
   assert.match(PRICE_BACKSTOP, /auto sears/);
