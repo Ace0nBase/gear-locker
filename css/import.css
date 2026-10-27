@@ -1,0 +1,47 @@
+/* Import sheet. Colors come from app.css. */
+#importSheet .sheet{display:flex;flex-direction:column;max-width:760px}
+#importSheet .sheetTop{justify-content:space-between;gap:8px;padding:8px 10px 0}
+#importSheet .importBack{min-height:44px}
+#importSheet .xBtn{width:44px;height:44px;flex:0 0 44px}
+#importSheet .imp{display:flex;flex-direction:column;gap:12px;min-width:0;padding:2px 20px 0}
+#importSheet .imp h2{margin:0;font-family:var(--display);text-transform:uppercase;letter-spacing:.04em;font-size:1.3rem}
+#importSheet .stepper{font-family:var(--mono);font-size:.75rem;letter-spacing:.06em;color:var(--muted);text-transform:uppercase}
+#importSheet .privacy{font-size:.86rem;color:var(--muted);margin:0}
+#importSheet .actions{position:sticky;bottom:0;background:var(--surface);padding:12px 0 calc(8px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line);z-index:2}
+#importSheet .btn,#importSheet select,#importSheet input,#importSheet .seg button{min-height:44px}
+#importSheet .drop{border:1px dashed var(--line);border-radius:8px;padding:22px 16px;text-align:center;background:var(--bg)}
+#importSheet .works{display:flex;flex-direction:column;gap:8px;margin:0;padding:0;list-style:none}
+#importSheet .works li{border-top:1px solid var(--line);padding-top:8px}
+#importSheet .works b{display:block}
+#importSheet .card{border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--bg);min-width:0}
+#importSheet .card.head{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:center}
+#importSheet .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+#importSheet .conf{font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;font-weight:700}
+#importSheet .conf.hi{color:var(--accent)}
+#importSheet .conf.mid{color:var(--coyote)}
+#importSheet .conf.lo{color:var(--danger)}
+#importSheet .conf.lock{color:var(--muted)}
+#importSheet .seg{display:flex;gap:6px;flex-wrap:wrap}
+#importSheet .seg button{flex:1 1 0;background:var(--chip);color:var(--ink);border:1px solid transparent;border-radius:6px;padding:8px 10px;font-weight:600}
+#importSheet .seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+#importSheet .pill{display:inline-block;border-radius:999px;padding:2px 8px;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;background:var(--chip)}
+#importSheet .pill.warn{background:var(--warn-bg)}
+#importSheet .pill.bad{color:var(--danger)}
+#importSheet .rowCard{border-left:4px solid var(--line)}
+#importSheet .rowCard.flag{border-left-color:var(--coyote)}
+#importSheet .rowCard.dupe{border-left-color:var(--danger)}
+#importSheet .cols{display:flex;flex-direction:column;gap:8px}
+#importSheet .colMap{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
+#importSheet .colMap select{flex:1 1 180px;max-width:100%}
+#importSheet .tally{display:flex;flex-wrap:wrap;gap:8px}
+#importSheet .tally b{font-family:var(--display);font-size:1.4rem}
+#importSheet .check{margin:0;padding-left:1.1rem}
+#importSheet .confirmBox{border:1px solid var(--line);border-radius:8px;padding:16px;background:var(--warn-bg)}
+.importUndo{position:fixed;z-index:70;left:50%;transform:translateX(-50%);bottom:calc(12px + env(safe-area-inset-bottom,0px));display:flex;flex-wrap:wrap;gap:8px;align-items:center;max-width:calc(100% - 24px);background:var(--ink);color:var(--bg);padding:8px 10px 8px 14px;border-radius:8px}
+.importUndo .btn{min-height:44px}
+#importSheet .scanVideo{width:100%;max-height:46dvh;background:#000;border-radius:8px;object-fit:cover}
+#importSheet .sheetSel{display:flex;gap:6px;flex-wrap:wrap}
+@media (max-width:700px){
+  #importSheet.sheetWrap{align-items:stretch;padding:0}
+  #importSheet .sheet{max-height:100dvh;height:100dvh;border-radius:0}
+}

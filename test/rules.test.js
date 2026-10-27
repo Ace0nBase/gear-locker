@@ -244,3 +244,17 @@ test("a lender cannot change the borrower email, and the lend counter cannot be 
   await assertSucceeds(deleteDoc(doc(owner, "users/owner/lendMail/" + hash)));
   assert.equal((await getDoc(doc(owner, "users/owner/lendMail/" + hash))).exists(), false);
 });
+
+test("import ids stay on the owner's locker", async () => {
+  await env.clearFirestore();
+  const owner = as("qa-a", "a@example.com", true);
+  await assertSucceeds(setDoc(doc(owner, "users/qa-a/items/imp1"), {
+    id: "imp1", name: "Rifle", importId: "01IMPORT", importUndo: { notes: "" }, serial: "SAMPLE-0007",
+  }));
+  await assertSucceeds(getDoc(doc(owner, "users/qa-a/items/imp1")));
+  const other = as("qa-b", "b@example.com", true);
+  await assertFails(getDoc(doc(other, "users/qa-a/items/imp1")));
+  await assertFails(updateDoc(doc(other, "users/qa-a/items/imp1"), { importId: "nope" }));
+  await assertFails(deleteDoc(doc(other, "users/qa-a/items/imp1")));
+  await assertFails(setDoc(doc(owner, "shares/with-import"), { ...share("qa-a"), importId: "01IMPORT", importUndo: { notes: "" } }));
+});
