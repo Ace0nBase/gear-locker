@@ -14,7 +14,7 @@
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, SEARCH_RESULT_TOKENS } from "../js/logic.js";
+import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
 
@@ -148,7 +148,7 @@ function findJson(text, keys) {
 function loopCeiling(env, model, messages, maxTokens, searches) {
   const n = Math.max(0, Math.floor(+searches || 0));
   return estimateSpendMicro({
-    input_tokens: estimateInputTokens(JSON.stringify(messages)) + n * SEARCH_RESULT_TOKENS,
+    input_tokens: roundInputTokens(estimateInputTokens(JSON.stringify(messages)) + n * SEARCH_RESULT_TOKENS, n),
     output_tokens: clampMaxTokens(maxTokens),
     web_search_requests: n,
   }, ratesForModel(env, model));
@@ -378,9 +378,11 @@ async function clearUsageCounters(env, uid) {
   await deleteUserKv(env, uid);
 }
 const CLEANUP_PREFIX = "cleanup:";
-async function queueUsageCleanup(env, uid) {
+async function queueUsageCleanup(env, uid, redactPending) {
   if (!env.WATCH || !uid) throw new Error("cleanup");
-  await env.WATCH.put(CLEANUP_PREFIX + uid, JSON.stringify({ uid, at: new Date().toISOString() }));
+  const body = { uid, at: new Date().toISOString() };
+  if (Array.isArray(redactPending) && redactPending.length) body.redactPending = redactPending;
+  await env.WATCH.put(CLEANUP_PREFIX + uid, JSON.stringify(body));
 }
 async function retryQueuedCleanups(env) {
   if (!env.WATCH) return 0;
@@ -675,9 +677,13 @@ export default {
         const removed = await deleteAuthUser(env, idToken);
         if (!removed.ok) return json({ error: removed.error }, 502, h);
         const countersGone = await retryOnce(() => clearUsageCounters(env, accountUser.sub));
-        if (!countersGone) await retryOnce(() => queueUsageCleanup(env, accountUser.sub));
+        const redactLeft = Array.isArray(cleaned.redactPending) && cleaned.redactPending.length > 0;
+        let queueSaved = countersGone && !redactLeft;
+        if (!countersGone || redactLeft) queueSaved = await retryOnce(() => queueUsageCleanup(env, accountUser.sub, cleaned.redactPending));
+        const cleanup = deleteCleanupResult(countersGone, queueSaved, redactLeft);
+        if (cleanup.status !== 200) return json(cleanup.body, cleanup.status, h);
         deleteRevenueCatCustomer(env, accountUser.sub);
-        return json({ ok: true, deleted: true, cleanup: countersGone ? "done" : "pending" }, 200, h);
+        return json(cleanup.body, 200, h);
       } catch { return json({ error: "Couldn't finish deleting the account. Try again." }, 502, h); }
     }
     if (!ROUTES.includes(url.pathname) || req.method !== "POST") return json({ error: "Not found" }, 404, h);

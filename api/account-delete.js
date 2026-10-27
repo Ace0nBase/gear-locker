@@ -2,7 +2,7 @@
 // Rules allow that owner to list and delete their shares, locker, and lends, and to clear their email.
 // 404 means the row is already gone. The auth user is deleted only after this returns ok.
 
-import { USER_COLLECTIONS, loanTargetsFromLends } from "../js/logic.js";
+import { USER_COLLECTIONS, loanRedactTargets } from "../js/logic.js";
 
 const GEAR_STILL_HERE = "Couldn't finish removing your gear. Your sign-in is still here. Try again.";
 
@@ -93,14 +93,21 @@ async function forEachMatch(fetchImpl, idToken, root, structuredQuery, visit) {
   }
 }
 
-async function clearFields(fetchImpl, idToken, name, fields) {
+async function patchFields(fetchImpl, idToken, name, fields, mustExist) {
   const mask = fields.map(field => "updateMask.fieldPaths=" + encodeURIComponent(field)).join("&");
+  const exists = mustExist ? "&currentDocument.exists=true" : "";
   const body = { fields: {} };
   const stamp = new Date().toISOString();
-  for (const field of fields) body.fields[field] = { stringValue: field === "updatedAt" ? stamp : "" };
-  const res = await callFs(fetchImpl, idToken, docUrl(name) + "?" + mask, { method: "PATCH", body: JSON.stringify(body) });
-  if (res.status === 200 || res.status === 404) return;
-  throw new Error("patch");
+  for (const field of fields) body.fields[field] = field === "updatedAt" ? { timestampValue: stamp } : { stringValue: "" };
+  let res;
+  try {
+    res = await callFs(fetchImpl, idToken, docUrl(name) + "?" + mask + exists, { method: "PATCH", body: JSON.stringify(body) });
+  } catch {
+    return "failed";
+  }
+  if (res.status === 200) return "ok";
+  if (res.status === 404) return "missing";
+  return "failed";
 }
 
 function stringField(doc, field) {
@@ -125,40 +132,72 @@ function loanDocName(project, lender, loanId) {
   return "projects/" + project + "/databases/(default)/documents/users/" + lender + "/loans/" + loanId;
 }
 
-async function redactBorrowed(fetchImpl, idToken, project, root, email) {
-  const want = String(email || "");
-  if (!want) return;
-  const lower = want.toLowerCase();
-  const queries = [equalFilter("borrowerEmail", want)];
-  if (lower === want) queries.push(equalFilter("borrowerEmailLower", lower));
+function explicitlyUnverified(user) {
+  return !!(user && (user.email_verified === false || user.emailVerified === false));
+}
+
+function hasField(doc, field) {
+  return !!(doc && doc.fields && Object.prototype.hasOwnProperty.call(doc.fields, field));
+}
+
+// Redaction is best effort. A missing loan, a lender mismatch, or a changed email is skipped.
+// Anything else is queued. It never fails the caller's own delete.
+async function redactBorrowed(fetchImpl, idToken, project, root, email, user) {
+  const pending = [];
+  const want = String(email || "").trim().toLowerCase();
+  if (!want || explicitlyUnverified(user)) return pending;
+  const raw = String(email || "");
+  const queries = [equalFilter("borrowerEmail", raw)];
+  if (raw.toLowerCase() === raw) queries.push(equalFilter("borrowerEmailLower", want));
   const docs = [];
   const seen = new Set();
-  for (const where of queries) {
-    const page = await collectQuery(fetchImpl, idToken, root, {
-      from: [{ collectionId: "lends" }],
-      where,
-    });
-    for (const doc of page) {
-      if (!doc || !doc.name || seen.has(doc.name)) continue;
-      seen.add(doc.name);
-      docs.push(doc);
+  try {
+    for (const where of queries) {
+      const page = await collectQuery(fetchImpl, idToken, root, {
+        from: [{ collectionId: "lends" }],
+        where,
+      });
+      for (const doc of page) {
+        if (!doc || !doc.name || seen.has(doc.name)) continue;
+        seen.add(doc.name);
+        docs.push(doc);
+      }
     }
+  } catch {
+    pending.push({ reason: "lends-query" });
+    return pending;
   }
-  const plan = loanTargetsFromLends(docs.map(doc => ({ id: docId(doc), lender: stringField(doc, "lender") })));
-  if (!plan.ok) throw new Error("lend");
+  const plan = loanRedactTargets(docs.map(doc => ({ id: docId(doc), lender: stringField(doc, "lender") })));
   for (const path of plan.paths) {
-    await clearFields(fetchImpl, idToken, loanDocName(project, path.lender, path.loanId), ["friendEmail", "updatedAt"]);
+    const name = loanDocName(project, path.lender, path.loanId);
+    let got;
+    try {
+      got = await callFs(fetchImpl, idToken, docUrl(name), { method: "GET" });
+    } catch {
+      got = { status: 0, data: {} };
+    }
+    if (got.status === 404) continue;
+    if (got.status === 200) {
+      const lenderOnLoan = stringField(got.data, "lender");
+      if (lenderOnLoan && lenderOnLoan !== path.lender) continue;
+      if (hasField(got.data, "friendEmail") && stringField(got.data, "friendEmail").trim().toLowerCase() !== want) continue;
+    }
+    const patched = await patchFields(fetchImpl, idToken, name, ["friendEmail", "updatedAt"], true);
+    if (patched === "missing") continue;
+    if (patched !== "ok") pending.push({ lender: path.lender, loanId: path.loanId, reason: "loan" });
   }
   for (const doc of docs) {
-    await clearFields(fetchImpl, idToken, doc.name, ["borrowerEmail", "borrowerEmailLower", "updatedAt"]);
+    const cleared = await patchFields(fetchImpl, idToken, doc.name, ["borrowerEmail", "borrowerEmailLower", "updatedAt"], false);
+    if (cleared === "failed") pending.push({ lend: doc.name, reason: "lend" });
   }
+  return pending;
 }
 
 export async function deleteUserFirestore(env, idToken, user, fetchImpl) {
   const fetchFn = fetchImpl || fetch;
   const project = env && env.FIREBASE_PROJECT;
   const uid = user && user.sub;
-  if (!project || !uid || !idToken) return { ok: false, error: GEAR_STILL_HERE };
+  if (!project || !uid || !idToken) return { ok: false, error: GEAR_STILL_HERE, redactPending: [] };
   const email = String((user && user.email) || "");
   const root = rootUrl(project);
   try {
@@ -173,9 +212,14 @@ export async function deleteUserFirestore(env, idToken, user, fetchImpl) {
       from: [{ collectionId: "lends" }],
       where: equalFilter("lender", uid),
     });
-    await redactBorrowed(fetchFn, idToken, project, root, email);
-    return { ok: true };
   } catch {
-    return { ok: false, error: GEAR_STILL_HERE };
+    return { ok: false, error: GEAR_STILL_HERE, redactPending: [] };
   }
+  let redactPending = [];
+  try {
+    redactPending = await redactBorrowed(fetchFn, idToken, project, root, email, user);
+  } catch {
+    redactPending = [{ reason: "redact" }];
+  }
+  return { ok: true, redactPending };
 }

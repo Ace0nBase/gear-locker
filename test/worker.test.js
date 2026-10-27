@@ -70,12 +70,13 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.ok(delBody.indexOf("deleteUserFirestore") < delBody.indexOf("deleteWatchRecord"));
   assert.ok(delBody.indexOf("deleteWatchRecord") < delBody.indexOf("deleteAuthUser"));
   assert.ok(delBody.indexOf("deleteAuthUser(env, idToken)") < delBody.indexOf("clearUsageCounters"));
-  assert.ok(delBody.indexOf("clearUsageCounters") < delBody.indexOf("return json({ ok: true, deleted: true"));
+  assert.ok(delBody.indexOf("clearUsageCounters") < delBody.indexOf("deleteCleanupResult"));
   assert.match(delBody, /sign-in is still here/);
   assert.match(delBody, /Couldn't finish deleting the account/);
   assert.ok(delBody.indexOf("clearUsageCounters") < delBody.indexOf("queueUsageCleanup"));
-  assert.match(delBody, /deleted: true/);
-  assert.match(delBody, /cleanup: countersGone \? "done" : "pending"/);
+  assert.ok(delBody.indexOf("queueUsageCleanup") < delBody.indexOf("deleteCleanupResult"));
+  assert.match(delBody, /deleteCleanupResult/);
+  assert.match(src, /roundInputTokens/);
   assert.match(src, /retryQueuedCleanups/);
   const authFn = src.slice(src.indexOf("async function deleteAuthUser"), src.indexOf("async function listWatchUsers"));
   assert.match(authFn, /env\.FIREBASE_SERVER_API_KEY/);

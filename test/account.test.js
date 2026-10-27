@@ -6,8 +6,9 @@ import {
   deleteRevenueCatCustomer, accountDeletePlan, USER_COLLECTIONS,
   signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
   clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, priciestRates, spendRates, applyReserve, applyReconcile,
-  SEARCH_RESULT_TOKENS, roundFits, loanTargetsFromLends,
+  SEARCH_RESULT_TOKENS, roundFits, roundInputTokens, loanTargetsFromLends, loanRedactTargets, loansToMirror,
   deleteRetryRoute, runDeleteAttempt, SERVER_DELETE_STEPS, LOOKUPS_PAUSED,
+  ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult,
 } from "../js/logic.js";
 import { UsageLedger } from "../api/usage-ledger.js";
 import { deleteUserFirestore } from "../api/account-delete.js";
@@ -179,6 +180,14 @@ test("a borrowed lend names the private loan, and a loan with no lend has no pat
   ]), { ok: true, paths: [{ lender: "owner", loanId: "loan1" }] });
   assert.deepEqual(loanTargetsFromLends([]), { ok: true, paths: [] });
   assert.equal(loanTargetsFromLends([{ id: "loan1" }]).ok, false);
+  const redact = loanRedactTargets([
+    { id: "loan1", lender: "owner" },
+    { id: "loan1", lender: "owner" },
+    { id: "x" },
+    { id: "bad id", lender: "owner" },
+  ]);
+  assert.deepEqual(redact.paths, [{ lender: "owner", loanId: "loan1" }]);
+  assert.equal(redact.skipped.length, 2);
 });
 
 test("loan redaction clears only a matching email and ignores the item name", () => {
@@ -446,6 +455,7 @@ test("a borrowed lend clears the lender loan, and a query error is not an empty 
   const loanPatch = patches.find(p => p.url.includes("users/owner/loans/loan1"));
   assert.ok(loanPatch);
   assert.equal(loanPatch.body.fields.friendEmail.stringValue, "");
+  assert.equal(typeof loanPatch.body.fields.updatedAt.timestampValue, "string");
   assert.ok(patches.some(p => p.url.includes("lends/loan1")));
   assert.equal(patches.some(p => p.url.includes("/loans/") && !p.url.includes("users/owner/loans/loan1")), false);
 
@@ -472,8 +482,8 @@ test("a borrowed lend clears the lender loan, and a query error is not an empty 
     if (method === "PATCH") return { status: 200, json: async () => ({}) };
     return { status: 200, json: async () => ({ documents: [] }) };
   });
-  assert.equal(denied.ok, false);
-  assert.match(denied.error, /sign-in is still here/);
+  assert.equal(denied.ok, true);
+  assert.equal(denied.redactPending.some(row => row.reason === "lends-query"), true);
 
   const blockedLoan = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, async (url, opts) => {
     const method = (opts && opts.method) || "GET";
@@ -490,7 +500,8 @@ test("a borrowed lend clears the lender loan, and a query error is not an empty 
     }
     return { status: 200, json: async () => ({ documents: [] }) };
   });
-  assert.equal(blockedLoan.ok, false);
+  assert.equal(blockedLoan.ok, true);
+  assert.equal(blockedLoan.redactPending.some(row => row.reason === "loan" && row.loanId === "loan1"), true);
 
   const brokenLend = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, async (url, opts) => {
     const body = opts && opts.body ? JSON.parse(opts.body) : null;
@@ -504,7 +515,8 @@ test("a borrowed lend clears the lender loan, and a query error is not an empty 
     if ((opts && opts.method) === "PATCH") return { status: 200, json: async () => ({}) };
     return { status: 200, json: async () => ({ documents: [] }) };
   });
-  assert.equal(brokenLend.ok, false);
+  assert.equal(brokenLend.ok, true);
+  assert.deepEqual(brokenLend.redactPending, []);
   assert.equal(loanName.includes("users/owner/loans/loan1"), true);
 });
 
@@ -538,4 +550,118 @@ test("server cleanup treats a missing document as already gone", async () => {
   const broken = await deleteUserFirestore(env, "not-a-token", user, async () => ({ status: 500, json: async () => ({}) }));
   assert.equal(broken.ok, false);
   assert.match(broken.error, /sign-in is still here/);
+});
+
+test("orphan, mismatched, changed, and unverified lends do not block account deletion", async () => {
+  const env = { FIREBASE_PROJECT: "demo" };
+  const lendName = "projects/demo/databases/(default)/documents/lends/x";
+  function lendDoc() {
+    return {
+      name: lendName,
+      fields: {
+        lender: { stringValue: "owner" },
+        borrowerEmail: { stringValue: "v@example.com" },
+        borrowerEmailLower: { stringValue: "v@example.com" },
+      },
+    };
+  }
+  async function run(user, loanReply) {
+    const calls = [];
+    const fetchImpl = async (url, opts) => {
+      const method = (opts && opts.method) || "GET";
+      const body = opts && opts.body ? JSON.parse(opts.body) : null;
+      const u = String(url);
+      calls.push(method + " " + u);
+      const json = (status, data) => ({ status, json: async () => data });
+      if (u.includes(":runQuery")) {
+        const q = body.structuredQuery;
+        const field = q.where.fieldFilter.field.fieldPath;
+        if (q.from[0].collectionId === "lends" && (field === "borrowerEmail" || field === "borrowerEmailLower")) {
+          return json(200, [{ document: lendDoc() }]);
+        }
+        return json(200, [{}]);
+      }
+      if (method === "GET" && u.includes("/loans/")) return loanReply(u);
+      if (method === "PATCH" || method === "DELETE") return json(200, {});
+      return json(200, { documents: [] });
+    };
+    const out = await deleteUserFirestore(env, "token", user, fetchImpl);
+    return { out, calls };
+  }
+  const user = { sub: "vee", email: "v@example.com", email_verified: true };
+  const loanPatch = calls => calls.some(c => c.startsWith("PATCH") && c.includes("/loans/"));
+  const lendPatch = calls => calls.some(c => c.startsWith("PATCH") && c.includes("/lends/"));
+
+  const orphan = await run(user, () => ({ status: 404, json: async () => ({}) }));
+  assert.equal(orphan.out.ok, true);
+  assert.deepEqual(orphan.out.redactPending, []);
+  assert.equal(loanPatch(orphan.calls), false);
+  assert.equal(lendPatch(orphan.calls), true);
+
+  const mismatch = await run(user, () => ({ status: 200, json: async () => ({ fields: { lender: { stringValue: "someone-else" }, friendEmail: { stringValue: "v@example.com" } } }) }));
+  assert.equal(mismatch.out.ok, true);
+  assert.deepEqual(mismatch.out.redactPending, []);
+  assert.equal(loanPatch(mismatch.calls), false);
+  assert.equal(lendPatch(mismatch.calls), true);
+
+  const changed = await run(user, () => ({ status: 200, json: async () => ({ fields: { lender: { stringValue: "owner" }, friendEmail: { stringValue: "other@example.com" } } }) }));
+  assert.equal(changed.out.ok, true);
+  assert.equal(loanPatch(changed.calls), false);
+
+  const cleared = await run(user, () => ({ status: 200, json: async () => ({ fields: { friendEmail: { stringValue: "" } } }) }));
+  assert.equal(cleared.out.ok, true);
+  assert.equal(loanPatch(cleared.calls), false);
+
+  const caps = await run(
+    { sub: "vee", email: "qa-b@example.test", email_verified: true },
+    () => ({ status: 200, json: async () => ({ fields: { friendEmail: { stringValue: "QA-B@Example.test" } } }) }),
+  );
+  assert.equal(caps.out.ok, true);
+  assert.equal(caps.calls.some(c => c.startsWith("PATCH") && c.includes("/loans/") && c.includes("currentDocument.exists=true")), true);
+
+  const unverified = await run({ sub: "vee", email: "v@example.com", email_verified: false }, () => ({ status: 500, json: async () => ({}) }));
+  assert.equal(unverified.out.ok, true);
+  assert.deepEqual(unverified.out.redactPending, []);
+  assert.equal(unverified.calls.some(c => c.includes("borrowerEmail")), false);
+});
+
+test("the deleted-account note survives sign-out, and both cleanup failures are an error", () => {
+  assert.equal(deletedAccountGate("", "").text, "Sign in to open War Box.");
+  assert.equal(deletedAccountGate("", "").clearStored, false);
+  const loaded = deletedAccountGate(ACCOUNT_DELETED_NOTE, "");
+  assert.equal(loaded.text, "Your account is deleted.");
+  assert.equal(loaded.clearStored, true);
+  const kept = deletedAccountGate("", loaded.shown);
+  assert.equal(kept.text, "Your account is deleted.");
+  assert.equal(kept.clearStored, false);
+  assert.equal(deleteCleanupResult(true, true, false).body.cleanup, "done");
+  assert.equal(deleteCleanupResult(false, true, false).body.cleanup, "pending");
+  assert.equal(deleteCleanupResult(false, false, true).status, 502);
+  assert.equal(deleteCleanupResult(true, true, true).body.cleanup, "pending");
+  assert.equal(deleteCleanupResult(true, false, true).status, 200);
+  const mirrored = loansToMirror([
+    { id: "loan1", friendEmail: "QA-B@Example.test" },
+    { id: "plain", friendEmail: "" },
+    { id: "gone", friendEmail: "", lendShared: true },
+  ], true);
+  assert.deepEqual(mirrored, [
+    { id: "loan1", writeLend: true, deleteLend: false },
+    { id: "gone", writeLend: false, deleteLend: true },
+  ]);
+  assert.deepEqual(loansToMirror([{ id: "loan1", friendEmail: "QA-B@Example.test" }], false), []);
+});
+
+test("a searching round budgets 1.2M input tokens and still fits inside the lookup hold", () => {
+  assert.equal(roundInputTokens(50_000, 3), 1_200_000);
+  assert.equal(roundInputTokens(2_000_000, 1), 2_000_000);
+  assert.equal(roundInputTokens(50_000, 0), 50_000);
+  const oneRound = estimateSpendMicro({
+    input_tokens: roundInputTokens(50_000, 3),
+    output_tokens: 4000,
+    web_search_requests: 3,
+  }, priciestRates({}));
+  assert.ok(oneRound < lookupReserveMicro({}));
+  const loose = estimateSpendMicro({ input_tokens: 48_000, output_tokens: 4000, web_search_requests: 3 }, spendRates({}));
+  const tight = estimateSpendMicro({ input_tokens: 1_200_000, output_tokens: 4000, web_search_requests: 3 }, spendRates({}));
+  assert.ok(tight - loose >= 860_000);
 });

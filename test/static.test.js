@@ -48,13 +48,13 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device and the service worker is version 33", () => {
+test("sign-out clears this device and the service worker is version 34", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v33/);
-  assert.match(read("js/cloud.js"), /APP_VERSION="33"/);
+  assert.match(sw, /war-box-v34/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="34"/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
   assert.match(manifest, /maskable-512\.png/);
@@ -217,8 +217,14 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.ok(delBody.indexOf("deleteRetryRoute") < delBody.indexOf('where("owner","=="'));
   assert.ok(delBody.indexOf("deleteRetryRoute") < delBody.indexOf('"/account/delete"'));
   assert.doesNotMatch(delBody, /collectionGroup\("loans"\)/);
-  assert.match(delBody, /loanTargetsFromLends/);
-  assert.match(delBody, /Your account is deleted/);
+  assert.match(delBody, /redactBorrowedClient/);
+  assert.match(delBody, /emailVerified/);
+  assert.match(read("js/cloud.js"), /loanRedactTargets/);
+  assert.match(read("js/cloud.js"), /ACCOUNT_DELETED_NOTE/);
+  assert.match(read("js/cloud.js"), /deletedAccountGate/);
+  assert.match(read("js/logic.js"), /Your account is deleted\./);
+  assert.match(read("js/social.js"), /repairLoanMirrors/);
+  assert.match(read("js/social.js"), /loansToMirror/);
   assert.match(read("js/core.js"), /Dismiss keeps them on Ammo Storage &amp; Loaders, with prices and store links on\./);
   assert.match(read("js/cloud.js"), /showDeleteFailure/);
   assert.match(read("js/security.js"), /That took too long\. Try deleting the account again\./);

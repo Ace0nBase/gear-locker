@@ -47,7 +47,7 @@ async function mirrorLend(x,removed){
   const batch=fsdb.batch();
   batch.set(userRef().collection("loans").doc(x.id),stampRow(row));
   const ref=fsdb.collection("lends").doc(x.id);
-  if(plan.writeLend)batch.set(ref,lendDoc(row));
+  if(plan.writeLend)batch.set(ref,lendDoc(row),{merge:true});
   if(plan.deleteLend)batch.delete(ref);
   pushed["loans/"+x.id]=row.updatedAt;
   try{await batch.commit()}
@@ -76,8 +76,27 @@ function watchLends(){
   var em=tokenEmail();
   lendUnsubs.push(fsdb.collection("lends").where("borrowerEmail","==",em).onSnapshot(s=>noteBorrowed("exact",s.docs.map(d=>({id:d.id,...d.data()}))),()=>{}));
   if(em===em.toLowerCase())lendUnsubs.push(fsdb.collection("lends").where("borrowerEmailLower","==",em).onSnapshot(s=>noteBorrowed("lower",s.docs.map(d=>({id:d.id,...d.data()}))),()=>{}));
-  lendUnsubs.push(fsdb.collection("lends").where("lender","==",cloudUser.uid).onSnapshot(s=>{lentRemote={};s.docs.forEach(d=>lentRemote[d.id]=d.data());recoverOrphanLends();if(curTab==="loans")renderExtra();updateBadges()},()=>{}));
+  lendUnsubs.push(fsdb.collection("lends").where("lender","==",cloudUser.uid).onSnapshot(s=>{lentRemote={};s.docs.forEach(d=>lentRemote[d.id]=d.data());recoverOrphanLends();repairLoanMirrors();if(curTab==="loans")renderExtra();updateBadges()},()=>{}));
 }
+async function repairLoanMirrors(){
+  if(!fsdb||!cloudUser)return;
+  const jobs=GearLogic.loansToMirror(db.loans||[],!!cloudUser.emailVerified);
+  const ops=[];
+  jobs.forEach(function(job){
+    const loan=(db.loans||[]).find(function(y){return y&&y.id===job.id});
+    if(!loan)return;
+    const ref=fsdb.collection("lends").doc(loan.id);
+    if(job.writeLend)ops.push(function(batch){batch.set(ref,lendDoc(loan),{merge:true})});
+    else if(job.deleteLend)ops.push(function(batch){batch.delete(ref)});
+  });
+  for(let i=0;i<ops.length;i+=400){
+    const batch=fsdb.batch();
+    ops.slice(i,i+400).forEach(function(fn){fn(batch)});
+    try{await batch.commit()}catch(e){}
+  }
+}
+var _pushCloud=pushCloud;
+pushCloud=async function(){await _pushCloud();try{await repairLoanMirrors()}catch(e){}};
 {const _save=SAVE.loans;SAVE.loans=async d=>{
   if(d.friendEmail&&!/^\S+@\S+\.\S+$/.test(String(d.friendEmail).trim())){toast("That email doesn't look right");return}
   if(!d.remindAt&&d.due)d.remindAt=d.due+"T09:00";

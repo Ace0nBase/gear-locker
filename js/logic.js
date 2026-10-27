@@ -673,6 +673,72 @@ export function loanTargetsFromLends(lends) {
   return { ok: true, paths };
 }
 
+// A bad lend is skipped. It must not fail the whole account delete.
+export function loanRedactTargets(lends) {
+  const paths = [];
+  const skipped = [];
+  const seen = new Set();
+  for (const lend of lends || []) {
+    if (!lend) continue;
+    const loanId = String(lend.id || "").trim();
+    const lender = String(lend.lender || "").trim();
+    if (!loanId || !lender || /[/\s]/.test(loanId) || /[/\s]/.test(lender)) {
+      skipped.push({ loanId, lender, reason: "lend" });
+      continue;
+    }
+    const key = lender + "/" + loanId;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    paths.push({ lender, loanId });
+  }
+  return { paths, skipped };
+}
+
+// Every saved loan that names a friend email gets a lend mirror. Verified sign-in backfills the ones that missed.
+export function loansToMirror(loans, verified) {
+  const jobs = [];
+  for (const loan of loans || []) {
+    if (!loan || !loan.id) continue;
+    const plan = loanSharePlan(loan, { verified: !!verified });
+    if (!plan.writeLend && !plan.deleteLend) continue;
+    jobs.push({ id: String(loan.id), writeLend: !!plan.writeLend, deleteLend: !!plan.deleteLend });
+  }
+  return jobs;
+}
+
+export const ACCOUNT_DELETED_NOTE = "Your account is deleted.";
+
+// The note is written just before sign-out. This page load is the only one that may clear it.
+export function deletedAccountGate(loadedWith, shown) {
+  const fromLoad = String(loadedWith || "");
+  const already = String(shown || "");
+  const text = fromLoad || already;
+  return {
+    text: text || "Sign in to open War Box.",
+    clearStored: !!fromLoad,
+    shown: text,
+  };
+}
+
+// Counters and the cleanup queue both have to fail before deletion reports an error.
+export function deleteCleanupResult(countersCleared, queueSaved, redactLeft) {
+  if (!countersCleared && !queueSaved) {
+    return { status: 502, body: { error: "Couldn't finish deleting the account. Try again." } };
+  }
+  const pending = !countersCleared || (!!redactLeft && !!queueSaved);
+  return { status: 200, body: { ok: true, deleted: true, cleanup: pending ? "pending" : "done" } };
+}
+
+// A searching round can carry this much input. The loop stops before the next round would pass the hold.
+export const ROUND_INPUT_TOKEN_CAP = 1_200_000;
+
+export function roundInputTokens(estimated, searches) {
+  const est = Math.max(0, Math.floor(+estimated || 0));
+  const n = Math.max(0, Math.floor(+searches || 0));
+  if (!n) return est;
+  return Math.max(est, ROUND_INPUT_TOKEN_CAP);
+}
+
 // A recovered loan keeps the item name when the inventory link is gone.
 export function loanNeedsItem(loan) {
   const id = String((loan && loan.itemId) || "").trim();
@@ -1705,7 +1771,8 @@ const GearLogic = {
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, LOOKUPS_PAUSED,
-  reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, deleteRetryRoute,
+  reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
+  ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, ROUND_INPUT_TOKEN_CAP, roundInputTokens,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, bulkLookupIds, singleLookupIds, applyMarketPrices,

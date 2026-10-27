@@ -10,10 +10,15 @@ service cloud.firestore {
         && request.auth.token.email is string
         && request.auth.token.email.size() > 3;
     }
+    function sameEmail(stored) {
+      return stored is string
+        && request.auth.token.email is string
+        && stored.lower() == request.auth.token.email.lower();
+    }
     function borrowerMatch() {
       return emailOk() && (
-        resource.data.borrowerEmail == request.auth.token.email
-        || resource.data.borrowerEmailLower == request.auth.token.email
+        sameEmail(resource.data.borrowerEmail)
+        || sameEmail(resource.data.borrowerEmailLower)
       );
     }
     function isLender() {
@@ -130,15 +135,17 @@ service cloud.firestore {
     }
 
     // The named person may clear only their email. They cannot read the owner's loan or its notes.
-    // The copy they can read is /lends/{id}.
+    // The copy they can read is /lends/{id}. A missing loan is not a permission error, so delete can skip it.
     match /{path=**}/loans/{loanId} {
       allow update: if emailOk()
-        && resource.data.friendEmail == request.auth.token.email
+        && resource == null
         && request.resource.data.friendEmail == ""
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['friendEmail','updatedAt','serverUpdatedAt']);
+        && request.resource.data.updatedAt is timestamp;
       allow update: if emailOk()
-        && resource.data.friendEmail == request.auth.token.email.lower()
+        && resource != null
+        && sameEmail(resource.data.friendEmail)
         && request.resource.data.friendEmail == ""
+        && request.resource.data.updatedAt is timestamp
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['friendEmail','updatedAt','serverUpdatedAt']);
     }
 
@@ -160,8 +167,8 @@ service cloud.firestore {
     match /lends/{id} {
       allow get: if isLender() || borrowerMatch();
       allow list: if isLender();
-      allow list: if emailOk() && resource.data.borrowerEmail == request.auth.token.email;
-      allow list: if emailOk() && resource.data.borrowerEmailLower == request.auth.token.email;
+      allow list: if emailOk() && sameEmail(resource.data.borrowerEmail);
+      allow list: if emailOk() && sameEmail(resource.data.borrowerEmailLower);
       allow create: if emailOk()
         && !tombstoned()
         && request.auth.uid == request.resource.data.lender
@@ -175,16 +182,11 @@ service cloud.firestore {
         || (borrowerMatch()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['borrowerReturned','updatedAt','serverUpdatedAt'])));
       allow update: if emailOk()
-        && resource.data.borrowerEmail == request.auth.token.email
+        && (sameEmail(resource.data.borrowerEmail) || sameEmail(resource.data.borrowerEmailLower))
         && request.resource.data.borrowerEmail == ""
         && request.resource.data.borrowerEmailLower == ""
         && request.resource.data.lender == resource.data.lender
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['borrowerEmail','borrowerEmailLower','updatedAt','serverUpdatedAt']);
-      allow update: if emailOk()
-        && resource.data.borrowerEmailLower == request.auth.token.email.lower()
-        && request.resource.data.borrowerEmail == ""
-        && request.resource.data.borrowerEmailLower == ""
-        && request.resource.data.lender == resource.data.lender
+        && request.resource.data.updatedAt is timestamp
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['borrowerEmail','borrowerEmailLower','updatedAt','serverUpdatedAt']);
       allow delete: if isLender();
     }
