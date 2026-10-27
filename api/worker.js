@@ -3,12 +3,13 @@
 // Header: Authorization: Bearer <Firebase ID token from the signed-in app user>
 // Returns { results: [{ id, ok, retailNew, usedLow, usedHigh, value, weightOz, priceNote, weightNote, sources }] }
 // Secrets (set in the Cloudflare dashboard, never in code): ANTHROPIC_API_KEY
+// FIREBASE_API_KEY is a plain var in wrangler.toml (the public web API key, not a secret).
+// Other vars use the defaults below unless the dashboard sets them. BETA_ONLY stays unset.
 // Vars (dashboard, kept across deploys): FIREBASE_PROJECT, ALLOWED_ORIGINS, MODEL, FALLBACK_MODEL,
 // ALLOWED_EMAILS (used only when BETA_ONLY=true), BETA_ONLY, REVIEW_EMAILS, REVIEW_DAILY_LIMIT,
 // DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS, FREE_SPEND_CAP_USD,
 // PLAN_LIMIT_FREE, PLAN_LIMIT_PRO, PLAN_LIMIT_ARMORY, SPEND_INPUT_PER_MILLION, SPEND_OUTPUT_PER_MILLION, SPEND_SEARCH_EACH,
-// SPEND_RESERVE_USD (optional hold before a free lookup; unset uses a built-in estimate),
-// FIREBASE_API_KEY (web API key, used only to delete the signed-in account)
+// SPEND_RESERVE_USD (optional hold before a free lookup; unset uses a built-in estimate)
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
 import { decideAccess, chargeDecision, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, usageDecision, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, reserveFits, lookupReserveMicro, reconcileSpendMicro } from "../js/logic.js";

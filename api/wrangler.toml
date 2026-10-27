@@ -1,12 +1,17 @@
 # Production deploys: Cloudflare Workers Builds on the main branch only (connected 2026-10-20).
 # Do not add a GitHub Action that runs wrangler deploy. Do not point a branch build at this worker name.
-# Dashboard variables override the defaults in worker.js (keep_vars). Set ALLOWED_EMAILS before merging.
+# keep_vars preserves dashboard-only variables. Plain vars in this file are part of the deploy.
+# BETA_ONLY stays unset. Other limits use the defaults in worker.js.
 name = "gear-locker-api"
 main = "worker.js"
 compatibility_date = "2026-10-15"
 workers_dev = true
-# Keep any variables set in the dashboard; settings live in DEFAULTS inside worker.js.
 keep_vars = true
+
+# Public web API key, the same value already published in config.js. Not a secret.
+# Auth deletion calls Identity Toolkit with it, so a deploy from main includes the key.
+[vars]
+FIREBASE_API_KEY = "AIzaSyBexXFiQtDEnmlL2z0x4FXD7YCbeAHTGC4"
 
 # Price-alert storage
 [[kv_namespaces]]

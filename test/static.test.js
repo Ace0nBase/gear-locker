@@ -225,6 +225,12 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("README.md"), /REVIEW_EMAILS/);
   assert.match(read("README.md"), /FIREBASE_API_KEY/);
   assert.doesNotMatch(read("README.md"), /AIza/);
+  const wrangler = read("api/wrangler.toml");
+  const webKey = config.match(/apiKey:\s*"(AIza[^"]+)"/);
+  assert.ok(webKey);
+  assert.match(wrangler, new RegExp(`FIREBASE_API_KEY\\s*=\\s*"${webKey[1]}"`));
+  assert.match(wrangler, /keep_vars\s*=\s*true/);
+  assert.doesNotMatch(wrangler, /^\s*BETA_ONLY\s*=/m);
   assert.doesNotMatch(read("api/stub.js"), /https:\/\/identitytoolkit\.googleapis\.com/);
   const pkg = JSON.parse(read("package.json"));
   assert.equal(pkg.engines.node, ">=22");
