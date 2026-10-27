@@ -39,4 +39,11 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.match(src, /publicWeightNote\(parsed\.weightNote\)/);
   assert.match(src, /lookupAnswerRestricted\(parsed\)/);
   assert.match(src, /"restricted": true/);
+  assert.match(src, /settleLookup\(clean, parsed\)/);
+  assert.match(src, /settleDeal\(w, j\)/);
+  assert.match(src, /normalizeGearLabel\(it\.name\)/);
+  assert.match(src, /normalizeGearLabel\(w\.name\)/);
+  assert.match(src, /primers, or powder/);
+  assert.match(src, /suppressor cover/);
+  assert.equal((src.match(/CLASSIFY_RULE/g) || []).length, 3);
 });

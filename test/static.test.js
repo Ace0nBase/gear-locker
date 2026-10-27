@@ -73,6 +73,9 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.doesNotMatch(read("js/core.js"), /today=\(\)=>new Date\(\)\.toISOString\(\)\.slice\(0,\s*10\)/);
   assert.match(read("js/kits.js"), /GearLogic\.countedValue/);
   assert.match(read("js/cloud.js"), /lookupAnswerRestricted/);
+  assert.match(read("js/cloud.js"), /modelRestricted/);
+  assert.match(read("js/core.js"), /modelRestricted/);
+  assert.match(read("js/social.js"), /modelRestricted/);
   assert.match(read("api/worker.js"), /lookupAnswerRestricted/);
   assert.match(read("js/social.js"), /!GearLogic\.saleRestricted\(w\)&&w\.deal/);
   assert.match(read("js/security.js"), /caliber, load, and Arms Room type/);

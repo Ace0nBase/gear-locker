@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { saleRestricted, lookupAnswerRestricted } from "../js/logic.js";
+import { saleRestricted, lookupAnswerRestricted, normalizeGearLabel, settleLookup, settleDeal, countedValue } from "../js/logic.js";
 
 // Pattern fixtures. These names are not the QA lists.
 test("a firearm, suppressor, frame, or ammunition category is weight-only for every name", () => {
@@ -64,6 +64,98 @@ test("gun accessories and look-alike gear keep their prices", () => {
     ["Misc", "desk lamp 60"],
   ];
   open.forEach(([category, name]) => assert.equal(saleRestricted({ category, name }), false, name));
+});
+
+test("digit-for-letter spellings fold before the sale check, and model numbers stay numbers", () => {
+  assert.equal(saleRestricted({ category: "Misc", name: "b4ffle cup" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "s3ar" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "n0ckon 77" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "\uFF15ilencer" }), true);
+  assert.equal(saleRestricted({ category: "Misc", name: "h0lster" }), false);
+  assert.equal(saleRestricted({ category: "Clothing & Boots", name: "c4nvas field coat" }), false);
+  assert.equal(saleRestricted({ category: "Comms & Radios", name: "b0om mic" }), false);
+  assert.match(normalizeGearLabel("b0om mic"), /boom/);
+  assert.equal(saleRestricted({ category: "Misc", name: "10mm wrench" }), false);
+  assert.match(normalizeGearLabel("b4ffle-cup"), /baffle/);
+  assert.match(normalizeGearLabel("10mm wrench"), /10mm/);
+});
+
+test("a model classification of restricted strips the price, and a bad answer does not unlock one", () => {
+  const coat = { category: "Clothing & Boots", name: "Parcel coat" };
+  assert.equal(saleRestricted(coat), false);
+  const blocked = settleLookup(coat, {
+    restricted: true, retailNew: 250, usedLow: 100, usedHigh: 180, value: 160, weightOz: 18,
+    priceNote: "REI $250", weightNote: "Midway: 899.99",
+    sources: [{ label: "REI", url: "https://www.rei.com/parcel-coat" }],
+  });
+  assert.equal(blocked.apply, true);
+  assert.equal(blocked.restricted, true);
+  assert.equal(blocked.retailNew, null);
+  assert.equal(blocked.usedLow, null);
+  assert.equal(blocked.usedHigh, null);
+  assert.equal(blocked.value, null);
+  assert.equal(blocked.priceNote, "");
+  assert.equal(blocked.weightNote, "");
+  assert.deepEqual(blocked.sources, []);
+  assert.equal(blocked.weightOz, 18);
+  assert.equal(saleRestricted({ ...coat, modelRestricted: true }), true);
+  assert.equal(countedValue({ ...coat, modelRestricted: true, value: 160, priceSource: "market" }), 0);
+
+  for (const parsed of [null, {}, { retailNew: 80, value: 70 }, { restricted: "yes", retailNew: 80 }, { restricted: 1, value: 10 }]) {
+    const missed = settleLookup(coat, parsed);
+    assert.equal(missed.apply, false, JSON.stringify(parsed));
+    assert.equal(missed.retailNew, undefined);
+  }
+  const already = settleLookup({ category: "Firearms", name: "Blue sticker" }, { retailNew: 900, weightOz: 40, weightNote: "Midway: 899.99" });
+  assert.equal(already.apply, true);
+  assert.equal(already.restricted, true);
+  assert.equal(already.retailNew, null);
+  assert.equal(already.weightNote, "");
+  assert.equal(already.weightOz, 40);
+  const unlocked = settleLookup({ category: "Firearms", name: "Blue sticker" }, {
+    restricted: false, retailNew: 900, value: 800, priceNote: "shop $900",
+    sources: [{ label: "REI", url: "https://www.rei.com/sticker" }],
+  });
+  assert.equal(unlocked.restricted, true);
+  assert.equal(unlocked.retailNew, null);
+  assert.equal(unlocked.priceNote, "");
+  assert.deepEqual(unlocked.sources, []);
+});
+
+test("a benign look-alike keeps its price when the model says it is not restricted", () => {
+  const coat = { category: "Clothing & Boots", name: "Parcel coat" };
+  const kept = settleLookup(coat, {
+    restricted: false, retailNew: 89, usedLow: 40, usedHigh: 70, value: 60, weightOz: 18,
+    priceNote: "REI $89.50, fits a small frame", weightNote: "maker spec 18 oz",
+    sources: [{ label: "REI", url: "https://www.rei.com/parcel-coat" }],
+  });
+  assert.equal(kept.apply, true);
+  assert.equal(kept.restricted, false);
+  assert.equal(kept.retailNew, 89);
+  assert.equal(kept.value, 60);
+  assert.match(kept.priceNote, /89\.50/);
+  assert.equal(kept.weightNote, "maker spec 18 oz");
+  assert.equal(kept.sources.length, 1);
+  const deal = settleDeal(coat, {
+    restricted: false, price: 89.5, where: "REI", url: "https://www.rei.com/parcel-coat",
+    condition: "used", note: "Used, $250.30 shipped, fits a small frame",
+  });
+  assert.equal(deal.restricted, false);
+  assert.equal(deal.price, 89.5);
+  assert.match(deal.note, /250\.30/);
+  assert.match(deal.url, /rei\.com/);
+  const dropped = settleDeal(coat, {
+    restricted: true, price: 40, where: "REI", url: "https://www.rei.com/parcel-coat", note: "Midway: 899.99",
+  });
+  assert.equal(dropped.restricted, true);
+  assert.equal(dropped.price, null);
+  assert.equal(dropped.url, "");
+  assert.equal(dropped.where, "");
+  assert.equal(dropped.note, "");
+  const broken = settleDeal(coat, { price: 40, where: "REI", url: "https://www.rei.com/parcel-coat", note: "$40" });
+  assert.equal(broken.restricted, false);
+  assert.equal(broken.price, null);
+  assert.equal(broken.url, "");
 });
 
 test("a price note or a size in a link does not wipe an ordinary item", () => {

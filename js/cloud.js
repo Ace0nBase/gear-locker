@@ -294,6 +294,8 @@ var lookupBody=i=>{const restricted=GearLogic.saleRestricted(i);return {id:i.id,
 function applyLookup(id,res){
   const it=all.find(x=>x.id===id);if(!it||it.deleted||!res||!res.ok)return false;
   const n=v=>v==null||v===""||!isFinite(+v)?null:Math.round(+v);
+  if(res.restricted===true||GearLogic.lookupAnswerRestricted(res)) it.modelRestricted=true;
+  else if(res.restricted===false) delete it.modelRestricted;
   const restricted=GearLogic.saleRestricted(it)||GearLogic.lookupAnswerRestricted(res);
   if(restricted){it.retailNew=0;delete it.usedLow;delete it.usedHigh;delete it.priceNote;it.marketSources=[];if(it.valueSource!=="manual"){it.value=0;delete it.priceSource;delete it.priceDate}}
   else{
@@ -334,6 +336,8 @@ saveCurrent=async function(extra){
   if(manualVal&&(!before||+before.value!==+rec.value))rec.valueSource="manual";
   else if(!manualVal&&rec.valueSource==="manual"&&!$("fVal").value)delete rec.valueSource;
   if(rec.valueSource!==before?.valueSource)await persist();
+  const identityChanged=!before||before.name!==rec.name||before.brand!==rec.brand||before.category!==rec.category||before.arm!==rec.arm;
+  if(identityChanged) delete rec.modelRestricted;
   const restricted=GearLogic.saleRestricted(rec);
   if(restricted){
     let scrub=false;
@@ -368,7 +372,7 @@ if(window.LOOKUP_URL){
     for(let k=0;k<list.length;k+=4){
       const chunk=list.slice(k,k+4);
       try{const res=await apiLookup(chunk.map(w=>({id:w.id,name:w.name,brand:w.brand||"",category:w.category||"",condition:"New",notes:"",kind:"wish",arm:w.arm||"",caliber:w.caliber||""})));
-        res.forEach(r=>{const w=db.wish.find(x=>x.id===r.id);if(!w||!r.ok||GearLogic.saleRestricted(w))return;if(r.retailNew!=null)w.estPrice=Math.round(+r.retailNew);w.priceSource="market";w.priceDate=today();w.priceNote=String(r.priceNote||"").slice(0,240);w.marketSources=(r.sources||[]).filter(s=>/^https:\/\//.test(s?.url||"")).slice(0,4);w.marketCheck="done";w.updatedAt=now()})}
+        res.forEach(r=>{const w=db.wish.find(x=>x.id===r.id);if(!w||!r.ok)return;if(r.restricted===true||GearLogic.lookupAnswerRestricted(r)){w.modelRestricted=true;delete w.marketSources;delete w.priceNote;delete w.deal;w.link="";if(w.priceSource==="market"){delete w.priceSource;w.estPrice=""}w.marketCheck="done";w.updatedAt=now();return}if(r.restricted===false)delete w.modelRestricted;if(GearLogic.saleRestricted(w))return;if(r.retailNew!=null)w.estPrice=Math.round(+r.retailNew);w.priceSource="market";w.priceDate=today();w.priceNote=String(r.priceNote||"").slice(0,240);w.marketSources=(r.sources||[]).filter(s=>/^https:\/\//.test(s?.url||"")).slice(0,4);w.marketCheck="done";w.updatedAt=now()})}
       catch(e){toast(e.message||"Pricing failed");break}
     }
     await persist();render();

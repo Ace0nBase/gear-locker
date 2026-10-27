@@ -320,13 +320,38 @@ function foldText(value) {
   return t;
 }
 
+// Digit-for-letter swaps only inside a token that is mostly letters.
+// A caliber or a model number stays as written. 1 can be i or l, so both stay.
+function leetVariants(token) {
+  if (!token || token.includes(".")) return [token];
+  const letters = (token.match(/[a-z]/g) || []).length;
+  const swaps = (token.match(/[013457]/g) || []).length;
+  if (!swaps || letters <= swaps) return [token];
+  const mapped = token.replace(/0/g, "o").replace(/3/g, "e").replace(/4/g, "a").replace(/5/g, "s").replace(/7/g, "t");
+  return [...new Set([token, mapped.replace(/1/g, "i"), mapped.replace(/1/g, "l")])];
+}
+
+function leetExpand(spaced) {
+  const extra = [];
+  for (const token of spaced.split(" ")) {
+    for (const variant of leetVariants(token)) if (variant !== token) extra.push(variant);
+  }
+  return extra.length ? `${spaced} ${extra.join(" ")}` : spaced;
+}
+
+// Fold lookalikes, digit swaps, and spacing before the sale check and the model prompt.
+export function normalizeGearLabel(value) {
+  const folded = foldText(value);
+  const spaced = folded.replace(/[^a-z0-9.]+/g, " ").replace(/\s+/g, " ").trim();
+  return leetExpand(spaced);
+}
+
 function saleText(item) {
   const raw = [item.name, item.brand, item.load, item.caliber, item.armType].map(v => String(v || "")).join(" ");
-  const folded = foldText(raw);
-  const spaced = folded.replace(/[^a-z0-9.]+/g, " ").replace(/\s+/g, " ").trim();
-  const parts = folded.split(/[^a-z0-9]+/).filter(Boolean);
+  const expanded = normalizeGearLabel(raw);
+  const parts = foldText(raw).split(/[^a-z0-9]+/).filter(Boolean);
   const glued = parts.length >= 6 && parts.every(p => p.length === 1) ? parts.join("") : "";
-  return glued ? `${spaced} ${glued}` : spaced;
+  return glued ? `${expanded} ${glued}` : expanded;
 }
 
 // Where the item is filed. Those categories are weight-only for every name.
@@ -457,8 +482,10 @@ function isFirearmWord(t) {
 }
 
 // The category decides. The name is only a backup for a clear misfile.
+// A model classification sticks until the name, brand, or category changes.
 export function saleRestricted(item) {
   if (!item || typeof item !== "object") return false;
+  if (item.modelRestricted === true) return true;
   if (placeRestricted(item)) return true;
   const category = foldText(item.category).replace(/[^a-z0-9]+/g, " ").trim();
   if (!category && item.caliber && (item.load || item.cpr != null || item.rounds != null)) return true;
@@ -493,6 +520,54 @@ export function lookupAnswerRestricted(parsed) {
   if (urls.some(u => GUN_MARKET.test(sourceHost(u)))) return true;
   const labels = sources.map(s => s && s.label).filter(Boolean).join(" ");
   return /\b(gunbroker|armslist|ammoseek|wikiarms|guns\.com|gun\.deals)\b/i.test(labels);
+}
+
+function priceNumber(v) {
+  return (v === null || v === undefined || v === "" || !isFinite(+v)) ? null : +v;
+}
+
+// The model answer is part of the same lookup. A missing flag does not unlock a price.
+// An item the category already blocks stays weight-only either way.
+export function settleLookup(item, parsed) {
+  const clean = parsed && typeof parsed === "object" ? parsed : null;
+  const flagOk = !!(clean && typeof clean.restricted === "boolean");
+  const deterministic = !!(item && (item.weightOnly || saleRestricted(item)));
+  if (!clean || (!flagOk && !deterministic)) return { apply: false };
+  const block = deterministic || clean.restricted === true || lookupAnswerRestricted(clean);
+  if (block) {
+    return {
+      apply: true, restricted: true,
+      retailNew: null, usedLow: null, usedHigh: null, value: null,
+      weightOz: priceNumber(clean.weightOz), priceNote: "",
+      weightNote: publicWeightNote(clean.weightNote), sources: [],
+    };
+  }
+  const sources = Array.isArray(clean.sources) ? clean.sources.filter(s => s && /^https:\/\//.test(s.url || "")).slice(0, 4).map(s => ({ label: String(s.label || "source").slice(0, 40), url: String(s.url) })) : [];
+  return {
+    apply: true, restricted: false,
+    retailNew: priceNumber(clean.retailNew), usedLow: priceNumber(clean.usedLow), usedHigh: priceNumber(clean.usedHigh),
+    value: priceNumber(clean.value), weightOz: priceNumber(clean.weightOz),
+    priceNote: String(clean.priceNote || "").slice(0, 240), weightNote: String(clean.weightNote || "").slice(0, 80),
+    sources,
+  };
+}
+
+// A deal from the same model call. Restricted drops the price, the link, and the note.
+export function settleDeal(item, parsed) {
+  const empty = restricted => ({ price: null, where: "", url: "", condition: "", note: "", restricted: !!restricted });
+  const clean = parsed && typeof parsed === "object" ? parsed : null;
+  if (!clean || typeof clean.restricted !== "boolean") return empty(false);
+  const url = /^https:\/\//.test(clean.url || "") ? String(clean.url).slice(0, 400) : "";
+  const where = String(clean.where || "").slice(0, 40);
+  const blocked = clean.restricted === true || saleRestricted(item) || lookupAnswerRestricted({
+    restricted: clean.restricted, url, sources: url ? [{ label: where, url }] : [],
+  });
+  if (blocked) return empty(true);
+  const price = isFinite(+clean.price) && +clean.price > 0 ? Math.round(+clean.price * 100) / 100 : null;
+  return {
+    price, where, url, condition: String(clean.condition || "").slice(0, 20),
+    note: String(clean.note || "").slice(0, 160), restricted: false,
+  };
 }
 
 // The calendar day where the app is open, not the UTC date.
@@ -617,6 +692,7 @@ const GearLogic = {
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, publicWeightNote, lookupAnswerRestricted, localDay,
+  normalizeGearLabel, settleLookup, settleDeal,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
 };
 globalThis.GearLogic = GearLogic;

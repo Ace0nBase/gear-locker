@@ -133,7 +133,11 @@ function render(){
 }
 
 /* ---------- pricing ---------- */
-function saleDraft(){return {name:$("fName").value,brand:$("fBrand").value,category:$("fCat").value,caliber:$("fCal")?.value||"",arm:$("fArm")?.value||""}}
+function saleDraft(){
+  const draft={name:$("fName").value,brand:$("fBrand").value,category:$("fCat").value,caliber:$("fCal")?.value||"",arm:$("fArm")?.value||""};
+  if(editing&&editing.modelRestricted===true&&editing.name===draft.name&&(editing.brand||"")===(draft.brand||"")&&(editing.category||"")===(draft.category||"")&&(editing.arm||"")===(draft.arm||"")) draft.modelRestricted=true;
+  return draft;
+}
 function syncSaleFields(){
   const restricted=GearLogic.saleRestricted(saleDraft());
   const retail=$("fRetail").closest(".f");if(retail)retail.hidden=restricted;
