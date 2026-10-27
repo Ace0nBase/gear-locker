@@ -5,7 +5,7 @@ import {
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
   saleRestricted, countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
-  timerShotAccepted, radioService, radioTxLabel,
+  timerShotAccepted, radioService, radioTxLabel, mergeFieldConflict,
   keepSignedIn, firestoreMemoryOnly, settleOrTimeout, signOutConfirmNeeded, SIGN_OUT_WAIT_MS, armorySubject, armoryLookupBlocked, photoIdBlocked,
 } from "../js/logic.js";
 
@@ -385,6 +385,15 @@ test("462 and 467 MHz channels follow the shared FRS/GMRS plan", () => {
   assert.equal(radioService(162.55), "NOAA weather");
 });
 
+test("3-decimal channel centers match, and off-channel frequencies stay Other", () => {
+  for (const rx of [462.562, 462.563, 462.587, 467.563, 467.712, 462.713, "462.562000"]) {
+    assert.equal(radioService(rx), "FRS/GMRS", String(rx));
+  }
+  for (const rx of [464.5, 465, 462.7375, 462.5375, 467.5375, 467.7375, 152, 153]) {
+    assert.equal(radioService(rx), "Other", String(rx));
+  }
+});
+
 test("off-channel frequencies are not FRS, GMRS, or MURS, and a duplex + import is a repeater", () => {
   for (const rx of [464.5, 465, 462.7375, 462.5375, 467.5375, 467.7375, 152, 153]) {
     assert.equal(radioService(rx), "Other", String(rx));
@@ -396,6 +405,17 @@ test("off-channel frequencies are not FRS, GMRS, or MURS, and a duplex + import 
   assert.equal(radioService(462.675), "FRS/GMRS");
   assert.equal(radioService(462.675, "off"), "FRS/GMRS");
   assert.equal(radioService(467.55), "GMRS");
+});
+
+test("a hidden setupOn does not merge lines that differ in place, notes, or paid", () => {
+  const a = { name: "QA Dump Pouch", qty: 1, setupOn: "Plate carrier", location: "Closet bin 2", notes: "A", paid: 20 };
+  const b = { name: "QA Dump Pouch", qty: 2, setupOn: "", location: "Truck", notes: "B", paid: 18 };
+  assert.equal(mergeFieldConflict(a, b), true);
+  assert.equal(mergeFieldConflict(
+    { name: "QA Dump Pouch", qty: 1, setupOn: "Plate carrier", location: "Closet bin 2", notes: "A", paid: 20 },
+    { name: "QA Dump Pouch", qty: 2, setupOn: "", location: "Closet bin 2", notes: "A", paid: 20 },
+  ), false);
+  assert.equal(mergeFieldConflict({ location: "", notes: "", paid: "" }, { location: "Truck", notes: "B", paid: 18 }), false);
 });
 
 test("a GMRS repeater offset labels receive-only, and a ham offset still shows transmit", () => {

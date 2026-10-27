@@ -120,6 +120,9 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.doesNotMatch(read("js/core.js"), /Set up on/);
   assert.doesNotMatch(read("js/core.js"), /i\.setupOn,i\.location/);
   assert.doesNotMatch(read("js/stacks.js"), /x\.setupOn/);
+  assert.doesNotMatch(read("js/stacks.js"), /combineDuplicates/);
+  assert.match(read("js/stacks.js"), /mergeFieldConflict/);
+  assert.match(read("css/app.css"), /\.lockBox \.link/);
   assert.match(read("js/comms.js"), /GearLogic\.radioTxLabel/);
   assert.match(read("css/app.css"), /\.apShot\[hidden\]\{display:none\}/);
   assert.match(read("api/worker.js"), /publicWeightNote/);

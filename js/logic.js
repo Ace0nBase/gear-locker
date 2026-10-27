@@ -777,7 +777,7 @@ const FRS_GMRS_MHZ = [
 const GMRS_REPEATER_OUT = [462.55, 462.575, 462.6, 462.625, 462.65, 462.675, 462.7, 462.725];
 const GMRS_REPEATER_IN = [467.55, 467.575, 467.6, 467.625, 467.65, 467.675, 467.7, 467.725];
 const MURS_MHZ = [151.82, 151.88, 151.94, 154.57, 154.6];
-function mhzNear(a, b) { return Math.abs(a - b) < 0.0002; }
+function mhzNear(a, b) { return Math.abs(a - b) < 0.0006; }
 function parseMhz(v) {
   const n = parseFloat(String(v ?? "").replace(/[^\d.]/g, ""));
   return isFinite(n) && n > 0 ? n : 0;
@@ -799,6 +799,28 @@ export function radioService(rx, duplex) {
   if (n >= 162.4 && n <= 162.55) return "NOAA weather";
   if (n >= 108 && n <= 137) return "Aviation";
   return "Other";
+}
+
+function fieldText(v) { return String(v ?? "").trim(); }
+function fieldNumber(v) {
+  if (v == null || String(v).trim() === "") return null;
+  const n = +v;
+  return Number.isFinite(n) ? n : null;
+}
+// Two lines can share a count only when a filled place, note, color, price, or insured value matches. A hidden setupOn does not count.
+export function mergeFieldConflict(a, b) {
+  if (!a || !b) return true;
+  for (const key of ["location", "notes", "color"]) {
+    const x = fieldText(a[key]);
+    const y = fieldText(b[key]);
+    if (x && y && x.toLowerCase() !== y.toLowerCase()) return true;
+  }
+  for (const key of ["paid", "value"]) {
+    const x = fieldNumber(a[key]);
+    const y = fieldNumber(b[key]);
+    if (x != null && y != null && x !== y) return true;
+  }
+  return false;
 }
 
 // A stored repeater offset is figured first. Channels the CHIRP file writes as receive-only still say so, so the table matches the export.
@@ -828,6 +850,6 @@ const GearLogic = {
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
-  timerShotAccepted, radioService, radioTxLabel,
+  timerShotAccepted, radioService, radioTxLabel, mergeFieldConflict,
 };
 globalThis.GearLogic = GearLogic;

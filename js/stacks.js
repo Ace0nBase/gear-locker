@@ -25,9 +25,9 @@ var isSpare=i=>!i.mountedOn&&!i.setupOn;
 var at=x=>x.mountedOn||"";
 function mergeIntoSpare(it){
   if(!it||it.deleted||it.serial||it.armId||onLoan(it.id))return it;
-  const twin=live().find(x=>x.id!==it.id&&at(x)===at(it)&&!x.serial&&!x.armId&&!onLoan(x.id)&&twinKey(x)===twinKey(it)&&colorOk(x,it));
+  const twin=live().find(x=>x.id!==it.id&&at(x)===at(it)&&!x.serial&&!x.armId&&!onLoan(x.id)&&twinKey(x)===twinKey(it)&&colorOk(x,it)&&!GearLogic.mergeFieldConflict(x,it));
   if(!twin)return it;
-  twin.qty=(+twin.qty||0)+(+it.qty||0);if(!twin.color&&it.color)twin.color=it.color;if(!+twin.value&&+it.value)twin.value=it.value;if(!+twin.paid&&+it.paid)twin.paid=it.paid;if((twin.weight==null||twin.weight==="")&&it.weight!=null)twin.weight=it.weight;twin.updatedAt=now();
+  twin.qty=(+twin.qty||0)+(+it.qty||0);if(!twin.color&&it.color)twin.color=it.color;if(!String(twin.location||"").trim()&&String(it.location||"").trim())twin.location=it.location;if(!String(twin.notes||"").trim()&&String(it.notes||"").trim())twin.notes=it.notes;if(!String(twin.setupOn||"").trim()&&String(it.setupOn||"").trim())twin.setupOn=it.setupOn;if(!+twin.value&&+it.value)twin.value=it.value;if(!+twin.paid&&+it.paid)twin.paid=it.paid;if((twin.weight==null||twin.weight==="")&&it.weight!=null)twin.weight=it.weight;twin.updatedAt=now();
   all=all.map(x=>x.id===it.id?{id:it.id,deleted:true,updatedAt:now()}:x);
   Object.values(kits).forEach(k=>{if(k&&k.picks)Object.keys(k.picks).forEach(s=>{if(k.picks[s]===it.id)k.picks[s]=twin.id});if(k&&Array.isArray(k.extras))k.extras=k.extras.map(x=>x===it.id?twin.id:x)});
   return twin;
@@ -99,18 +99,28 @@ detailClickers.push(function(b){if(b.dataset.dact==="move"&&viewing){openMove(vi
 function migrateMags(){Object.keys(kits).forEach(id=>{const p=kits[id]?.picks;if(p&&p.pistolmags){if(!p.mags)p.mags=p.pistolmags;delete p.pistolmags}})}
 {const _rk=renderKits;renderKits=function(){migrateMags();_rk();document.querySelectorAll("#kitDetail select[data-slot]").forEach(sel=>{const sid=sel.dataset.slot;const kit=KITS.find(k=>k.id===curKit);if(!kit)return;const it=coverage(kit).a[sid];if(it&&(+it.qty||1)>1){const meta=sel.parentElement.querySelector(".meta");if(meta&&!meta.dataset.q){meta.dataset.q=1;meta.insertAdjacentHTML("afterbegin",`<b>×${+it.qty}</b> · `)}}})}}
 
-/* combine duplicate lines that sit in the same spot */
-function combineDuplicates(){let n=0;let again=true;while(again){again=false;for(const i of live()){if(i.serial||i.armId)continue;const r=mergeIntoSpare(i);if(r&&r.id!==i.id){n++;again=true;break}}}return n}
-{const _mf=maybeFirstPush;let done=false;maybeFirstPush=function(){_mf();if(!done&&cloudUser&&!firstLoad){done=true;setTimeout(async()=>{const n=combineDuplicates();if(n){render();await persist();toast(`Combined ${n} duplicate line${n>1?"s":""} into single counts`,4000)}},900)}}}
+/* combine duplicate lines that sit in the same spot, only after a confirmed tap */
+function mergeKeptBlanks(keep, other){
+  const kept=[];
+  if(!String(keep.location||"").trim()&&String(other.location||"").trim()){keep.location=other.location;kept.push("place")}
+  if(!String(keep.notes||"").trim()&&String(other.notes||"").trim()){keep.notes=other.notes;kept.push("notes")}
+  if(!String(keep.color||"").trim()&&String(other.color||"").trim()){keep.color=other.color;kept.push("color")}
+  if(!String(keep.setupOn||"").trim()&&String(other.setupOn||"").trim())keep.setupOn=other.setupOn;
+  const set=v=>v!=null&&String(v).trim()!=="";
+  if(!set(keep.paid)&&set(other.paid)){keep.paid=other.paid;kept.push("what you paid")}
+  if(!set(keep.value)&&set(other.value)){keep.value=other.value;kept.push("value")}
+  return kept;
+}
 {const _od3=openDetail;openDetail=function(i,quiet){_od3(i,quiet);if(!i||i.serial||i.armId)return;
   const sameModel=x=>normTxt(x.name)===normTxt(i.name)&&normTxt(x.brand||"")===normTxt(i.brand||"");
-  const near=live().filter(x=>x.id!==i.id&&at(x)===at(i)&&x.category===i.category&&sameModel(x)&&!x.serial&&!x.armId&&!onLoan(x.id));if(!near.length)return;
+  const near=live().filter(x=>x.id!==i.id&&at(x)===at(i)&&x.category===i.category&&sameModel(x)&&!x.serial&&!x.armId&&!onLoan(x.id)&&!GearLogic.mergeFieldConflict(i,x));if(!near.length)return;
   const html=`<div class="sect"><h3>Same make and model</h3><p class="hint" style="margin:0 0 6px">These match. Combining adds their counts onto this line and removes the other line.</p><div class="links">${near.map(x=>`<button class="lnk" type="button" data-combine="${esc(x.id)}">Combine with ${esc(x.name)}${x.brand?` · ${esc(x.brand)}`:""}${x.color?` (${esc(x.color)})`:""} ×${+x.qty||1}</button>`).join("")}</div></div>`;
   const dl=$("detail").querySelector("dl");if(dl)dl.insertAdjacentHTML("afterend",html)}}
 detailClickers.push(async function(b){if(!b.dataset.combine||!viewing)return;const keep=all.find(x=>x.id===viewing.id&&!x.deleted),other=all.find(x=>x.id===b.dataset.combine&&!x.deleted);if(!keep||!other)return;
   if(normTxt(keep.name)!==normTxt(other.name)||normTxt(keep.brand||"")!==normTxt(other.brand||""))return true;
-  if(b.dataset.armed!=="1"){const q=(+keep.qty||1)+(+other.qty||1);b.dataset.armed="1";b.textContent=`Merge ${+other.qty||1}× ${other.name} into ${+keep.qty||1}× ${keep.name}? That removes the ${other.name} line and leaves ${q}× ${keep.name}. Tap again.`;return true}
-  keep.qty=(+keep.qty||1)+(+other.qty||1);if(!keep.color&&other.color)keep.color=other.color;if(!+keep.value&&+other.value)keep.value=other.value;if(!+keep.paid&&+other.paid)keep.paid=other.paid;keep.updatedAt=now();
+  if(GearLogic.mergeFieldConflict(keep,other))return true;
+  if(b.dataset.armed!=="1"){const q=(+keep.qty||1)+(+other.qty||1);const kept=mergeKeptBlanks({...keep},other);b.dataset.armed="1";b.textContent=`Merge ${+other.qty||1}× ${other.name} into ${+keep.qty||1}× ${keep.name}? That removes the ${other.name} line and leaves ${q}× ${keep.name}.${kept.length?` This line keeps the other line's ${kept.join(", ")}.`:""} Tap again.`;return true}
+  mergeKeptBlanks(keep,other);keep.qty=(+keep.qty||1)+(+other.qty||1);keep.updatedAt=now();
   all=all.map(x=>x.id===other.id?{id:other.id,deleted:true,updatedAt:now()}:x);
   Object.values(kits).forEach(k=>{if(k&&k.picks)Object.keys(k.picks).forEach(s=>{if(k.picks[s]===other.id)k.picks[s]=keep.id});if(k&&Array.isArray(k.extras))k.extras=k.extras.map(x=>x===other.id?keep.id:x)});
   render();await persist();openDetail(itemById(keep.id),true);toast(`Combined: ${keep.qty} ${keep.name}`);return true});
