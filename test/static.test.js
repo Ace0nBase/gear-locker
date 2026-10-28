@@ -102,6 +102,9 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/cloud.js"), /bulkLookupIds\(live\(\)\)/);
   assert.match(read("js/cloud.js"), /singleLookupIds/);
   assert.match(read("js/core.js"), /lookupPlan\(i\)\.price/);
+  assert.match(read("js/core.js"), /\$\("fVal"\)\.oninput=\(\)=>\{valueDirty=true\}/);
+  assert.doesNotMatch(read("js/core.js"), /valueDirty=\$\("fVal"\)\.value!==""/);
+  assert.match(read("js/core.js"), /saleRestricted\(saleDraft\(\)\)\)return/);
   assert.match(read("js/social.js"), /stripGunMarketText\(best\.note\)/);
   assert.match(read("js/cloud.js"), /stripGunMarketSources/);
   assert.match(read("js/core.js"), /retail\.hidden=false/);

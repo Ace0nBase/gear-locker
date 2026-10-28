@@ -572,6 +572,39 @@ test("a notes save on a restricted shelf keeps an unmarked stored price", () => 
   assert.equal(lookupPlan(canValue).price, false);
 });
 
+test("emptying the value clears it on a normal shelf and a restricted shelf", () => {
+  const pouch = { category: "Pouches", name: "Coat", condition: "Good", retailNew: 900, value: 800, paid: 100 };
+  const cleared = stampManualPrices({ ...pouch, value: 0 }, pouch, { retail: false, value: true });
+  assert.equal(cleared.retailNew, 900);
+  assert.equal(cleared.value, 0);
+  assert.equal(cleared.valueSource, undefined);
+  assert.equal(cleared.paid, 100);
+  const typedZero = stampManualPrices({ ...pouch, value: 0 }, pouch, { retail: false, value: true });
+  assert.equal(typedZero.value, 0);
+
+  const rifle = { category: "Firearms", arm: "FA", name: "Rifle", retailNew: 900, value: 800, paid: 850, weight: 10, valueSource: "manual" };
+  const clearedRifle = stampManualPrices({ ...rifle, value: 0 }, rifle, { retail: false, value: true });
+  assert.equal(clearedRifle.retailNew, 900);
+  assert.equal(clearedRifle.value, 0);
+  assert.equal(clearedRifle.paid, 850);
+  assert.equal(clearedRifle.valueSource, undefined);
+  assert.equal(lookupPlan(clearedRifle).price, false);
+
+  const can = { category: "Suppressors", arm: "SU", name: "Can", retailNew: 700, value: 650, paid: 640, weight: 12 };
+  const clearedCan = stampManualPrices({ ...can, value: 0 }, can, { retail: false, value: true });
+  assert.equal(clearedCan.retailNew, 700);
+  assert.equal(clearedCan.value, 0);
+  assert.equal(clearedCan.paid, 640);
+  assert.equal(lookupPlan(clearedCan).price, false);
+
+  const kept = stampManualPrices({ ...pouch, retailNew: 950 }, pouch, { retail: true, value: false });
+  assert.equal(kept.retailNew, 950);
+  assert.equal(kept.value, 800);
+  const keptRifle = stampManualPrices({ ...rifle, retailNew: 950, valueSource: undefined }, { ...rifle, valueSource: undefined }, { retail: true, value: false });
+  assert.equal(keptRifle.retailNew, 950);
+  assert.equal(keptRifle.value, 800);
+});
+
 test("an edited retail and insured value survive the snapshot, a reload, and the next lookups", () => {
   const before = {
     id: "p1", category: "Pouches", name: "Parcel coat", condition: "Good",
