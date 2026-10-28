@@ -234,6 +234,20 @@ export function monthRefundKey(uid, date) {
   return monthQuotaKey(uid, date).replace(/^m:/, "rf:");
 }
 
+export function poolSpendKey(date) {
+  const d = date instanceof Date ? date : new Date(date || Date.now());
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return `spend:free:${y}-${m}`;
+}
+
+export function inflightKey(uid, date) {
+  return `if:${uid}:${utcDay(date)}`;
+}
+
+export const FREE_INFLIGHT_LIMIT = 4;
+export const LOOKUP_BUSY = "Lookups are busy right now. Try again in a moment.";
+
 function utcDateOnly(date) {
   const d = date instanceof Date && !isNaN(date.getTime()) ? date : new Date(date || Date.now());
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
@@ -247,19 +261,22 @@ function previousUtcMonth(date) {
   return `${year}-${String(prev).padStart(2, "0")}`;
 }
 
-// Daily, alert, attempt, and per-account spend counters older than 7 UTC days,
-// and monthly counters (including the refund cap) older than the previous UTC month, can go.
-// The spend total, the seeded flag, and holds are not counters.
+// Daily, alert, attempt, in-flight, and per-account spend counters older than 7 UTC days,
+// and monthly counters (including the refund cap and spend:free:YYYY-MM) older than the previous UTC month, can go.
+// The retired lifetime key spend:free is pruned. The seeded flag, holds, and flight markers stay.
 export function quotaCounterExpired(key, now) {
   const k = String(key || "");
-  if (!k || k === "spend:free" || k === "seeded:spend" || k.startsWith("hold:")) return false;
-  const day = k.match(/^(?:q|a|t|ds):[^:]+:(\d{4}-\d{2}-\d{2})$/);
+  if (!k || k === "seeded:spend" || k.startsWith("hold:") || k.startsWith("flight:")) return false;
+  if (k === "spend:free") return true;
+  const day = k.match(/^(?:q|a|t|ds|if):[^:]+:(\d{4}-\d{2}-\d{2})$/);
   if (day) {
     const cutoff = utcDay(new Date(utcDateOnly(now).getTime() - 7 * 86400000));
     return day[1] < cutoff;
   }
   const month = k.match(/^(?:m|rf):[^:]+:(\d{4}-\d{2})$/);
   if (month) return month[1] < previousUtcMonth(now);
+  const pool = k.match(/^spend:free:(\d{4}-\d{2})$/);
+  if (pool) return pool[1] < previousUtcMonth(now);
   return false;
 }
 
@@ -590,6 +607,19 @@ export function lookupTypicalMicro(env) {
   }, spendRates(env));
 }
 
+// A few cents for one identify, battery, pace, or deal call. Not the worst-case hold.
+export function operationTypicalMicro(env, op) {
+  const name = op || "lookup";
+  if (name === "lookup") return lookupTypicalMicro(env);
+  const shapes = {
+    identify: { input_tokens: 8000, output_tokens: 400, web_search_requests: 0 },
+    battery: { input_tokens: 4000, output_tokens: 500, web_search_requests: 2 },
+    pace: { input_tokens: 6000, output_tokens: 800, web_search_requests: 2 },
+    deal: { input_tokens: 4000, output_tokens: 500, web_search_requests: 2 },
+  };
+  return estimateSpendMicro(shapes[name] || shapes.deal, spendRates(env));
+}
+
 // A searching op other than lookup reserves at least one round at the input cap.
 // A lookup reserves lookupItemHoldMicro. SPEND_RESERVE_USD can only raise that lookup hold.
 export function callHoldMicro(env, op, inputTokens) {
@@ -634,6 +664,11 @@ export function applyReserve(state, req) {
   const spendCapOn = !skipSpend && req.dailySpendCap != null && req.dailySpendCap !== "";
   const spentToday = Math.max(0, Math.round(+state.dailySpend || 0));
   const dailySpendCap = Math.max(0, Math.round(+req.dailySpendCap || 0));
+  const inflight = Math.max(0, Math.round(+state.inflight || 0));
+  const inflightLimit = Math.max(0, Math.round(+req.inflightLimit || 0));
+  if (spendCapOn && spentToday >= dailySpendCap) {
+    return { ok: false, status: 429, error: DAILY_SPEND_FULL, reserved: 0, charged: 0, dailyHeld: 0, state: same };
+  }
   // partial trims a raced batch to the slots still left, instead of refusing the whole request.
   if (req.partial) {
     const requested = Math.max(dailyAdd, req.skipMonth ? 0 : monthAdd);
@@ -648,15 +683,21 @@ export function applyReserve(state, req) {
       const dailyEach = Math.max(0, Math.round(+req.dailyEach || 0));
       let spendFit = requested;
       if (spendCapOn && dailyEach > 0) spendFit = Math.max(0, Math.floor((dailySpendCap - spentToday) / dailyEach));
-      const fit = Math.max(0, Math.min(quotaFit, spendFit));
+      let flightFit = requested;
+      if (inflightLimit > 0) flightFit = Math.max(0, inflightLimit - inflight);
+      const fit = Math.max(0, Math.min(quotaFit, spendFit, flightFit));
       if (fit <= 0) {
-        const error = spendCapOn && dailyEach > 0 && spendFit <= 0 && quotaFit > 0
-          ? DAILY_SPEND_FULL
-          : quotaFullMessage(req, monthLeft, dailyLeft);
-        return { ok: false, status: 429, error, reserved: 0, charged: 0, state: same };
+        const error = inflightLimit > 0 && flightFit <= 0 && quotaFit > 0
+          ? LOOKUP_BUSY
+          : (spendCapOn && dailyEach > 0 && spendFit <= 0 && quotaFit > 0
+            ? DAILY_SPEND_FULL
+            : quotaFullMessage(req, monthLeft, dailyLeft));
+        return { ok: false, status: 429, error, reserved: 0, charged: 0, dailyHeld: 0, state: same };
       }
       if (fit < requested) {
-        refusedError = spendFit < quotaFit ? DAILY_SPEND_FULL : quotaFullMessage(req, monthLeft, dailyLeft);
+        refusedError = flightFit < quotaFit && flightFit <= spendFit
+          ? LOOKUP_BUSY
+          : (spendFit < quotaFit ? DAILY_SPEND_FULL : quotaFullMessage(req, monthLeft, dailyLeft));
         reserve = poolEach ? poolEach * fit : Math.ceil(reserve * fit / requested);
         if (dailyAdd) dailyAdd = Math.min(dailyAdd, fit);
         if (monthAdd) monthAdd = Math.min(monthAdd, fit);
@@ -665,8 +706,11 @@ export function applyReserve(state, req) {
   }
   const dailyEach = Math.max(0, Math.round(+req.dailyEach || 0));
   const chargedPreview = req.skipMonth ? dailyAdd : Math.max(dailyAdd, monthAdd);
+  if (!req.partial && inflightLimit > 0 && chargedPreview > 0 && inflight + chargedPreview > inflightLimit) {
+    return { ok: false, status: 429, error: LOOKUP_BUSY, reserved: 0, charged: 0, dailyHeld: 0, state: same };
+  }
   if (spendCapOn && !req.partial && dailyEach > 0 && spentToday + dailyEach * chargedPreview > dailySpendCap) {
-    return { ok: false, status: 429, error: DAILY_SPEND_FULL, reserved: 0, charged: 0, state: same };
+    return { ok: false, status: 429, error: DAILY_SPEND_FULL, reserved: 0, charged: 0, dailyHeld: 0, state: same };
   }
   if (!skipSpend && !reserveFits(spend, reserve, req.cap)) {
     return { ok: false, status: 403, error: LOOKUPS_PAUSED, reserved: 0, charged: 0, state: same };
@@ -691,6 +735,7 @@ export function applyReserve(state, req) {
   const held = skipSpend ? 0 : reserve;
   const charged = req.skipMonth ? dailyAdd : Math.max(dailyAdd, monthAdd);
   const dailyHeld = spendCapOn && dailyEach > 0 ? dailyEach * charged : 0;
+  const inflightNext = inflightLimit > 0 ? inflight + charged : inflight;
   return {
     ok: true,
     status: 200,
@@ -699,7 +744,7 @@ export function applyReserve(state, req) {
     charged,
     dailyHeld,
     refusedError,
-    state: { spend: spend + held, daily: dailyAdd ? dailyDecision.next : daily, month: monthNext, alert: alertNext, dailySpend: spentToday + dailyHeld },
+    state: { spend: spend + held, daily: dailyAdd ? dailyDecision.next : daily, month: monthNext, alert: alertNext, dailySpend: spentToday + dailyHeld, inflight: inflightNext },
   };
 }
 
@@ -2305,12 +2350,12 @@ export function radioTxLabel(freq) {
 const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
-  parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
-  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
+  parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, attemptQuotaKey, dailySpendKey, poolSpendKey, inflightKey, alertQuotaKey, monthQuotaKey, monthRefundKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
+  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupPriced, lookupBatchAllowance,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, DELETED_USER_TTL_MS, deletedUserExpireAt, tombstoneDue, LOOKUPS_PAUSED,
-  reserveFits, lookupItemHoldMicro, lookupTypicalMicro, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
+  reserveFits, lookupItemHoldMicro, lookupTypicalMicro, operationTypicalMicro, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
   ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
   CLEANUP_MAX_ATTEMPTS, CLEANUP_MAX_AGE_MS, CLEANUP_RECORD_MAX_BYTES, orderRedactions,
   LEND_EMAIL_CAP, lendMailDocId, lendAddress, lendRetarget, REDACT_PAGE_SIZE, REDACT_OPS_BUDGET, REDACT_MAX_AGE_MS, REDACT_RECORD_MAX_BYTES,

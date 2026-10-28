@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import worker, { UsageLedger } from "../api/worker.js";
-import { attemptQuotaKey, dailySpendKey, estimateSpendMicro, lookupItemHoldMicro, lookupTypicalMicro, monthQuotaKey, monthRefundKey, ratesForModel } from "../js/logic.js";
+import { attemptQuotaKey, dailySpendKey, estimateSpendMicro, inflightKey, lookupItemHoldMicro, lookupTypicalMicro, monthQuotaKey, monthRefundKey, poolSpendKey, ratesForModel } from "../js/logic.js";
 
 const src = fs.readFileSync(new URL("../api/worker.js", import.meta.url), "utf8");
 
@@ -171,12 +171,24 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
   const token = data + "." + b64url(sig);
   const orig = globalThis.fetch;
   let anthropic = 0;
+  let releaseRaceBatch = () => {};
+  let markRaceBatchStarted = () => {};
+  const raceBatchStarted = new Promise(resolve => { markRaceBatchStarted = resolve; });
+  let raceGate = null;
   globalThis.fetch = async (url, opts) => {
     const u = String(url);
     if (u.includes("googleapis.com")) return new Response(JSON.stringify(jwks), { status: 200, headers: { "content-type": "application/json" } });
     if (u.includes("api.anthropic.com")) {
       anthropic += 1;
       const body = JSON.parse(opts.body);
+      const early = JSON.stringify(body.messages || []);
+      if (early.includes("Race ")) {
+        if (!raceGate) {
+          raceGate = new Promise(resolve => { releaseRaceBatch = resolve; });
+          markRaceBatchStarted();
+        }
+        await raceGate;
+      }
       const blob = JSON.stringify(body.messages || []);
       if (blob.includes("Heavy")) {
         const answer = JSON.stringify({ retailNew: 20, usedLow: 10, usedHigh: 15, value: 12, weightOz: 8, priceNote: "Amazon $20", weightNote: "maker spec", sources: [] });
@@ -212,6 +224,7 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     const now = new Date();
     const dayKey = attemptQuotaKey(sub, now);
     const monthKey = monthQuotaKey(sub, now);
+    const poolKey = poolSpendKey(now);
     const sql = fakeSql();
     const ledger = new UsageLedger({ storage: { sql } }, {});
     sql.rows.set(monthKey, 7);
@@ -241,19 +254,39 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     raceSql.rows.set("seeded:spend", 1);
     raceSql.rows.set("spend:free", 0);
     const item = n => ({ id: "r" + n, name: "Race " + n, category: "Pouches" });
-    const pair = await Promise.all([
+    const pairPromise = Promise.all([
       post(race, [1, 2, 3, 4].map(item)),
       post(race, [5, 6, 7, 8].map(item)),
     ]);
-    const parsed = [];
+    await raceBatchStarted;
+    await new Promise(r => setTimeout(r, 100));
+    assert.equal(raceSql.rows.get(monthKey), 9);
+    assert.equal(raceSql.rows.get(inflightKey(sub, now)), 4);
+    releaseRaceBatch();
+    const pair = await pairPromise;
+    let busy = 0;
+    let pricedRace = 0;
     for (const one of pair) {
       const out = await one.json();
-      assert.equal(one.status, 200, JSON.stringify(out));
-      parsed.push(out.results.filter(r => r.ok).length);
+      if (one.status === 429) {
+        busy++;
+        assert.match(out.error, /Try again in a moment/);
+      } else {
+        assert.equal(one.status, 200, JSON.stringify(out));
+        pricedRace += out.results.filter(r => r.ok).length;
+      }
     }
-    assert.deepEqual(parsed.sort(), [1, 4]);
+    assert.equal(busy, 1);
+    assert.equal(pricedRace, 4);
+    assert.equal(raceSql.rows.get(monthKey), 9);
+    assert.equal(raceSql.rows.get(dayKey), 4);
+    assert.equal(raceSql.rows.get(inflightKey(sub, now)) || 0, 0);
+    const follow = await post(race, [9, 10, 11, 12].map(item));
+    const followBody = await follow.json();
+    assert.equal(follow.status, 200, JSON.stringify(followBody));
+    assert.equal(followBody.results.filter(r => r.ok).length, 1);
+    assert.match(followBody.results.find(r => !r.ok).error, /this month's lookups/);
     assert.equal(raceSql.rows.get(monthKey), 10);
-    assert.equal(raceSql.rows.get(dayKey), 5);
 
     const junkSql = fakeSql();
     const junk = new UsageLedger({ storage: { sql: junkSql } }, {});
@@ -286,8 +319,8 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     assert.equal(junkSql.rows.get(dayKey), 40);
     assert.equal(junkSql.rows.get(monthKey), 35);
     assert.equal(junkSql.rows.get(monthRefundKey(sub, now)), 5);
-    assert.equal(junkSql.rows.get("spend:free"), 40 * unit);
-    assert.ok(junkSql.rows.get("spend:free") < 25e6);
+    assert.equal(junkSql.rows.get(poolKey), 40 * unit);
+    assert.ok(junkSql.rows.get(poolKey) < 25e6);
     assert.equal(junkSql.rows.get(dailySpendKey(sub, now)), 40 * unit);
 
     const fbSql = fakeSql();
@@ -303,7 +336,7 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     const rateEnv = { FALLBACK_MODEL: "claude-sonnet-5-5", FALLBACK_INPUT_PER_MILLION: "3", FALLBACK_OUTPUT_PER_MILLION: "15", FALLBACK_SEARCH_EACH: "0.01" };
     const both = estimateSpendMicro({ input_tokens: 1000, output_tokens: 1000 }) + estimateSpendMicro({ input_tokens: 2000, output_tokens: 2000 }, ratesForModel(rateEnv, "claude-sonnet-5-5"));
     assert.equal(fbSql.rows.get(dailySpendKey(sub, now)), both);
-    assert.equal(fbSql.rows.get("spend:free"), both);
+    assert.equal(fbSql.rows.get(poolKey), both);
     assert.equal(fbSql.rows.get(dayKey), 1);
 
     const cappedSql = fakeSql();
@@ -321,7 +354,7 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     assert.equal(capRes.status, 429, JSON.stringify(capBody));
     assert.match(capBody.error, /spending limit/);
     assert.equal(anthropic, capBefore);
-    assert.equal(cappedSql.rows.get("spend:free"), 0);
+    assert.equal(cappedSql.rows.get(poolKey) || 0, 0);
 
     const freshSql = fakeSql();
     const fresh = new UsageLedger({ storage: { sql: freshSql } }, {});
@@ -385,6 +418,41 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     assert.equal(heavySql.rows.get(dailySpendKey(sub, now)), 4 * heavyUnit);
     assert.equal(anthropic - heavyBefore, 4);
     assert.equal(Math.floor(25e6 / lookupItemHoldMicro({})), 36);
+
+    const cappedDay = dailySpendKey(sub, now);
+    const routes = [
+      ["/identify", { image: "aaaa", category: "Pouches" }, {}],
+      ["/battery", { name: "Light", category: "Pouches" }, {}],
+      ["/pace", { location: "Camp" }, {}],
+      ["/watch/check", { id: "w1" }, {
+        WATCH: {
+          get: async (key, type) => {
+            if (key !== "w:" + sub) return null;
+            const rec = { list: [{ id: "w1", name: "Pouch", category: "Pouches", target: 20 }] };
+            return type === "json" ? rec : JSON.stringify(rec);
+          },
+          put: async () => {},
+          delete: async () => {},
+        },
+      }],
+    ];
+    for (const [path, body, extraEnv] of routes) {
+      const routeSql = fakeSql();
+      const routeLedger = new UsageLedger({ storage: { sql: routeSql } }, {});
+      routeSql.rows.set("seeded:spend", 1);
+      routeSql.rows.set(cappedDay, 2000000);
+      const before = anthropic;
+      const res = await worker.fetch(new Request("https://gear-locker-api.example" + path, {
+        method: "POST",
+        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }), { ...envFor(routeLedger), FREE_DAILY_SPEND_CAP_USD: "0.75", ...extraEnv });
+      const out = await res.json();
+      assert.equal(res.status, 429, path + " " + JSON.stringify(out));
+      assert.match(out.error, /Today's lookup spending limit is reached/);
+      assert.equal(anthropic, before, path);
+      assert.equal(routeSql.rows.get(cappedDay), 2000000, path);
+    }
   } finally {
     globalThis.fetch = orig;
   }

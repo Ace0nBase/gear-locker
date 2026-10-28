@@ -16,7 +16,7 @@
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced, lookupTypicalMicro, MONTHLY_REFUND_CAP } from "../js/logic.js";
+import { decideAccess, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced, lookupTypicalMicro, operationTypicalMicro, poolSpendKey, inflightKey, FREE_INFLIGHT_LIMIT, MONTHLY_REFUND_CAP } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
 import { serviceAccountLogLine, sweepTombstones } from "./firestore-admin.js";
@@ -303,7 +303,6 @@ async function dealCheck(env, w, budget) {
   return { ...settled, date: localDay(new Date()), hit: settled.price != null && settled.price <= +w.target, usage };
 }
 const WKEY = uid => "w:" + uid;
-const SPEND_KEY = "spend:free";
 function usageStub(env) {
   const ns = env && env.USAGE;
   if (!ns) return null;
@@ -315,11 +314,6 @@ async function pruneUsageCounters(env) {
   const stub = usageStub(env);
   if (!stub || typeof stub.prune !== "function") return;
   try { await stub.prune({ now: new Date().toISOString() }); } catch {}
-}
-async function spendSeed(env) {
-  if (!env.WATCH) return 0;
-  try { return +(await env.WATCH.get(SPEND_KEY)) || 0; }
-  catch { return null; }
 }
 async function reserveCall(env, user, op, count, extra) {
   extra = extra || {};
@@ -336,6 +330,10 @@ async function reserveCall(env, user, op, count, extra) {
   const monthKey = monthQuotaKey(uid, day);
   const refundKey = monthRefundKey(uid, day);
   const spendDayKey = dailySpendKey(uid, day);
+  const spendKey = poolSpendKey(day);
+  const flightKey = skipSpend ? "" : inflightKey(uid, day);
+  const namedDaily = extra.dailyEach != null && extra.dailyEach !== "";
+  const dailyEach = skipSpend ? 0 : (namedDaily ? Math.max(0, Math.round(+extra.dailyEach)) : operationTypicalMicro(env, op));
   try {
     const reserved = await stub.reserve({
       id: crypto.randomUUID(),
@@ -355,11 +353,13 @@ async function reserveCall(env, user, op, count, extra) {
       monthKey,
       dailySpendKey: spendDayKey,
       dailySpendCap: skipSpend ? null : freeDailySpendCapMicro(env),
-      dailyEach: Math.max(0, Math.round(+extra.dailyEach || 0)),
+      dailyEach,
       alertKey: alertQuotaKey(uid, day),
-      seedSpend: await spendSeed(env),
+      spendKey,
+      inflightKey: flightKey,
+      inflightLimit: flightKey ? FREE_INFLIGHT_LIMIT : 0,
     });
-    return { ...reserved, dailyKey, monthKey, refundKey, dailySpendKey: spendDayKey, skipSpend, skipMonth: review, dailyHeld: reserved.dailyHeld || 0 };
+    return { ...reserved, dailyKey, monthKey, refundKey, dailySpendKey: spendDayKey, spendKey, inflightKey: flightKey, skipSpend, skipMonth: review, dailyHeld: reserved.dailyHeld || 0 };
   } catch {
     return { ok: false, status: 503, error: LOOKUPS_PAUSED, reserved: 0, charged: 0 };
   }
@@ -383,6 +383,8 @@ async function finishCall(env, id, reserved, usage, extra) {
       refundKey: extra.refundKey || "",
       dailySpendKey: extra.skipSpend ? "" : (extra.dailySpendKey || ""),
       dailyHold: extra.skipSpend ? 0 : Math.max(0, Math.round(+extra.dailyHold || 0)),
+      spendKey: extra.spendKey || "",
+      inflightKey: extra.inflightKey || "",
       skipMonth: !!extra.skipMonth,
     });
   } catch { /* the answer is already in hand */ }
@@ -398,7 +400,9 @@ function spendExtra(hold, extra) {
     skipMonth: hold.skipMonth,
     countRefund: extra.countRefund || 0,
     refundCap: extra.refundCap,
-    dailyHold: extra.dailyHold || 0,
+    dailyHold: extra.dailyHold != null ? extra.dailyHold : (hold.dailyHeld || 0),
+    spendKey: hold.spendKey || "",
+    inflightKey: hold.inflightKey || "",
   };
 }
 async function clearUsageForUser(env, uid) {
@@ -411,7 +415,7 @@ async function usageSnapshot(env, uid, now) {
   const stub = usageStub(env);
   if (!stub) return null;
   try {
-    const read = await stub.read({ keys: [attemptQuotaKey(uid, now), monthQuotaKey(uid, now), alertQuotaKey(uid, now), dailySpendKey(uid, now), SPEND_KEY] });
+    const read = await stub.read({ keys: [attemptQuotaKey(uid, now), monthQuotaKey(uid, now), alertQuotaKey(uid, now), dailySpendKey(uid, now), poolSpendKey(now)] });
     return (read && read.values) || {};
   } catch { return null; }
 }
@@ -543,7 +547,7 @@ async function runDueWatches(env, budget) {
     const dailyLimit = review ? reviewDailyLimit(env) : +(env.DAILY_AI_LIMIT || 40);
     if ((counts[attemptQuotaKey(u.uid, now)] || 0) >= dailyLimit) continue;
     if (!review && (counts[monthQuotaKey(u.uid, now)] || 0) >= planMonthlyLimit(plan, env)) continue;
-    if (!review && plan === "free" && (counts[SPEND_KEY] || 0) >= spendCapMicro(env)) continue;
+    if (!review && plan === "free" && (counts[poolSpendKey(now)] || 0) >= spendCapMicro(env)) continue;
     if (!review && plan === "free" && (counts[dailySpendKey(u.uid, now)] || 0) >= freeDailySpendCapMicro(env)) continue;
     if ((counts[alertQuotaKey(u.uid, now)] || 0) >= alertLimit) continue;
     eligible.push(u);

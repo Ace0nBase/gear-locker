@@ -124,43 +124,83 @@ export async function serviceAccountLogLine(env, fetchImpl) {
 
 export const TOMBSTONE_PAGE_SIZE = 50;
 export const TOMBSTONE_DELETE_BUDGET = 40;
-export const TOMBSTONE_PAGE_BUDGET = 20;
+const TOMBSTONE_CURSOR = "tombstone:cursor";
+
+async function deleteMarker(fetchFn, token, doc) {
+  const name = String((doc && doc.name) || "");
+  if (!name.startsWith("projects/")) return false;
+  const del = await fetchFn("https://firestore.googleapis.com/v1/" + name, {
+    method: "DELETE",
+    headers: { authorization: "Bearer " + token },
+  });
+  await del.text().catch(() => "");
+  return !!(del.ok || del.status === 404);
+}
 
 // Hourly sweep. TTL policies need billing, so this job deletes expired markers instead.
+// expireAt is queried oldest-first. Markers with no expireAt are walked one page per run via a KV cursor.
 // The log line is only "tombstones: N". Document names and uids are never logged.
 export async function sweepTombstones(env, fetchImpl, nowMs, opts) {
   const fetchFn = fetchImpl || fetch;
   const pageSize = Math.max(1, Math.floor(+(opts && opts.pageSize) || TOMBSTONE_PAGE_SIZE));
   const deleteBudget = Math.max(1, Math.floor(+(opts && opts.deleteBudget) || TOMBSTONE_DELETE_BUDGET));
-  const pageBudget = Math.max(1, Math.floor(+(opts && opts.pageBudget) || TOMBSTONE_PAGE_BUDGET));
   const now = nowMs == null ? Date.now() : nowMs;
   let deleted = 0;
   try {
     const token = await firestoreAccessToken(env, fetchFn);
     if (token) {
       const project = String((env && env.FIREBASE_PROJECT) || "gear-locker-c248c");
-      const root = "https://firestore.googleapis.com/v1/projects/" + encodeURIComponent(project) + "/databases/(default)/documents/deletedUsers";
-      let pageToken = "";
-      for (let page = 0; page < pageBudget && deleted < deleteBudget; page++) {
-        const url = root + "?pageSize=" + pageSize + (pageToken ? "&pageToken=" + encodeURIComponent(pageToken) : "");
+      const parent = "https://firestore.googleapis.com/v1/projects/" + encodeURIComponent(project) + "/databases/(default)/documents";
+      const nowIso = new Date(now).toISOString();
+      const queryRes = await fetchFn(parent + ":runQuery", {
+        method: "POST",
+        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+        body: JSON.stringify({
+          structuredQuery: {
+            from: [{ collectionId: "deletedUsers" }],
+            where: { fieldFilter: { field: { fieldPath: "expireAt" }, op: "LESS_THAN", value: { timestampValue: nowIso } } },
+            orderBy: [{ field: { fieldPath: "expireAt" }, direction: "ASCENDING" }],
+            limit: deleteBudget,
+          },
+        }),
+      });
+      const rows = await queryRes.json().catch(() => []);
+      if (queryRes.ok) {
+        const list = Array.isArray(rows) ? rows : [];
+        for (const row of list) {
+          if (deleted >= deleteBudget) break;
+          const doc = row && row.document;
+          if (!doc || !tombstoneDue(doc, now)) continue;
+          if (await deleteMarker(fetchFn, token, doc)) deleted++;
+        }
+      }
+      if (deleted < deleteBudget) {
+        let cursor = "";
+        const watch = env && env.WATCH;
+        if (watch && typeof watch.get === "function") {
+          try { cursor = String(await watch.get(TOMBSTONE_CURSOR) || ""); }
+          catch { cursor = ""; }
+        }
+        const url = parent + "/deletedUsers?pageSize=" + pageSize + (cursor ? "&pageToken=" + encodeURIComponent(cursor) : "");
         const res = await fetchFn(url, { method: "GET", headers: { authorization: "Bearer " + token } });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) break;
-        const docs = Array.isArray(data.documents) ? data.documents : [];
-        for (const doc of docs) {
-          if (deleted >= deleteBudget) break;
-          if (!tombstoneDue(doc, now)) continue;
-          const name = String((doc && doc.name) || "");
-          if (!name.startsWith("projects/")) continue;
-          const del = await fetchFn("https://firestore.googleapis.com/v1/" + name, {
-            method: "DELETE",
-            headers: { authorization: "Bearer " + token },
-          });
-          await del.text().catch(() => "");
-          if (del.ok || del.status === 404) deleted++;
+        if (res.ok) {
+          const docs = Array.isArray(data.documents) ? data.documents : [];
+          let finished = true;
+          for (const doc of docs) {
+            if (deleted >= deleteBudget) { finished = false; break; }
+            if (doc && doc.fields && doc.fields.expireAt) continue;
+            if (!tombstoneDue(doc, now)) continue;
+            if (await deleteMarker(fetchFn, token, doc)) deleted++;
+          }
+          if (finished && watch) {
+            const next = data.nextPageToken || "";
+            try {
+              if (next && typeof watch.put === "function") await watch.put(TOMBSTONE_CURSOR, next);
+              else if (!next && typeof watch.delete === "function") await watch.delete(TOMBSTONE_CURSOR);
+            } catch { /* the next run reads the same page */ }
+          }
         }
-        pageToken = data.nextPageToken || "";
-        if (!pageToken) break;
       }
     }
   } catch { /* the count below is still safe to log */ }
