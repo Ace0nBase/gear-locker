@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { saleRestricted, lookupAnswerRestricted, pickModelAnswer, settleLookup, settleDeal, countedValue, csvExportField, keepManualPrice, gunMarketUrl, stripGunMarketText, publicWeightNote, applyMarketPrices, lookupPlan, bulkLookupIds, singleLookupIds, stampManualPrices, mergeByServerTime, serverRow } from "../js/logic.js";
+import { saleRestricted, lookupAnswerRestricted, pickModelAnswer, settleLookup, settleDeal, countedValue, csvExportField, keepManualPrice, gunMarketUrl, stripGunMarketText, publicWeightNote, applyMarketPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, bulkLookupIds, singleLookupIds, stampManualPrices, mergeByServerTime, serverRow } from "../js/logic.js";
 
 test("firearm, suppressor, ammunition, and lower-receiver shelves are weight-only", () => {
   const blocked = [
@@ -331,8 +331,16 @@ test("a typed price on ordinary gear is not replaced by a market lookup", () => 
   }, lookup, "2026-10-27");
   assert.equal(typedValue.value, 90);
   assert.equal(typedValue.valueSource, "manual");
-  assert.equal(typedValue.retailNew, 40);
-  assert.equal(typedValue.priceSource, "market");
+  assert.equal(typedValue.retailNew, 0);
+  assert.equal(typedValue.priceSource, undefined);
+
+  const marketValue = applyMarketPrices({
+    category: "Pouches", name: "Parcel coat", retailNew: 10, value: 90, priceSource: "market", valueSource: "manual",
+  }, lookup, "2026-10-27");
+  assert.equal(marketValue.value, 90);
+  assert.equal(marketValue.valueSource, "manual");
+  assert.equal(marketValue.retailNew, 40);
+  assert.equal(marketValue.priceSource, "market");
 
   const typedBoth = applyMarketPrices({
     category: "Comms & Radios", name: "Harbor HT-100",
@@ -403,6 +411,90 @@ test("bulk and single lookups fill empty and auto prices and skip a hand-entered
       }
     }
   }
+});
+
+test("a priced row with no marker is user-entered for single, bulk, and a notes-only save", () => {
+  const quote = { retailNew: 555, usedLow: 400, usedHigh: 500, value: 555, priceNote: "Shelf", sources: [{ label: "Shelf", url: "https://example.com/shelf" }] };
+  const legacy = { id: "legacy", category: "Pouches", name: "Old coat", qty: 3, retailNew: 90, value: 90, weight: 12, usedLow: 70, usedHigh: 80, link: "https://example.com/old" };
+  const valueOnly = { id: "value", category: "Pouches", name: "Old value", value: 90, weight: 8 };
+  const ranged = { id: "ranged", category: "Belts", name: "Old range", usedLow: 20, usedHigh: 40, weight: 16 };
+  const empty = { id: "empty", category: "Pouches", name: "New pouch", weight: 4 };
+  const auto = { id: "auto", category: "Pouches", name: "Auto pouch", retailNew: 40, value: 28, priceSource: "auto", weight: 6 };
+  const rows = [legacy, valueOnly, ranged, empty, auto];
+
+  assert.equal(userEnteredPrice(legacy), true);
+  assert.equal(userEnteredPrice(valueOnly), true);
+  assert.equal(userEnteredPrice(ranged), true);
+  assert.equal(userEnteredPrice(empty), false);
+  assert.equal(userEnteredPrice(auto), false);
+  assert.deepEqual(singleLookupIds(rows), ["empty", "auto"]);
+  assert.deepEqual(bulkLookupIds(rows), ["empty"]);
+  assert.equal(saveNeedsLookup(legacy), false);
+  assert.equal(saveNeedsLookup(valueOnly), false);
+  assert.equal(saveNeedsLookup(ranged), false);
+  assert.equal(saveNeedsLookup({ ...legacy, weight: null }), true);
+  assert.equal(saveNeedsLookup(empty), true);
+  assert.equal(saveNeedsLookup(auto), false);
+
+  for (const item of [legacy, valueOnly, ranged]) {
+    const applied = applyMarketPrices(item, quote, "2026-10-28");
+    assert.equal(applied.retailNew, item.retailNew, item.id);
+    assert.equal(applied.value, item.value, item.id);
+    assert.equal(applied.usedLow, item.usedLow, item.id);
+    assert.equal(applied.qty, item.qty, item.id);
+    assert.equal(applied.priceSource, undefined, item.id);
+    assert.equal(singleLookupIds([item]).includes(item.id), false, item.id);
+    assert.equal(bulkLookupIds([item]).includes(item.id), false, item.id);
+  }
+  assert.equal(legacy.qty * legacy.value, 270);
+  const kept = applyMarketPrices(legacy, quote, "2026-10-28");
+  assert.equal(kept.qty * kept.value, 270);
+
+  const filled = applyMarketPrices(empty, quote, "2026-10-28");
+  assert.equal(filled.retailNew, 555);
+  assert.equal(filled.priceSource, "market");
+  const refreshed = applyMarketPrices(auto, quote, "2026-10-28");
+  assert.equal(refreshed.retailNew, 555);
+  assert.equal(refreshed.priceSource, "market");
+
+  const weighed = { ...legacy, id: "weighed", weight: null };
+  assert.equal(saveNeedsLookup(weighed), true);
+  assert.deepEqual(singleLookupIds([weighed]), ["weighed"]);
+  assert.equal(lookupPlan(weighed).price, false);
+  const weighedApplied = applyMarketPrices(weighed, quote, "2026-10-28");
+  assert.equal(weighedApplied.retailNew, 90);
+  assert.equal(weighedApplied.value, 90);
+});
+
+test("typing a price clears the auto used range and links", () => {
+  const before = {
+    category: "Pouches", name: "Parcel coat", condition: "Good",
+    retailNew: 40, value: 28, priceSource: "market", priceDate: "2026-10-01", priceNote: "Shelf",
+    usedLow: 20, usedHigh: 30, link: "https://example.com/shelf",
+    marketSources: [{ label: "Shelf", url: "https://example.com/shelf" }],
+  };
+  const saved = stampManualPrices({ ...before, retailNew: 90, value: 70 }, before, { retail: true, value: true });
+  assert.equal(saved.priceSource, "manual");
+  assert.equal(saved.retailNew, 90);
+  assert.equal(saved.value, 70);
+  assert.equal(saved.usedLow, undefined);
+  assert.equal(saved.usedHigh, undefined);
+  assert.equal(saved.priceNote, undefined);
+  assert.equal(saved.priceDate, undefined);
+  assert.equal(saved.marketSources, undefined);
+  assert.equal(saved.link, "");
+  const again = stampManualPrices({ ...saved, retailNew: 95, link: "https://example.com/mine" }, saved, { retail: true, value: false });
+  assert.equal(again.retailNew, 95);
+  assert.equal(again.priceSource, "manual");
+  assert.equal(again.link, "https://example.com/mine");
+  const legacy = { category: "Pouches", name: "Old coat", retailNew: 40, value: 28, usedLow: 15, usedHigh: 25, link: "https://example.com/old", marketSources: [{ label: "Old", url: "https://example.com/old" }] };
+  const typed = stampManualPrices({ ...legacy, retailNew: 80 }, legacy, { retail: true, value: false });
+  assert.equal(typed.priceSource, "manual");
+  assert.equal(typed.retailNew, 80);
+  assert.equal(typed.usedLow, undefined);
+  assert.equal(typed.usedHigh, undefined);
+  assert.equal(typed.link, "");
+  assert.equal(typed.marketSources, undefined);
 });
 
 test("an edited retail and insured value survive the snapshot, a reload, and the next lookups", () => {

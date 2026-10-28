@@ -240,7 +240,7 @@ async function qaStorageCheckRun(){
   else toast("Storage check failed. Another account or a signed-out check was not blocked ("+otherCode+" / "+signedOutCode+").",6000);
 }
 }
-var APP_VERSION="32";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+var APP_VERSION="39";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 var swReloadPending=false;
 function showUpdateToast(){
   const el=$("toast");if(!el)return;
@@ -366,7 +366,7 @@ saveCurrent=async function(extra){
   const rec=await _saveCurrent(extra);if(!rec)return rec;
   const restricted=GearLogic.saleRestricted(rec);
   const changed=!before||before.name!==rec.name||before.brand!==rec.brand||before.category!==rec.category||before.arm!==rec.arm||(!restricted&&before.condition!==rec.condition);
-  const needs=restricted?(rec.weight==null||rec.weight===""):((rec.priceSource!=="manual"&&rec.priceSource!=="market")||rec.weight==null||rec.weight==="");
+  const needs=GearLogic.saveNeedsLookup(rec);
   if(window.LOOKUP_URL&&cloudUser&&!extra&&!GearLogic.magShelfPending(rec)&&(changed||needs))runLookups([rec.id],true).catch(()=>{});
   return rec;
 };
