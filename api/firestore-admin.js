@@ -1,6 +1,8 @@
 // Mints a Firestore access token from the Worker secret FIREBASE_SA_JSON.
 // The JSON never goes to the client. A missing or unreadable secret returns null.
 
+import { tombstoneDue } from "../js/logic.js";
+
 const SCOPE = "https://www.googleapis.com/auth/datastore";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const TOKEN_SKEW_MS = 60 * 1000;
@@ -118,4 +120,50 @@ export async function serviceAccountLogLine(env, fetchImpl) {
   }
   console.log(line);
   return line;
+}
+
+export const TOMBSTONE_PAGE_SIZE = 50;
+export const TOMBSTONE_DELETE_BUDGET = 40;
+export const TOMBSTONE_PAGE_BUDGET = 20;
+
+// Hourly sweep. TTL policies need billing, so this job deletes expired markers instead.
+// The log line is only "tombstones: N". Document names and uids are never logged.
+export async function sweepTombstones(env, fetchImpl, nowMs, opts) {
+  const fetchFn = fetchImpl || fetch;
+  const pageSize = Math.max(1, Math.floor(+(opts && opts.pageSize) || TOMBSTONE_PAGE_SIZE));
+  const deleteBudget = Math.max(1, Math.floor(+(opts && opts.deleteBudget) || TOMBSTONE_DELETE_BUDGET));
+  const pageBudget = Math.max(1, Math.floor(+(opts && opts.pageBudget) || TOMBSTONE_PAGE_BUDGET));
+  const now = nowMs == null ? Date.now() : nowMs;
+  let deleted = 0;
+  try {
+    const token = await firestoreAccessToken(env, fetchFn);
+    if (token) {
+      const project = String((env && env.FIREBASE_PROJECT) || "gear-locker-c248c");
+      const root = "https://firestore.googleapis.com/v1/projects/" + encodeURIComponent(project) + "/databases/(default)/documents/deletedUsers";
+      let pageToken = "";
+      for (let page = 0; page < pageBudget && deleted < deleteBudget; page++) {
+        const url = root + "?pageSize=" + pageSize + (pageToken ? "&pageToken=" + encodeURIComponent(pageToken) : "");
+        const res = await fetchFn(url, { method: "GET", headers: { authorization: "Bearer " + token } });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) break;
+        const docs = Array.isArray(data.documents) ? data.documents : [];
+        for (const doc of docs) {
+          if (deleted >= deleteBudget) break;
+          if (!tombstoneDue(doc, now)) continue;
+          const name = String((doc && doc.name) || "");
+          if (!name.startsWith("projects/")) continue;
+          const del = await fetchFn("https://firestore.googleapis.com/v1/" + name, {
+            method: "DELETE",
+            headers: { authorization: "Bearer " + token },
+          });
+          await del.text().catch(() => "");
+          if (del.ok || del.status === 404) deleted++;
+        }
+        pageToken = data.nextPageToken || "";
+        if (!pageToken) break;
+      }
+    }
+  } catch { /* the count below is still safe to log */ }
+  console.log("tombstones: " + deleted);
+  return { deleted };
 }

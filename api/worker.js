@@ -12,14 +12,14 @@
 // DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS, FREE_SPEND_CAP_USD, FREE_DAILY_SPEND_CAP_USD,
 // PLAN_LIMIT_FREE, PLAN_LIMIT_PRO, PLAN_LIMIT_ARMORY, SPEND_INPUT_PER_MILLION, SPEND_OUTPUT_PER_MILLION, SPEND_SEARCH_EACH,
 // SPEND_RESERVE_USD (optional floor under the worst-case lookup hold; it cannot lower that hold),
-// FALLBACK_INPUT_PER_MILLION, FALLBACK_OUTPUT_PER_MILLION, FALLBACK_SEARCH_EACH (fallback model rates; the hold uses the higher of these and the primary rates)
+// FALLBACK_INPUT_PER_MILLION, FALLBACK_OUTPUT_PER_MILLION, FALLBACK_SEARCH_EACH (fallback model rates; a lookup hold adds one search round and one answer round at these rates)
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
 import { decideAccess, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced, MONTHLY_REFUND_CAP } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
-import { serviceAccountLogLine } from "./firestore-admin.js";
+import { serviceAccountLogLine, sweepTombstones } from "./firestore-admin.js";
 import { enqueueRedaction, releaseEmailHold, runQueuedRedactions } from "./redact.js";
 
 export { UsageLedger } from "./usage-ledger.js";
@@ -181,7 +181,11 @@ async function callClaude(env, model, it, budget) {
   for (let i = 0; i < spec.rounds; i++) {
     const searching = !askedJson && (i === 0 || (data && data.stop_reason === "pause_turn"));
     const searches = searching ? spec.searches : 0;
-    if (limit != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, searches, searched), limit)) break;
+    if (limit != null && !roundFits(spent, estimateSpendMicro({
+      input_tokens: estimateInputTokens(JSON.stringify(messages)) + searches * SEARCH_RESULT_TOKENS,
+      output_tokens: clampMaxTokens(spec.maxTokens),
+      web_search_requests: searches,
+    }, ratesForModel(env, model)), limit)) break;
     try { data = await send(spec.maxTokens, searching); }
     catch (e) {
       const roundUsage = e.usage;
@@ -377,6 +381,7 @@ async function finishCall(env, id, reserved, usage, extra) {
       monthKey: extra.monthKey || "",
       refundKey: extra.refundKey || "",
       dailySpendKey: extra.skipSpend ? "" : (extra.dailySpendKey || ""),
+      dailyHold: extra.skipSpend ? 0 : Math.max(0, Math.round(+extra.dailyHold || 0)),
       skipMonth: !!extra.skipMonth,
     });
   } catch { /* the answer is already in hand */ }
@@ -392,6 +397,7 @@ function spendExtra(hold, extra) {
     skipMonth: hold.skipMonth,
     countRefund: extra.countRefund || 0,
     refundCap: extra.refundCap,
+    dailyHold: extra.dailyHold || 0,
   };
 }
 async function clearUsageForUser(env, uid) {
@@ -724,7 +730,7 @@ async function lookupOne(env, it, budget) {
   return { id: clean.id, ok: true, ...fields, usage, spendMicro };
 }
 
-const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", BETA_ONLY: "", REVIEW_EMAILS: "", REVIEW_DAILY_LIMIT: "8", FREE_SPEND_CAP_USD: "25", FREE_DAILY_SPEND_CAP_USD: "0.50", PLAN_LIMIT_FREE: "10", PLAN_LIMIT_PRO: "100", PLAN_LIMIT_ARMORY: "500", SPEND_INPUT_PER_MILLION: "1", SPEND_OUTPUT_PER_MILLION: "5", SPEND_SEARCH_EACH: "0.01", FALLBACK_INPUT_PER_MILLION: "3", FALLBACK_OUTPUT_PER_MILLION: "15", FALLBACK_SEARCH_EACH: "0.01", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
+const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", BETA_ONLY: "", REVIEW_EMAILS: "", REVIEW_DAILY_LIMIT: "8", FREE_SPEND_CAP_USD: "25", FREE_DAILY_SPEND_CAP_USD: "0.75", PLAN_LIMIT_FREE: "10", PLAN_LIMIT_PRO: "100", PLAN_LIMIT_ARMORY: "500", SPEND_INPUT_PER_MILLION: "1", SPEND_OUTPUT_PER_MILLION: "5", SPEND_SEARCH_EACH: "0.01", FALLBACK_INPUT_PER_MILLION: "3", FALLBACK_OUTPUT_PER_MILLION: "15", FALLBACK_SEARCH_EACH: "0.01", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
 const ROUTES = ["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/watch/push", "/battery", "/ammo", "/pace"];
 
 export default {
@@ -923,6 +929,7 @@ export default {
     await finishCall(env, lookBill.id, lookBill.reserved, actual, spendExtra(lookBill, {
       countRefund: run.length - packed.filter(lookupPriced).length,
       refundCap: MONTHLY_REFUND_CAP,
+      dailyHold: lookBill.reserved,
     }));
     const firstErr = results.find(r => !r.ok)?.error;
     if (results.every(r => !r.ok)) return json({ error: firstErr || "Lookup failed", results }, 502, h);
@@ -933,6 +940,7 @@ export default {
     for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
     ctx.waitUntil((async () => {
       await serviceAccountLogLine(env);
+      await sweepTombstones(env);
       await pruneUsageCounters(env);
       await retryQueuedCleanups(env);
       await runQueuedRedactions(env);

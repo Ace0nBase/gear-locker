@@ -5,7 +5,7 @@ import {
   estimateSpendMicro, usageFromResponse, freeSpendBlocked, usageDecision,
   deleteRevenueCatCustomer, accountDeletePlan, accountPlan, USER_COLLECTIONS,
   signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
-  clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, priciestRates, spendRates, applyReserve, applyReconcile,
+  clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, lookupItemHoldMicro, priciestRates, spendRates, applyReserve, applyReconcile, DAILY_SPEND_FULL,
   SEARCH_RESULT_TOKENS, roundFits, roundInputTokens, loanTargetsFromLends, loanRedactTargets, loansToMirror,
   deleteRetryRoute, runDeleteAttempt, SERVER_DELETE_STEPS, LOOKUPS_PAUSED,
   ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
@@ -160,7 +160,10 @@ test("a free spend hold is the worst case from the output cap and the search cou
   assert.equal(usage.web_search_requests, spec.searches * spec.rounds * spec.calls);
   assert.equal(usage.input_tokens, echoed * spec.calls);
   assert.ok(usage.input_tokens > spec.promptTokens * spec.rounds * spec.calls);
-  assert.equal(lookupReserveMicro({}), estimateSpendMicro(usage, priciestRates({})));
+  assert.ok(lookupReserveMicro({}) < 1e6);
+  assert.ok(lookupReserveMicro({}) * 8 < 25e6);
+  assert.ok(lookupReserveMicro({ FALLBACK_MODEL: "" }) < lookupReserveMicro({}));
+  assert.equal(lookupReserveMicro({}), lookupItemHoldMicro({}));
   assert.ok(priciestRates({}).outputPerMillion > spendRates({}).outputPerMillion);
   assert.deepEqual(priciestRates({ FALLBACK_MODEL: "" }), spendRates({ FALLBACK_MODEL: "" }));
   let small = 0;
@@ -704,7 +707,7 @@ test("the first round of every AI op fits its hold, and the input cap applies af
       web_search_requests: spec.searches,
     }, priciestRates({}));
     assert.ok(first <= callHoldMicro({}, op), op);
-    if (spec.searches > 0) {
+    if (op !== "lookup" && spec.searches > 0) {
       const floored = estimateSpendMicro({
         input_tokens: ROUND_INPUT_TOKEN_CAP,
         output_tokens: spec.maxTokens,
@@ -718,7 +721,25 @@ test("the first round of every AI op fits its hold, and the input cap applies af
     output_tokens: 4000,
     web_search_requests: 3,
   }, priciestRates({}));
-  assert.ok(oneRound < lookupReserveMicro({}));
+  assert.ok(oneRound > lookupReserveMicro({}));
+  const searchRound = estimateSpendMicro({
+    input_tokens: MODEL_CALLS.lookup.promptTokens + MODEL_CALLS.lookup.searches * SEARCH_RESULT_TOKENS,
+    output_tokens: MODEL_CALLS.lookup.maxTokens,
+    web_search_requests: MODEL_CALLS.lookup.searches,
+  }, spendRates({}));
+  assert.ok(searchRound <= lookupReserveMicro({}));
+  const trimmed = applyReserve({ spend: 0, daily: 0, month: 0, alert: 0, dailySpend: 0 }, {
+    partial: true, reserve: 400, reserveEach: 100, cap: 1e12, dailyAdd: 4, dailyLimit: 40, monthAdd: 4, monthLimit: 100, dailySpendCap: 250,
+  });
+  assert.equal(trimmed.ok, true);
+  assert.equal(trimmed.charged, 2);
+  assert.equal(trimmed.reserved, 200);
+  assert.equal(trimmed.state.dailySpend, 200);
+  assert.match(trimmed.refusedError, /spending limit/);
+  const settled = applyReconcile({ spend: 200, dailySpend: 200, month: 2, refunds: 0 }, { reserved: 200, actual: 50, dailyHold: 200 });
+  assert.equal(settled.state.spend, 50);
+  assert.equal(settled.state.dailySpend, 50);
+  assert.equal(DAILY_SPEND_FULL.length > 0, true);
   const loose = estimateSpendMicro({ input_tokens: 48_000, output_tokens: 4000, web_search_requests: 3 }, spendRates({}));
   const tight = estimateSpendMicro({ input_tokens: 1_200_000, output_tokens: 4000, web_search_requests: 3 }, spendRates({}));
   assert.ok(tight - loose >= 860_000);

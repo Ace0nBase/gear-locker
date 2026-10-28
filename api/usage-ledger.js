@@ -57,6 +57,7 @@ export class UsageLedger extends DurableObject {
     const out = applyReserve(state, req);
     if (!out.ok) return { ok: false, status: out.status, error: out.error, reserved: 0, charged: 0 };
     this._put(SPEND, out.state.spend);
+    if (req.dailySpendKey && out.state.dailySpend !== state.dailySpend) this._put(req.dailySpendKey, out.state.dailySpend);
     if (req.dailyKey && out.state.daily !== state.daily) this._put(req.dailyKey, out.state.daily);
     if (req.monthKey && !req.skipMonth && out.state.month !== state.month) this._put(req.monthKey, out.state.month);
     if (req.alertKey && req.alertAdd) this._put(req.alertKey, out.state.alert);
@@ -82,11 +83,11 @@ export class UsageLedger extends DurableObject {
       month: monthKey ? this._get(monthKey) : 0,
       refunds: refundKey ? this._get(refundKey) : 0,
       dailySpend: dailySpendKey ? this._get(dailySpendKey) : 0,
-    }, { reserved, actual: req.actual, countRefund: req.countRefund, refundCap: req.refundCap, skipMonth: req.skipMonth });
+    }, { reserved, actual: req.actual, countRefund: req.countRefund, refundCap: req.refundCap, skipMonth: req.skipMonth, dailyHold: req.dailyHold });
     this._put(SPEND, out.state.spend);
     if (out.refunded && monthKey && !req.skipMonth) this._put(monthKey, out.state.month);
     if (out.refunded && refundKey && !req.skipMonth) this._put(refundKey, out.state.refunds);
-    if (dailySpendKey && out.state.dailySpend) this._put(dailySpendKey, out.state.dailySpend);
+    if (dailySpendKey) this._put(dailySpendKey, out.state.dailySpend);
     if (holdKey) this._del(holdKey);
     return { ok: true, duplicate: false, spend: out.state.spend, billed: out.billed, refunded: out.refunded, daily: out.state.daily, month: out.state.month, refunds: out.state.refunds, dailySpend: out.state.dailySpend };
   }

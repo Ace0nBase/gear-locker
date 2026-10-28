@@ -90,6 +90,8 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.ok(sessionAt > 0 && sessionAt < apiKeyAt);
   assert.ok(src.indexOf("releaseEmailHold(env, sessionUser)") > sessionAt);
   const scheduled = src.slice(src.indexOf("async scheduled"));
+  assert.match(scheduled, /sweepTombstones/);
+  assert.ok(scheduled.indexOf("sweepTombstones") < scheduled.indexOf("pruneUsageCounters"));
   assert.match(scheduled, /pruneUsageCounters/);
   assert.ok(scheduled.indexOf("pruneUsageCounters") < scheduled.indexOf("retryQueuedCleanups"));
   assert.ok(scheduled.indexOf("retryQueuedCleanups") < scheduled.indexOf("runQueuedRedactions"));
@@ -192,6 +194,7 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
   const envFor = ledger => ({
     ANTHROPIC_API_KEY: "test-key",
     FREE_SPEND_CAP_USD: "100000",
+    FREE_DAILY_SPEND_CAP_USD: "100",
     PLAN_LIMIT_FREE: "10",
     DAILY_AI_LIMIT: "40",
     USAGE: { getByName: () => ledger },
@@ -303,9 +306,13 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     const capped = new UsageLedger({ storage: { sql: cappedSql } }, {});
     cappedSql.rows.set("seeded:spend", 1);
     cappedSql.rows.set("spend:free", 0);
-    cappedSql.rows.set(dailySpendKey(sub, now), 500000);
+    cappedSql.rows.set(dailySpendKey(sub, now), 750000);
     const capBefore = anthropic;
-    const capRes = await post(capped, [{ id: "cap", name: "Pouch Cap", category: "Pouches" }]);
+    const capRes = await worker.fetch(new Request("https://gear-locker-api.example/lookup", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ items: [{ id: "cap", name: "Pouch Cap", category: "Pouches" }] }),
+    }), { ...envFor(capped), FREE_DAILY_SPEND_CAP_USD: "0.75" });
     const capBody = await capRes.json();
     assert.equal(capRes.status, 429, JSON.stringify(capBody));
     assert.match(capBody.error, /spending limit/);
