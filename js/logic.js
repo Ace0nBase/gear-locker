@@ -253,6 +253,8 @@ export const USAGE_HOLD_STALE_MS = 2 * 60 * 1000;
 export const REQUEST_DEADLINE_MS = 100 * 1000;
 // Do not start a fallback or another round with less than this left.
 export const ROUND_FLOOR_MS = 30 * 1000;
+// The deadline stays this far inside the stale hold window.
+export const DEADLINE_MARGIN_MS = 15 * 1000;
 // The old lifetime pool counter belongs to the month it was already counting.
 export const POOL_SEED_KEY = "spend:free:2026-10";
 export const BUSY_RETRY_MS = [1000, 2000, 4000, 8000, 8000];
@@ -267,9 +269,27 @@ export function busyQueueStep(tries, waits) {
 
 export function requestDeadline(nowMs, budgetMs) {
   const start = nowMs == null || nowMs === "" ? Date.now() : Math.round(+nowMs);
-  const raw = budgetMs == null || budgetMs === "" ? REQUEST_DEADLINE_MS : Math.round(+budgetMs);
-  const budget = Number.isFinite(raw) && raw > 0 ? raw : REQUEST_DEADLINE_MS;
+  const budget = clampedDeadlineBudget(budgetMs);
   return { start, end: start + budget };
+}
+
+// Whatever the env asks, the live window stays at most 100s and 15s inside the hold.
+export function clampedDeadlineBudget(raw, staleMs = USAGE_HOLD_STALE_MS) {
+  const stale = Math.max(DEADLINE_MARGIN_MS + 1000, Math.round(+staleMs || USAGE_HOLD_STALE_MS));
+  const cap = Math.min(REQUEST_DEADLINE_MS, stale - DEADLINE_MARGIN_MS);
+  if (raw == null || String(raw).trim() === "") return cap;
+  const n = Math.round(+raw);
+  if (!Number.isFinite(n) || n <= 0) return cap;
+  return Math.min(n, cap);
+}
+
+export function clampedRoundFloor(raw, budgetMs) {
+  const budget = Math.max(1, Math.round(+budgetMs || REQUEST_DEADLINE_MS));
+  const cap = Math.min(ROUND_FLOOR_MS, budget);
+  if (raw == null || String(raw).trim() === "") return cap;
+  const n = Math.round(+raw);
+  if (!Number.isFinite(n) || n < 0) return cap;
+  return Math.min(n, cap);
 }
 
 export function deadlineRemaining(deadline, nowMs) {
@@ -2393,7 +2413,7 @@ const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, attemptQuotaKey, dailySpendKey, poolSpendKey, inflightKey, alertQuotaKey, monthQuotaKey, monthRefundKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
-  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, BUSY_RETRY_MS, busyQueueStep, REQUEST_DEADLINE_MS, ROUND_FLOOR_MS, requestDeadline, roundAllowed, poolLifetimeExpired, USAGE_HOLD_STALE_MS, POOL_SEED_KEY, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
+  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, BUSY_RETRY_MS, busyQueueStep, REQUEST_DEADLINE_MS, ROUND_FLOOR_MS, DEADLINE_MARGIN_MS, requestDeadline, clampedDeadlineBudget, clampedRoundFloor, roundAllowed, poolLifetimeExpired, USAGE_HOLD_STALE_MS, POOL_SEED_KEY, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupPriced, lookupBatchAllowance,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, DELETED_USER_TTL_MS, deletedUserExpireAt, tombstoneDue, LOOKUPS_PAUSED,

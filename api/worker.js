@@ -16,7 +16,7 @@
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced, lookupTypicalMicro, operationTypicalMicro, poolSpendKey, inflightKey, FREE_INFLIGHT_LIMIT, MONTHLY_REFUND_CAP, REQUEST_DEADLINE_MS, ROUND_FLOOR_MS, roundAllowed } from "../js/logic.js";
+import { decideAccess, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced, lookupTypicalMicro, operationTypicalMicro, poolSpendKey, inflightKey, FREE_INFLIGHT_LIMIT, MONTHLY_REFUND_CAP, REQUEST_DEADLINE_MS, ROUND_FLOOR_MS, clampedDeadlineBudget, clampedRoundFloor, roundAllowed, poolLifetimeExpired } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
 import { serviceAccountLogLine, sweepTombstones } from "./firestore-admin.js";
@@ -157,17 +157,12 @@ function loopCeiling(env, model, messages, maxTokens, searches, searchedAlready)
     web_search_requests: n,
   }, ratesForModel(env, model));
 }
-function configuredMs(raw, fallback) {
-  if (raw == null || String(raw).trim() === "") return fallback;
-  const n = Math.round(+raw);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
 function isAbortError(e) {
   return !!(e && (e.name === "AbortError" || e.aborted || /abort/i.test(String(e.message || ""))));
 }
 function openDeadline(env) {
-  const budget = configuredMs(env && env.REQUEST_DEADLINE_MS, REQUEST_DEADLINE_MS);
-  const floor = configuredMs(env && env.ROUND_FLOOR_MS, ROUND_FLOOR_MS);
+  const budget = clampedDeadlineBudget(env && env.REQUEST_DEADLINE_MS);
+  const floor = clampedRoundFloor(env && env.ROUND_FLOOR_MS, budget);
   const start = Date.now();
   let signal;
   if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") signal = AbortSignal.timeout(budget);
@@ -185,10 +180,25 @@ function modelFetch(env, url, opts, deadline) {
   const signal = deadline && deadline.signal ? deadline.signal : openDeadline(env).signal;
   return fetch(url, { ...(opts || {}), signal });
 }
-function billAbort(env, model, messages, usage, spent) {
-  const estimate = { input_tokens: estimateInputTokens(JSON.stringify(messages || "")), output_tokens: 0, web_search_requests: 0 };
+function billAbort(env, model, messages, usage, spent, extraInput) {
+  const estimate = {
+    input_tokens: estimateInputTokens(typeof messages === "string" ? messages : JSON.stringify(messages || "")) + Math.max(0, Math.round(+extraInput || 0)),
+    output_tokens: 0,
+    web_search_requests: 0,
+  };
   const next = addUsage(usage, estimate);
   return { usage: next, spent: Math.max(0, Math.round(+spent || 0)) + spendOf(env, model, estimate) };
+}
+async function readModelJson(res, env, model, messages, usage, spent, extraInput) {
+  try { return await res.json(); }
+  catch (e) {
+    if (!isAbortError(e)) return {};
+    const billed = billAbort(env, model, messages, usage, spent, extraInput);
+    e.aborted = true;
+    e.usage = billed.usage;
+    e.spent = billed.spent;
+    throw e;
+  }
 }
 async function callClaude(env, model, it, budget, deadline) {
   const spec = MODEL_CALLS.lookup;
@@ -200,7 +210,7 @@ async function callClaude(env, model, it, budget, deadline) {
       headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: claudeBody(model, { max_tokens: maxTokens, ...(withTools ? { tools } : {}), messages }),
     }, deadline);
-    const data = await r.json().catch(() => ({}));
+    const data = await readModelJson(r, env, model, messages, null, 0);
     if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.status = r.status; e.usage = usageFromResponse(data); throw e; }
     return data;
   };
@@ -232,10 +242,12 @@ async function callClaude(env, model, it, budget, deadline) {
     try { data = await send(spec.maxTokens, searching); }
     catch (e) {
       if (isAbortError(e)) {
-        const billed = billAbort(env, model, messages, usage, spent);
+        if (e.spent == null) {
+          const billed = billAbort(env, model, messages, usage, spent);
+          e.usage = billed.usage;
+          e.spent = billed.spent;
+        }
         e.aborted = true;
-        e.usage = billed.usage;
-        e.spent = billed.spent;
         throw e;
       }
       const roundUsage = e.usage;
@@ -299,12 +311,18 @@ Reply with ONLY this JSON object:
     }, deadline);
   } catch (e) {
     if (isAbortError(e)) {
+      if (e.spent == null) {
+        const billed = billAbort(env, env.MODEL || "claude-haiku-5-5", ask, null, 0, MODEL_CALLS.identify.promptTokens);
+        e.usage = billed.usage;
+        e.spent = billed.spent;
+      }
       e.aborted = true;
-      e.usage = { input_tokens: estimateInputTokens(ask), output_tokens: 0, web_search_requests: 0 };
     }
     throw e;
   }
-  const data = await r.json().catch(() => ({}));
+  let data;
+  try { data = await readModelJson(r, env, env.MODEL || "claude-haiku-5-5", ask, null, 0, MODEL_CALLS.identify.promptTokens); }
+  catch (e) { throw e; }
   const usage = usageFromResponse(data);
   if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
   const t = textOf(data.content);
@@ -352,14 +370,17 @@ async function dealCheck(env, w, budget, deadline) {
       r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST",
         headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
         body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) }, deadline);
+      data = await readModelJson(r, env, model, messages, usage, spent);
     } catch (e) {
       if (!isAbortError(e)) throw e;
-      const billed = billAbort(env, model, messages, usage, spent);
+      if (e.spent == null) {
+        const billed = billAbort(env, model, messages, usage, spent);
+        e.usage = billed.usage;
+        e.spent = billed.spent;
+      }
       e.aborted = true;
-      e.usage = billed.usage;
       throw e;
     }
-    data = await r.json().catch(() => ({}));
     const roundUsage = usageFromResponse(data);
     usage = addUsage(usage, roundUsage);
     spent += spendOf(env, model, roundUsage);
@@ -381,11 +402,15 @@ function usageStub(env) {
   if (typeof ns.idFromName === "function" && typeof ns.get === "function") return ns.get(ns.idFromName("global"));
   return null;
 }
-async function pruneUsageCounters(env) {
+async function pruneUsageCounters(env, now) {
   const stub = usageStub(env);
-  if (!stub || typeof stub.prune !== "function") return;
-  const now = new Date();
-  try { await stub.prune({ now: now.toISOString(), spendKey: poolSpendKey(now) }); } catch {}
+  const day = now || (env && env.NOW ? new Date(env.NOW) : new Date());
+  if (stub && typeof stub.prune === "function") {
+    try { await stub.prune({ now: day.toISOString(), spendKey: poolSpendKey(day) }); } catch {}
+  }
+  if (poolLifetimeExpired(day) && env && env.WATCH && typeof env.WATCH.delete === "function") {
+    try { await env.WATCH.delete("spend:free"); } catch {}
+  }
 }
 async function legacyPoolSpend(env) {
   if (!env || !env.WATCH || typeof env.WATCH.get !== "function") return 0;
@@ -695,14 +720,17 @@ Reply with ONLY this JSON:
     let r;
     try {
       r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) }, deadline);
+      data = await readModelJson(r, env, model, messages, usage, spent);
     } catch (e) {
       if (!isAbortError(e)) throw e;
-      const billed = billAbort(env, model, messages, usage, spent);
+      if (e.spent == null) {
+        const billed = billAbort(env, model, messages, usage, spent);
+        e.usage = billed.usage;
+        e.spent = billed.spent;
+      }
       e.aborted = true;
-      e.usage = billed.usage;
       throw e;
     }
-    data = await r.json().catch(() => ({}));
     const roundUsage = usageFromResponse(data);
     usage = addUsage(usage, roundUsage);
     spent += spendOf(env, model, roundUsage);
@@ -764,14 +792,17 @@ Reply with ONLY this JSON:
     let r;
     try {
       r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, ...(searches ? { tools } : {}), messages }) }, deadline);
+      data = await readModelJson(r, env, model, messages, usage, spent);
     } catch (e) {
       if (!isAbortError(e)) throw e;
-      const billed = billAbort(env, model, messages, usage, spent);
+      if (e.spent == null) {
+        const billed = billAbort(env, model, messages, usage, spent);
+        e.usage = billed.usage;
+        e.spent = billed.spent;
+      }
       e.aborted = true;
-      e.usage = billed.usage;
       throw e;
     }
-    data = await r.json().catch(() => ({}));
     const roundUsage = usageFromResponse(data);
     usage = addUsage(usage, roundUsage);
     spent += spendOf(env, model, roundUsage);
@@ -788,14 +819,17 @@ Reply with ONLY this JSON:
       let r;
       try {
         r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: MODEL_CALLS.paceFollow.maxTokens, messages }) }, deadline);
+        data = await readModelJson(r, env, model, messages, usage, spent);
       } catch (e) {
         if (!isAbortError(e)) throw e;
-        const billed = billAbort(env, model, messages, usage, spent);
+        if (e.spent == null) {
+          const billed = billAbort(env, model, messages, usage, spent);
+          e.usage = billed.usage;
+          e.spent = billed.spent;
+        }
         e.aborted = true;
-        e.usage = billed.usage;
         throw e;
       }
-      data = await r.json().catch(() => ({}));
       const roundUsage = usageFromResponse(data);
       usage = addUsage(usage, roundUsage);
       spent += spendOf(env, model, roundUsage);
@@ -866,6 +900,7 @@ export default {
   async fetch(req, rawEnv, ctx) {
     const env = { ...DEFAULTS };
     for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
+    const deadline = openDeadline(env);
     const h = cors(env, req);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: h });
     const url = new URL(req.url);
@@ -963,7 +998,6 @@ export default {
         const watchHold = await reserveCall(env, user, "deal", 1, { alertAdd: 1, inputTokens: estimateInputTokens(JSON.stringify(body)) });
         if (!watchHold.ok) return json({ error: watchHold.error || "Try again tomorrow." }, watchHold.status || 429, h);
         try {
-          const deadline = openDeadline(env);
           const b = await dealCheck(env, w, watchHold.reserved || null, deadline);
           await settleCall(ctx, finishCall(env, watchHold.id, watchHold.reserved, b.usage, spendExtra(watchHold)));
           delete b.usage;
@@ -983,7 +1017,6 @@ export default {
       const paceHold = await reserveCall(env, user, "pace", 1, { inputTokens: estimateInputTokens(JSON.stringify(b)) });
       if (!paceHold.ok) return json({ error: paceHold.error }, paceHold.status, h);
       try {
-        const deadline = openDeadline(env);
         const built = await paceBuild(env, b, paceHold.reserved || null, deadline);
         await settleCall(ctx, finishCall(env, paceHold.id, paceHold.reserved, built.usage, spendExtra(paceHold)));
         return json({ result: built.result }, 200, h);
@@ -995,7 +1028,6 @@ export default {
       const battHold = await reserveCall(env, user, "battery", 1, { inputTokens: estimateInputTokens(JSON.stringify(body)) });
       if (!battHold.ok) return json({ error: battHold.error }, battHold.status, h);
       try {
-        const deadline = openDeadline(env);
         const found = await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) }, battHold.reserved || null, deadline);
         await settleCall(ctx, finishCall(env, battHold.id, battHold.reserved, found.usage, spendExtra(battHold)));
         return json({ result: found.result }, 200, h);
@@ -1013,7 +1045,6 @@ export default {
       const idHold = await reserveCall(env, user, "identify", 1, { inputTokens: estimateInputTokens(String(body.hint || "") + String(body.category || "")) });
       if (!idHold.ok) return json({ error: idHold.error }, idHold.status, h);
       try {
-        const deadline = openDeadline(env);
         const found = await identify(env, img, String(body.hint || "").slice(0, 80), deadline);
         await settleCall(ctx, finishCall(env, idHold.id, idHold.reserved, found.usage, spendExtra(idHold)));
         return json({ result: found.result }, 200, h);
@@ -1050,7 +1081,6 @@ export default {
     refused = accepted.slice(charged).map(it => ({ id: String((it && it.id) || ""), ok: false, error: lookBill.refusedError || allowance.error })).concat(refused);
     if (!run.length) return json({ error: lookBill.refusedError || allowance.error, results: refused }, 429, h);
 
-    const deadline = openDeadline(env);
     const packed = await Promise.all(run.map((it, i) => lookupOne(env, it, lookBill.reserved ? budgets[i] : null, deadline).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160), usage: e.usage, spendMicro: e.spendMicro }))));
     let actual = 0;
     const results = packed.map(r => {
@@ -1073,9 +1103,10 @@ export default {
     const env = { ...DEFAULTS };
     for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
     ctx.waitUntil((async () => {
+      const now = env.NOW ? new Date(env.NOW) : new Date();
       await serviceAccountLogLine(env);
       await sweepTombstones(env);
-      await pruneUsageCounters(env);
+      await pruneUsageCounters(env, now);
       await retryQueuedCleanups(env);
       await runQueuedRedactions(env);
       if (env.ANTHROPIC_API_KEY) await runDueWatches(env, +(env.WATCH_BATCH || 6));
