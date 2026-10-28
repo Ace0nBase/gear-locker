@@ -330,7 +330,7 @@ function openForm(item){
   const blocked=!!(item&&GearLogic.saleRestricted(item));
   editing=item||null;delArmed=false;retailDirty=false;valueDirty=false;
   $("formTitle").textContent=item?"Edit item":"Add item";
-  $("fName").value=item?.name||"";$("fBrand").value=item?.brand||"";$("fCat").value=item?.category||(filter!=="All"?filter:"Pouches");
+  $("fName").value=item?.name||"";$("fBrand").value=item?.brand||"";$("fCat").value=item? (GearLogic.migrateCategoryName(item.category)||item.category||"") : (filter!=="All"?filter:"Pouches");
   $("fQty").value=item?.qty??1;$("fColor").value=item?.color||"";$("fCond").value=item?.condition||"Good";
   $("fRetail").value=!item?"":(blocked&&!restrictedRetailShown(item)?"":(item.retailNew||""));$("fVal").value=!item?"":(blocked&&!restrictedValueShown(item)?"":(item.value||""));$("fLoc").value=item?.location||"";$("fNotes").value=item?.notes||"";
   $("delBtn").hidden=!item;$("delBtn").className="btn ghost";$("delBtn").textContent="Delete";

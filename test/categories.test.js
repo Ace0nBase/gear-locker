@@ -188,6 +188,28 @@ test("old magazine and belt ids rename in place, and a rig moves only when the o
   assert.equal(migrateCategoryName("BELTS & RIGS"), BELTS_CATEGORY);
   assert.equal(migrateCategoryName(BELTS_CATEGORY), BELTS_CATEGORY);
   assert.equal(migrateCategoryName(ARMOR_CATEGORY), ARMOR_CATEGORY);
+  assert.equal(migrateCategoryName("Lower Receivers"), "Firearms");
+  assert.equal(migrateCategoryName("Lower Receiver"), "Firearms");
+  assert.equal(migrateCategoryName("Ammunition"), "Ammo");
+  assert.equal(migrateCategoryName("Ammo"), "Ammo");
+  const legacyRestricted = migrateRecordCategories([
+    { id: "ammo", name: "Practice box", category: "Ammunition", retailNew: 40, value: 30, paid: 25 },
+    { id: "lower", name: "Practice box", category: "Lower Receivers", retailNew: 120, value: 100, paid: 90 },
+    { id: "pouch", name: "Ammunition pouch", category: "Pouches", retailNew: 18 },
+  ], "2026-10-28T00:00:00.000Z");
+  assert.equal(legacyRestricted.records[0].category, "Ammo");
+  assert.equal(legacyRestricted.records[0].name, "Practice box");
+  assert.equal(legacyRestricted.records[0].retailNew, 40);
+  assert.equal(legacyRestricted.records[0].value, 30);
+  assert.equal(saleRestricted(legacyRestricted.records[0]), true);
+  assert.equal(legacyRestricted.records[1].category, "Firearms");
+  assert.equal(legacyRestricted.records[1].name, "Practice box");
+  assert.equal(legacyRestricted.records[1].retailNew, 120);
+  assert.equal(saleRestricted(legacyRestricted.records[1]), true);
+  assert.equal(legacyRestricted.records[2].category, "Pouches");
+  assert.equal(saleRestricted(legacyRestricted.records[2]), false);
+  assert.equal(GEAR_CATEGORIES.includes("Ammo"), true);
+  assert.equal(GEAR_CATEGORIES.includes("Firearms"), true);
   const stamp = "2026-10-27T12:00:00.000Z";
   const later = "2026-10-27T13:00:00.000Z";
   const out = migrateRecordCategories([

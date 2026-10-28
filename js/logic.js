@@ -362,6 +362,9 @@ const CATEGORY_RENAMES = new Map([
   [LEGACY_STORAGE_KEY, STORAGE_CATEGORY],
   [LEGACY_MAGAZINES_KEY, MAGAZINES_CATEGORY],
   [LEGACY_BELTS_KEY, BELTS_CATEGORY],
+  [categoryKey("Lower Receivers"), "Firearms"],
+  [categoryKey("Lower Receiver"), "Firearms"],
+  [categoryKey("Ammunition"), "Ammo"],
 ]);
 
 export function migrateCategoryName(category) {
@@ -643,7 +646,7 @@ export function saleRestricted(item) {
   return false;
 }
 
-export const GEAR_CATEGORIES = ["Firearms","Suppressors","Magazines","Triggers & Parts","Armor & Carriers","Belts","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Ammo Storage & Loaders","Cleaning & Maintenance","Misc"];
+export const GEAR_CATEGORIES = ["Firearms","Suppressors","Ammo","Magazines","Triggers & Parts","Armor & Carriers","Belts","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Ammo Storage & Loaders","Cleaning & Maintenance","Misc"];
 
 // Shown under the category picker. Magazines are magazines only. Belts are belts. Rigs and carriers are armor.
 export const CATEGORY_HINTS = {
@@ -891,7 +894,7 @@ export function keepManualPrice(item, touch) {
   const value = Math.max(0, Math.round(+out.value || 0));
   const retailDirty = !!flags.retail;
   const valueDirty = !!flags.value;
-  const hadUnmarked = unmarkedPrice(out);
+  const hadUnmarked = flags.unmarked != null ? !!flags.unmarked : unmarkedPrice(out);
   const keepRetail = retail > 0 && (retailDirty || !!flags.retailWasManual || out.priceSource === "manual" || hadUnmarked);
   if (keepRetail) {
     out.retailNew = retail;
@@ -950,6 +953,7 @@ export function stampManualPrices(item, before, touch) {
     value: !!flags.value,
     retailWasManual: retailWasManual || retailTyped,
     valueWasManual: valueWasManual || valueTyped,
+    unmarked: !!(before && unmarkedPrice(before)),
   });
 }
 

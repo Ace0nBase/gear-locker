@@ -544,6 +544,32 @@ test("a notes save on a restricted shelf keeps an unmarked stored price", () => 
   const bareLooked = applyMarketPrices(bareSaved, quote, "2026-10-28");
   assert.equal(bareLooked.retailNew, 600);
   assert.equal(bareLooked.value, 500);
+
+  const rifle = { id: "rifle", category: "Firearms", arm: "FA", name: "Rifle", retailNew: 900, value: 800, paid: 850, weight: 10 };
+  const rifleRetail = stampManualPrices({ ...rifle, retailNew: 950 }, rifle, { retail: true, value: false });
+  assert.equal(rifleRetail.retailNew, 950);
+  assert.equal(rifleRetail.value, 800);
+  assert.equal(rifleRetail.paid, 850);
+  assert.equal(rifleRetail.priceSource, "manual");
+  assert.equal(rifleRetail.valueSource, undefined);
+  assert.equal(lookupPlan(rifleRetail).price, false);
+  const rifleValue = stampManualPrices({ ...rifle, value: 825 }, rifle, { retail: false, value: true });
+  assert.equal(rifleValue.retailNew, 900);
+  assert.equal(rifleValue.value, 825);
+  assert.equal(rifleValue.paid, 850);
+  assert.equal(lookupPlan(rifleValue).price, false);
+
+  const can = { id: "can2", category: "Suppressors", arm: "SU", name: "Can", retailNew: 700, value: 650, paid: 640, weight: 12 };
+  const canRetail = stampManualPrices({ ...can, retailNew: 720 }, can, { retail: true, value: false });
+  assert.equal(canRetail.retailNew, 720);
+  assert.equal(canRetail.value, 650);
+  assert.equal(canRetail.paid, 640);
+  assert.equal(lookupPlan(canRetail).price, false);
+  const canValue = stampManualPrices({ ...can, value: 660 }, can, { retail: false, value: true });
+  assert.equal(canValue.retailNew, 700);
+  assert.equal(canValue.value, 660);
+  assert.equal(canValue.paid, 640);
+  assert.equal(lookupPlan(canValue).price, false);
 });
 
 test("an edited retail and insured value survive the snapshot, a reload, and the next lookups", () => {
