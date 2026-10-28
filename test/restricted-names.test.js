@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { saleRestricted, lookupAnswerRestricted, pickModelAnswer, settleLookup, settleDeal, countedValue, csvExportField, keepManualPrice, gunMarketUrl, stripGunMarketText, publicWeightNote, applyMarketPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, bulkLookupIds, singleLookupIds, stampManualPrices, mergeByServerTime, serverRow } from "../js/logic.js";
+import { saleRestricted, lookupAnswerRestricted, pickModelAnswer, settleLookup, settleDeal, countedValue, csvExportField, keepManualPrice, gunMarketUrl, stripGunMarketText, publicWeightNote, applyMarketPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, saveShouldLookup, bulkLookupIds, singleLookupIds, stampManualPrices, mergeByServerTime, serverRow } from "../js/logic.js";
 
 test("firearm, suppressor, ammunition, and lower-receiver shelves are weight-only", () => {
   const blocked = [
@@ -573,14 +573,12 @@ test("a notes save on a restricted shelf keeps an unmarked stored price", () => 
 });
 
 test("emptying the value clears it on a normal shelf and a restricted shelf", () => {
-  const pouch = { category: "Pouches", name: "Coat", condition: "Good", retailNew: 900, value: 800, paid: 100 };
+  const pouch = { category: "Pouches", name: "Coat", condition: "Good", retailNew: 900, value: 800, paid: 100, valueSource: "manual" };
   const cleared = stampManualPrices({ ...pouch, value: 0 }, pouch, { retail: false, value: true });
   assert.equal(cleared.retailNew, 900);
   assert.equal(cleared.value, 0);
   assert.equal(cleared.valueSource, undefined);
   assert.equal(cleared.paid, 100);
-  const typedZero = stampManualPrices({ ...pouch, value: 0 }, pouch, { retail: false, value: true });
-  assert.equal(typedZero.value, 0);
 
   const rifle = { category: "Firearms", arm: "FA", name: "Rifle", retailNew: 900, value: 800, paid: 850, weight: 10, valueSource: "manual" };
   const clearedRifle = stampManualPrices({ ...rifle, value: 0 }, rifle, { retail: false, value: true });
@@ -603,6 +601,33 @@ test("emptying the value clears it on a normal shelf and a restricted shelf", ()
   const keptRifle = stampManualPrices({ ...rifle, retailNew: 950, valueSource: undefined }, { ...rifle, valueSource: undefined }, { retail: true, value: false });
   assert.equal(keptRifle.retailNew, 950);
   assert.equal(keptRifle.value, 800);
+});
+
+test("a blank arm is not a new record, and clearing value does not start a lookup", () => {
+  const before = {
+    id: "coat", category: "Pouches", name: "Coat", condition: "Good", weight: 8,
+    retailNew: 40, value: 28, priceSource: "market", priceNote: "Shelf",
+    usedLow: 20, usedHigh: 30,
+  };
+  for (const arm of [undefined, "", null]) {
+    const saved = stampManualPrices({ ...before, arm: "no", value: 0 }, { ...before, arm }, { retail: false, value: true });
+    assert.equal(saved.value, 0, String(arm));
+    assert.equal(saved.retailNew, 40, String(arm));
+    assert.equal(saved.priceNote, undefined, String(arm));
+    assert.equal(saved.usedLow, undefined, String(arm));
+    assert.equal(saved.usedHigh, undefined, String(arm));
+    assert.equal(saveShouldLookup({ ...before, arm }, saved), false, String(arm));
+  }
+  const parked = { ...before, arm: "no" };
+  assert.equal(saveShouldLookup({ ...before, arm: "" }, parked), false);
+  assert.equal(saveShouldLookup({ ...before, arm: undefined }, parked), false);
+  assert.equal(saveShouldLookup(before, { ...before, arm: "OP" }), true);
+  assert.equal(saveShouldLookup(before, { ...before, name: "Other coat", value: 0, arm: "no" }), false);
+  const armed = stampManualPrices({ ...before, arm: "OP", value: 0 }, { ...before, arm: "OP" }, { retail: false, value: true });
+  assert.equal(armed.value, 0);
+  assert.equal(armed.priceNote, "Shelf");
+  assert.equal(armed.usedLow, 20);
+  assert.equal(saveShouldLookup({ ...before, arm: "OP" }, armed), false);
 });
 
 test("an edited retail and insured value survive the snapshot, a reload, and the next lookups", () => {

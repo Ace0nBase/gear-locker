@@ -1678,6 +1678,11 @@ export function stampManualPrices(item, before, touch) {
   if (valueTyped) out.valueSource = "manual";
   else if (flags.value && !(+out.value > 0)) { out.value = 0; delete out.valueSource; }
   else if (!flags.value && !(+out.value > 0) && out.valueSource === "manual") delete out.valueSource;
+  if (flags.value && !positivePrice(out.value) && normalizedArm(out.arm) === "no") {
+    delete out.usedLow;
+    delete out.usedHigh;
+    delete out.priceNote;
+  }
   const prior = before && before.priceSource;
   if ((prior === "market" || prior === "auto") && out.priceSource === "manual") clearAutoPriceTrail(out);
   if (before && !flags.retail && userEnteredPrice(before) && positivePrice(before.retailNew)) {
@@ -1706,6 +1711,10 @@ function weightMissing(item) {
 
 function positivePrice(value) {
   return value != null && value !== "" && isFinite(+value) && +value > 0;
+}
+
+function normalizedArm(value) {
+  return value == null || value === "" || value === "no" ? "no" : value;
 }
 
 // A price saved before the manual marker still counts. Market and auto are the only prices a lookup may replace.
@@ -1747,6 +1756,27 @@ export function saveNeedsLookup(item) {
   if (plan.weight) return true;
   if (!plan.price) return false;
   return item.priceSource !== "market" && item.priceSource !== "auto";
+}
+
+export function saveChangedForLookup(before, rec) {
+  if (!before || !rec) return true;
+  const restricted = saleRestricted(rec);
+  return before.name !== rec.name || before.brand !== rec.brand || before.category !== rec.category
+    || normalizedArm(before.arm) !== normalizedArm(rec.arm)
+    || (!restricted && before.condition !== rec.condition);
+}
+
+export function clearedPriceField(before, rec) {
+  if (!before || !rec) return false;
+  return (positivePrice(before.value) && !positivePrice(rec.value))
+    || (positivePrice(before.retailNew) && !positivePrice(rec.retailNew));
+}
+
+// A blank arm is the same as Not on the record. Clearing a price does not start a lookup.
+export function saveShouldLookup(before, rec) {
+  if (!rec || rec.deleted || magShelfPending(rec) || importSkipsLookup(rec)) return false;
+  if (clearedPriceField(before, rec)) return false;
+  return saveChangedForLookup(before, rec) || saveNeedsLookup(rec);
 }
 
 export function bulkLookupIds(items) {
@@ -2067,7 +2097,7 @@ const GearLogic = {
   ROUND_INPUT_TOKEN_CAP, roundInputTokens, flooredSearchRoundMicro,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted, importRestricted, importSkipsLookup,
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
-  gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, bulkLookupIds, singleLookupIds, applyMarketPrices,
+  gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, saveShouldLookup, bulkLookupIds, singleLookupIds, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
   LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, MAGAZINES_CATEGORY, LEGACY_MAGAZINES_CATEGORY, BELTS_CATEGORY, LEGACY_BELTS_CATEGORY, ARMOR_CATEGORY, GEAR_CATEGORIES, CATEGORY_HINTS, PRICE_BACKSTOP,
   migrateCategoryName, migrateRecordCategories, explicitCategoryChoice, magShelfPending, answerMagShelf, beltRigPending, answerBeltRig,

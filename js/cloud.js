@@ -517,10 +517,7 @@ var _saveCurrent=saveCurrent;
 saveCurrent=async function(extra){
   const before=editing?{...editing}:null;
   const rec=await _saveCurrent(extra);if(!rec)return rec;
-  const restricted=GearLogic.saleRestricted(rec);
-  const changed=!before||before.name!==rec.name||before.brand!==rec.brand||before.category!==rec.category||before.arm!==rec.arm||(!restricted&&before.condition!==rec.condition);
-  const needs=GearLogic.saveNeedsLookup(rec);
-  if(window.LOOKUP_URL&&cloudUser&&!extra&&!GearLogic.magShelfPending(rec)&&(changed||needs)&&!GearLogic.importSkipsLookup(rec))runLookups([rec.id],true).catch(()=>{});
+  if(window.LOOKUP_URL&&cloudUser&&!extra&&GearLogic.saveShouldLookup(before,rec))runLookups([rec.id],true).catch(()=>{});
   return rec;
 };
 if(window.LOOKUP_URL){
