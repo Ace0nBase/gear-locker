@@ -188,7 +188,9 @@ service cloud.firestore {
         && request.resource.data.borrowerEmailLower == request.resource.data.borrowerEmail.lower()
         && lendMailIncreased(id);
       allow update: if !tombstoned() && ((isLender()
-          && request.resource.data.lender == resource.data.lender)
+          && request.resource.data.lender == resource.data.lender
+          && request.resource.data.borrowerEmail == resource.data.borrowerEmail
+          && request.resource.data.borrowerEmailLower == resource.data.borrowerEmailLower)
         || (borrowerMatch()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['borrowerReturned','updatedAt','serverUpdatedAt'])));
       allow update: if emailOk()
@@ -219,7 +221,7 @@ service cloud.firestore {
         && request.resource.data.loanId is string
         && request.resource.data.n == resource.data.n + 1
         && request.resource.data.n <= 40;
-      allow delete: if signedIn() && request.auth.uid == uid;
+      allow delete: if false;
     }
 
     match /deletedUsers/{uid} {

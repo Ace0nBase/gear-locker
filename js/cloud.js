@@ -218,6 +218,14 @@ async function deleteDocRefs(refs){
     await b.commit();
   }
 }
+async function releaseDeletedEmailHold(){
+  try{
+    var u=firebase.auth().currentUser;
+    if(!u||!u.emailVerified||!window.LOOKUP_URL)return;
+    var tok=await u.getIdToken();
+    await fetch(window.LOOKUP_URL.replace(/\/$/,"")+"/account/session",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+tok},body:"{}"});
+  }catch(e){}
+}
 async function deleteMyAccount(password,signal){
   const u=firebase.auth().currentUser;
   if(!u||!fsdb||!cloudUser)throw new Error("Sign in again, then delete the account.");
@@ -319,6 +327,7 @@ async function startCloud(){
     }
     subscribeCloud();
     watchTombstone();
+    if(u.emailVerified)releaseDeletedEmailHold();
   });
   function syncKeepNote(){const on=!!$("gKeep").checked;const note=$("gKeepNote");if(note)note.hidden=on;const live=$("keepLive");if(live)live.hidden=on||$("acct").hidden}
   $("gKeep").addEventListener("change",syncKeepNote);
@@ -331,7 +340,7 @@ async function startCloud(){
   $("verifyDone").onclick=async()=>{try{var u=await confirmEmailNow();if(u&&u.emailVerified)toast("Email confirmed.");else toast("Not confirmed yet. Open the link in the email, then tap this again.",5000)}catch(e){toast("Couldn't check. Try again.")}};
   if($("qaVerify"))$("qaVerify").onclick=async()=>{if(!window.GEAR_QA)return;var u=firebase.auth().currentUser;if(!u){toast("Sign in on this test page first");return}try{var r=await fetch("http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:update",{method:"POST",headers:{Authorization:"Bearer owner","Content-Type":"application/json"},body:JSON.stringify({localId:u.uid,emailVerified:true})});if(!r.ok)throw new Error("emulator");u=await confirmEmailNow();toast(u&&u.emailVerified?"Marked confirmed in the local emulator":"Couldn't mark it confirmed. Is npm run qa still running?")}catch(e){toast("Couldn't mark it confirmed. Is npm run qa still running?")}};
   if($("qaStorage"))$("qaStorage").onclick=qaStorageCheck;
-async function confirmEmailNow(){var user=firebase.auth().currentUser;if(!user)return null;await GearLogic.refreshAuthClaims(user);cloudUser=firebase.auth().currentUser;refreshVerify();if(cloudUser&&cloudUser.emailVerified){watchLends();if(typeof repairLoanMirrors==="function")repairLoanMirrors()}return cloudUser}
+async function confirmEmailNow(){var user=firebase.auth().currentUser;if(!user)return null;await GearLogic.refreshAuthClaims(user);cloudUser=firebase.auth().currentUser;refreshVerify();if(cloudUser&&cloudUser.emailVerified){watchLends();if(typeof repairLoanMirrors==="function")repairLoanMirrors();releaseDeletedEmailHold()}return cloudUser}
 async function storageCode(ref){try{await ref.getMetadata();return "ok"}catch(e){return e&&e.code||"error"}}
 async function qaStorageCheck(){
   if(!window.GEAR_QA||!firebase.auth().currentUser){toast("Sign in on this test page first");return}

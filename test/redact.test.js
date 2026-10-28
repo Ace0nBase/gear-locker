@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { deleteUserFirestore } from "../api/account-delete.js";
 import { firestoreAccessToken, parseServiceAccount, resetFirestoreTokenCache, serviceAccountLogLine } from "../api/firestore-admin.js";
-import { emailHoldKey, enqueueRedaction, redactStoredEmail, releaseEmailHold, runQueuedRedactions } from "../api/redact.js";
+import { emailHoldKey, enqueueRedaction, HOLD_TTL_SECONDS, redactStoredEmail, releaseEmailHold, runQueuedRedactions } from "../api/redact.js";
 import {
   LEND_EMAIL_CAP, REDACT_MAX_AGE_MS, lendMailDocId, orderRedactions, redactionFailureBody, redactionJobBody,
   redactionRetryPlan, serverRow,
@@ -68,15 +68,33 @@ function memoryFirestore() {
   };
 }
 
-function memKv() {
+function memKv(startMs) {
+  let now = startMs == null ? Date.now() : startMs;
   const data = new Map();
+  function live(key) {
+    const row = data.get(key);
+    if (!row) return null;
+    if (row.exp != null && row.exp <= now) {
+      data.delete(key);
+      return null;
+    }
+    return row;
+  }
   return {
     data,
-    async get(key) { return data.has(key) ? data.get(key) : null; },
-    async put(key, value) { data.set(key, value); },
+    setNow(ms) { now = ms; },
+    async get(key) {
+      const row = live(key);
+      return row ? row.value : null;
+    },
+    async put(key, value, opts) {
+      const ttl = opts && opts.expirationTtl;
+      const exp = ttl ? now + Math.floor(+ttl) * 1000 : null;
+      data.set(key, { value, exp });
+    },
     async delete(key) { data.delete(key); },
     async list({ prefix } = {}) {
-      const keys = [...data.keys()].filter(key => String(key).startsWith(prefix || "")).sort();
+      const keys = [...data.keys()].filter(key => live(key) && String(key).startsWith(prefix || "")).sort();
       return { keys: keys.map(name => ({ name })), list_complete: true };
     },
   };
@@ -200,7 +218,7 @@ test("a missing service account leaves the redaction job queued", async () => {
   resetFirestoreTokenCache();
   const kv = memKv();
   const env = { WATCH: kv, EMAIL_HMAC_KEY: "hold-key", FIREBASE_PROJECT: "demo" };
-  await enqueueRedaction(env, "abc", "A@B.co", "2026-10-27T00:00:00.000Z");
+  await enqueueRedaction(env, "abc", "A@B.co", "2026-10-27T00:00:00.000Z", { email_verified: true });
   const job = await kv.get("redact:abc");
   assert.equal(JSON.parse(job).email, "a@b.co");
   assert.equal(JSON.parse(job).phase, "loans");
@@ -216,6 +234,34 @@ test("a missing service account leaves the redaction job queued", async () => {
   assert.equal(await kv.get("redact:abc"), null);
   assert.equal(await kv.get(holdKey), null);
   await releaseEmailHold(env, { email: "a@b.co", email_verified: false });
+});
+
+test("an unverified delete does not queue email redaction or a hold", async () => {
+  const kv = memKv();
+  const env = { WATCH: kv, EMAIL_HMAC_KEY: "hold-key" };
+  const when = "2026-10-27T00:00:00.000Z";
+  await enqueueRedaction(env, "abc", "a@b.co", when, { email_verified: false });
+  await enqueueRedaction(env, "abc", "a@b.co", when, { email: "a@b.co" });
+  assert.equal(await kv.get("redact:abc"), null);
+  assert.equal([...kv.data.keys()].some(key => String(key).startsWith("emailhold:")), false);
+  await enqueueRedaction(env, "abc", "a@b.co", when, { emailVerified: true });
+  assert.equal(JSON.parse(await kv.get("redact:abc")).email, "a@b.co");
+  assert.equal([...kv.data.keys()].some(key => String(key).startsWith("emailhold:")), true);
+});
+
+test("the email hold expires 30 days after it is written", async () => {
+  const start = Date.parse("2026-10-27T00:00:00.000Z");
+  const kv = memKv(start);
+  const env = { WATCH: kv, EMAIL_HMAC_KEY: "hold-key" };
+  await enqueueRedaction(env, "abc", "a@b.co", "2026-10-27T00:00:00.000Z", { email_verified: true });
+  const holdKey = [...kv.data.keys()].find(key => String(key).startsWith("emailhold:"));
+  assert.equal(HOLD_TTL_SECONDS, 30 * 24 * 60 * 60);
+  assert.ok(await kv.get(holdKey));
+  kv.setNow(start + 29 * 24 * 60 * 60 * 1000);
+  assert.ok(await kv.get(holdKey));
+  kv.setNow(start + 31 * 24 * 60 * 60 * 1000);
+  assert.equal(await kv.get(holdKey), null);
+  assert.ok(await kv.get("redact:abc"));
 });
 
 test("the redaction job expires after 30 days and waits out its backoff", () => {

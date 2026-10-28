@@ -703,7 +703,7 @@ export default {
         const watchGone = await retryOnce(() => deleteWatchRecord(env, accountUser.sub));
         if (!watchGone) return json({ error: "Couldn't remove your price alerts. Your sign-in is still here. Try again." }, 502, h);
         const usageQueued = await retryOnce(() => queueUsageCleanup(env, accountUser.sub));
-        const redactQueued = await retryOnce(() => enqueueRedaction(env, accountUser.sub, String(accountUser.email || "").toLowerCase()));
+        const redactQueued = await retryOnce(() => enqueueRedaction(env, accountUser.sub, String(accountUser.email || "").toLowerCase(), new Date().toISOString(), accountUser));
         const queued = usageQueued && redactQueued;
         const countersGone = queued ? await retryOnce(() => clearUsageCounters(env, accountUser.sub)) : false;
         const cleanup = deleteCleanupResult(queued, countersGone);
@@ -713,6 +713,15 @@ export default {
         deleteRevenueCatCustomer(env, accountUser.sub);
         return json(cleanup.body, 200, h);
       } catch { return json({ error: "Couldn't finish deleting the account. Your sign-in is still here. Try again." }, 502, h); }
+    }
+    if (url.pathname === "/account/session") {
+      if (req.method !== "POST") return json({ error: "Not found" }, 404, h);
+      const sessionToken = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+      let sessionUser;
+      try { sessionUser = await verifyFirebaseToken(sessionToken, env.FIREBASE_PROJECT); }
+      catch { return json({ error: "Please sign in again." }, 401, h); }
+      await releaseEmailHold(env, sessionUser);
+      return json({ ok: true }, 200, h);
     }
     if (!ROUTES.includes(url.pathname) || req.method !== "POST") return json({ error: "Not found" }, 404, h);
     if (!env.ANTHROPIC_API_KEY) return json({ error: "Lookup service isn't set up yet (missing API key)." }, 503, h);

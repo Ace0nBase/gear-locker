@@ -223,3 +223,21 @@ test("one lender can publish 40 lends to an email and not a 41st", async () => {
   extra.set(doc(owner, "lends/extra"), loan());
   await assertFails(extra.commit());
 });
+
+test("a lender cannot change the borrower email, and the lend counter cannot be deleted", async () => {
+  await env.clearFirestore();
+  await assertSucceeds(shareLend("owner", "owner@example.com", true, "loan1", loan()));
+  const owner = as("owner", "owner@example.com", true);
+  await assertFails(updateDoc(doc(owner, "lends/loan1"), {
+    borrowerEmail: "other@example.com",
+    borrowerEmailLower: "other@example.com",
+  }));
+  await assertSucceeds(updateDoc(doc(owner, "lends/loan1"), {
+    item: { name: "Radio", brand: "A", color: "Black", category: "Pouches" },
+  }));
+  const kept = await getDoc(doc(owner, "lends/loan1"));
+  assert.equal(kept.data().borrowerEmail, "Friend@Example.com");
+  const hash = await lendMailDocId("friend@example.com");
+  await assertFails(deleteDoc(doc(owner, "users/owner/lendMail/" + hash)));
+  assert.equal((await getDoc(doc(owner, "users/owner/lendMail/" + hash))).exists(), true);
+});

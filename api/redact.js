@@ -8,6 +8,11 @@ import {
 import { firestoreAccessToken } from "./firestore-admin.js";
 
 export const REDACT_PREFIX = "redact:";
+export const HOLD_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+function emailIsVerified(user) {
+  return !!(user && (user.email_verified === true || user.emailVerified === true));
+}
 
 function rootUrl(project) {
   return "https://firestore.googleapis.com/v1/projects/" + encodeURIComponent(project) + "/databases/(default)/documents";
@@ -66,8 +71,9 @@ export async function emailHoldKey(secret, email) {
   return "emailhold:" + hex;
 }
 
-export async function enqueueRedaction(env, uid, email, nowIso) {
+export async function enqueueRedaction(env, uid, email, nowIso, user) {
   if (!env || !env.WATCH || !uid) throw new Error("redact");
+  if (!emailIsVerified(user)) return;
   const addr = String(email || "").trim().toLowerCase();
   if (!addr) return;
   const raw = redactionJobBody(uid, addr, nowIso || new Date().toISOString());
@@ -77,12 +83,12 @@ export async function enqueueRedaction(env, uid, email, nowIso) {
   const key = await emailHoldKey(env.EMAIL_HMAC_KEY, addr);
   const hold = JSON.stringify({ uid: String(uid).trim(), at: String(nowIso || new Date().toISOString()) });
   if (hold.length > 256) throw new Error("redact");
-  await env.WATCH.put(key, hold);
+  await env.WATCH.put(key, hold, { expirationTtl: HOLD_TTL_SECONDS });
 }
 
 export async function releaseEmailHold(env, user) {
   try {
-    if (!env || !env.WATCH || !env.EMAIL_HMAC_KEY || !user || user.email_verified === false || !user.email) return;
+    if (!env || !env.WATCH || !env.EMAIL_HMAC_KEY || !emailIsVerified(user) || !user.email) return;
     const key = await emailHoldKey(env.EMAIL_HMAC_KEY, user.email);
     const raw = await env.WATCH.get(key);
     if (!raw) return;

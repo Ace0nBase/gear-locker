@@ -233,6 +233,11 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.doesNotMatch(read("js/cloud.js"), /loanRedactTargets/);
   assert.match(read("js/logic.js"), /friendEmailLower/);
   assert.match(read("firestore.rules"), /lendMailIncreased/);
+  assert.match(read("firestore.rules"), /request\.resource\.data\.borrowerEmail == resource\.data\.borrowerEmail/);
+  assert.match(read("js/cloud.js"), /\/account\/session/);
+  assert.match(read("api/worker.js"), /\/account\/session/);
+  assert.match(read("api/redact.js"), /expirationTtl/);
+  assert.match(read("api/redact.js"), /email_verified === true/);
   assert.match(read("firestore.rules"), /n <= 40/);
   assert.match(read("README.md"), /FIREBASE_SA_JSON/);
   assert.match(read("README.md"), /EMAIL_HMAC_KEY/);
