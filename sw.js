@@ -1,11 +1,12 @@
 // Offline cache: keeps the app itself available with no signal. Your gear data syncs separately through Firebase.
-const CACHE = "war-box-v46";
+const CACHE = "war-box-v47";
 const SHELL = [
   "./",
   "./index.html",
   "./config.js",
   "./manifest.webmanifest",
   "./css/app.css",
+  "./css/import.css",
   "./js/qa-sync.js",
   "./js/qa-boot.js",
   "./js/qa-guard.js",
@@ -20,6 +21,9 @@ const SHELL = [
   "./js/field.js",
   "./js/security.js",
   "./js/comms.js",
+  "./js/import-engine.js",
+  "./js/import-worker.js",
+  "./js/import-ui.js",
   "./icon-192.png",
   "./icon-512.png",
   "./maskable-192.png",
@@ -33,10 +37,13 @@ self.addEventListener("install", e => { self.skipWaiting(); e.waitUntil(caches.o
 self.addEventListener("message", e => { if (e.data && e.data.type === "skip-waiting") self.skipWaiting(); });
 self.addEventListener("activate", e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));
 self.addEventListener("fetch", e => {
-  const r = e.request; if (r.method !== "GET") return;
+  const r = e.request;
+  if (r.method !== "GET") return;
   const u = new URL(r.url);
+  if (u.protocol === "blob:" || u.protocol === "data:") return;
   if (u.origin !== location.origin && u.host !== "www.gstatic.com") return;
-  e.respondWith(fetch(r, u.origin === location.origin ? { cache: "no-cache" } : {}).then(res => { if (res.ok || res.type === "opaque") { const cp = res.clone(); caches.open(CACHE).then(c => c.put(r, cp)); } return res; }).catch(() => caches.match(r).then(m => m || caches.match("./index.html"))));
+  const net = globalThis["fetch"];
+  e.respondWith(net(r, u.origin === location.origin ? { cache: "no-cache" } : {}).then(res => { if (res.ok || res.type === "opaque") { const cp = res.clone(); caches.open(CACHE).then(c => c.put(r, cp)); } return res; }).catch(() => caches.match(r).then(m => m || caches.match("./index.html"))));
 });
 self.addEventListener("push", e => {
   let data = {};

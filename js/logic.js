@@ -15,6 +15,8 @@ export const USER_LOCAL_KEYS = [
   "gearLocker.tab",
   "gearLocker.timer",
   "gearLocker.offline",
+  "gearLocker.importMaps",
+  "gearLocker.importHistory",
 ];
 export const DEVICE_LOCAL_KEYS = ["gearLocker.keep", "gearLocker.noFolder"];
 
@@ -1383,6 +1385,32 @@ export function photoIdSuggestion(category, categories) {
 // The priced lookup tells the model to withhold a price for these, without the app guessing from the item name.
 export const PRICE_BACKSTOP = "If the item is a magazine over 30 rounds, an ammunition (linked) belt, or an auto-fire device (bump stocks, auto sears, or similar), return no price and no sources. Set retailNew, usedLow, usedHigh, and value to null. Set priceNote to \"\" and sources to []. Do not name a store or a seller.";
 
+// A row still waiting on a category is not priced and not looked up.
+function needsUncategorized(item) {
+  if (!item || typeof item !== "object") return false;
+  if (item.needsCategory) return true;
+  const category = String(item.category || "").trim();
+  if (/^needs a category$/i.test(category)) return true;
+  return !!(item.importId && !category);
+}
+
+// Every imported row stays off prices, links, and lookups until the type is an
+// allowlisted priced shelf or the owner picks a category. Restricted shelves stay restricted.
+export function importRestricted(item) {
+  if (!item || typeof item !== "object") return false;
+  if (saleRestricted(item)) return true;
+  if (!item.importId) return false;
+  if (item.importCategoryPicked) return false;
+  if (item.importPricedAllowlist) return false;
+  return true;
+}
+
+// Imported restricted rows, and anything still needing a category, are not sent to price or weight lookups.
+export function importSkipsLookup(item) {
+  if (!item || typeof item !== "object") return false;
+  if (needsUncategorized(item)) return true;
+  return !!(item.importId && importRestricted(item));
+}
 // Firearm marketplaces and firearm or ammunition retailers, matched by domain.
 // Stores that also sell gear drop only a firearm, ammunition, or suppressor path segment.
 const GUN_MARKET_HOSTS = new Set([
@@ -1703,15 +1731,17 @@ function clearAutoPriceTrail(out) {
 // A hand-entered price is not a price lookup, including a price with no marker.
 // Only market and auto prices may be refreshed. Empty prices may be filled.
 // A restricted shelf never gets an auto price. A missing weight can still be looked up.
+// An imported row that still needs a category, or one held for a shelf answer, is not looked up.
 export function lookupPlan(item) {
-  const blocked = !item || item.deleted || magShelfPending(item) || saleRestricted(item) || userEnteredPrice(item);
-  const weight = !!(item && !item.deleted && !magShelfPending(item) && weightMissing(item));
+  const skipImport = importSkipsLookup(item);
+  const blocked = !item || item.deleted || magShelfPending(item) || saleRestricted(item) || userEnteredPrice(item) || skipImport;
+  const weight = !!(item && !item.deleted && !magShelfPending(item) && !skipImport && weightMissing(item));
   return { price: !blocked, weight };
 }
 
 // A notes-only save looks up a missing weight or an empty price. It does not refresh a price the user entered.
 export function saveNeedsLookup(item) {
-  if (!item || item.deleted || magShelfPending(item)) return false;
+  if (!item || item.deleted || magShelfPending(item) || importSkipsLookup(item)) return false;
   const plan = lookupPlan(item);
   if (saleRestricted(item)) return plan.weight;
   if (plan.weight) return true;
@@ -1721,6 +1751,7 @@ export function saveNeedsLookup(item) {
 
 export function bulkLookupIds(items) {
   return (Array.isArray(items) ? items : []).filter(item => {
+    if (!item || importSkipsLookup(item)) return false;
     const plan = lookupPlan(item);
     if (plan.price && item.priceSource !== "market" && item.priceSource !== "auto") return true;
     return plan.weight;
@@ -1737,7 +1768,18 @@ export function singleLookupIds(items) {
 // A market lookup fills empty and auto prices. A price the user entered stays, including its value and used range.
 export function applyMarketPrices(item, result, day) {
   const out = { ...(item && typeof item === "object" ? item : {}) };
-  if (magShelfPending(out) || saleRestricted(out) || userEnteredPrice(out)) return out;
+  const manualPaid = out.paidSource === "manual";
+  const paid = out.paid;
+  if (magShelfPending(out) || needsUncategorized(out)) return out;
+  // An imported restricted row keeps the owner's paid number and never gains a market price.
+  if (out.importId && importRestricted(out)) {
+    if (manualPaid) { out.paid = paid; out.paidSource = "manual"; }
+    delete out.marketSources;
+    delete out.priceNote;
+    delete out.deal;
+    return out;
+  }
+  if (saleRestricted(out) || userEnteredPrice(out)) return out;
   const res = result && typeof result === "object" ? result : {};
   const n = v => (v == null || v === "" || !isFinite(+v)) ? null : Math.round(+v);
   const retailManual = out.priceSource === "manual" && +out.retailNew > 0;
@@ -1757,13 +1799,17 @@ export function applyMarketPrices(item, result, day) {
   }
   out.priceNote = stripGunMarketText(res.priceNote || "").slice(0, 240);
   out.marketSources = stripGunMarketSources(res.sources);
+  if (manualPaid) { out.paid = paid; out.paidSource = "manual"; }
   return out;
 }
 
 // A deal for a blocked category has no price and no link. Other gear keeps the price and loses a firearm-retailer link.
 export function settleDeal(item, parsed) {
   const empty = blocked => ({ price: null, where: "", url: "", condition: "", note: "", restricted: !!blocked });
-  if (saleRestricted(item) || magShelfPending(item)) return empty(!!saleRestricted(item));
+  const held = needsUncategorized(item) || !!(item && item.importId && importRestricted(item));
+  if (saleRestricted(item) || magShelfPending(item) || held) {
+    return empty(!!saleRestricted(item) || held);
+  }
   const clean = parsed && typeof parsed === "object" ? parsed : null;
   if (!clean) return empty(false);
   let url = /^https:\/\//.test(clean.url || "") ? String(clean.url).slice(0, 400) : "";
@@ -2019,7 +2065,7 @@ const GearLogic = {
   redactionJobBody, redactionRetryPlan, redactionProgressBody, redactionFailureBody,
   lendNeedsWrite, lendMirrorOps,
   ROUND_INPUT_TOKEN_CAP, roundInputTokens, flooredSearchRoundMicro,
-  refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
+  refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted, importRestricted, importSkipsLookup,
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, bulkLookupIds, singleLookupIds, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,

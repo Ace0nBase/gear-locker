@@ -30,10 +30,11 @@ function seenLocal(pairs){
   return {promise:promise,cancel:()=>unsubs.splice(0).forEach(u=>{try{u()}catch(e){}})};
 }
 function commitDurable(commit,pairs){if(!offlineNow())return commit;var watch=seenLocal(pairs);return Promise.race([commit,watch.promise]).finally(()=>watch.cancel())}
-async function pushCloud(){
+async function pushCloudBody(idList){
   if(accountDeleting||!cloudUser||cloudReady.size<CLOUD_COLS.length+1)return;
+  const only=idList&&idList.length?new Set(idList):null;
   const ops=[];
-  CLOUD_COLS.forEach(c=>arrOf(c).forEach(r=>{const k=c+"/"+r.id;if(r.id&&pushed[k]!==r.updatedAt){ops.push([c,r]);pushed[k]=r.updatedAt}}));
+  CLOUD_COLS.forEach(c=>arrOf(c).forEach(r=>{if(only&&!only.has(r.id))return;const k=c+"/"+r.id;if(r.id&&pushed[k]!==r.updatedAt){ops.push([c,r]);pushed[k]=r.updatedAt}}));
   const kj=JSON.stringify(kits);const kitsChanged=kj!==kitsPushed;
   if(!ops.length&&!kitsChanged)return;
   var reported=false;
@@ -54,6 +55,18 @@ async function pushCloud(){
     if(!offlineNow())setSync("on","Synced");
   }catch(e){reportFail(e)}
 }
+var pushTail=Promise.resolve();
+function pushCloud(idList){
+  var run=pushTail.then(function(){return pushCloudBody(idList)});
+  pushTail=run.then(function(){},function(){});
+  return run;
+}
+function flushCloudWrites(idList){
+  clearTimeout(pushTimer);
+  pushTimer=null;
+  return pushCloud(idList);
+}
+window.__warboxFlushCloud=flushCloudWrites;
 function onCloudChange(){
   mirror();render();
   if(viewing&&!$("detail").hidden){const v=all.find(x=>x.id===viewing.id);if(v&&!v.deleted)openDetail(v,true)}
@@ -62,6 +75,7 @@ function onCloudChange(){
   if(typeof showDealBanner==="function")showDealBanner();
 }
 function subscribeCloud(){
+  window.__warboxCloudSeen=false;
   cloudUnsubs.forEach(u=>u());cloudUnsubs=[];cloudReady=new Set();
   CLOUD_COLS.forEach(c=>{
     cloudUnsubs.push(userRef().collection(c).onSnapshot(snap=>{
@@ -104,7 +118,7 @@ function pushCategoryAnswers(){
   if(!cloudUser||!fsdb||!categoryAnswers||!Object.keys(categoryAnswers).length)return;
   userRef().collection("meta").doc("categoryAnswers").set({answers:categoryAnswers,updatedAt:now()},{merge:true}).catch(()=>{});
 }
-function maybeFirstPush(){if(cloudReady.size===CLOUD_COLS.length+1){pushCloud();if(firstLoad){firstLoad=false;render();if(window.LOOKUP_URL)setTimeout(()=>{const q=live().filter(i=>i.marketCheck==="requested").map(i=>i.id);if(q.length)runLookups(q,true)},800)}}}
+function maybeFirstPush(){if(cloudReady.size===CLOUD_COLS.length+1){window.__warboxCloudSeen=true;if(typeof window.__warboxResumeRollback==="function")window.__warboxResumeRollback();pushCloud();if(firstLoad){firstLoad=false;render();if(window.LOOKUP_URL)setTimeout(()=>{const q=live().filter(i=>i.marketCheck==="requested"&&!GearLogic.importSkipsLookup(i)).map(i=>i.id);if(q.length)runLookups(q,true)},800)}}}
 function gateErr(t){$("gErr").textContent=t||""}
 var AUTH_MSG={"auth/invalid-credential":"Email or password is wrong.","auth/wrong-password":"Email or password is wrong.","auth/user-not-found":"No account with that email.","auth/email-already-in-use":"That email already has an account. Sign in instead.","auth/weak-password":"Use at least 12 characters.","auth/invalid-email":"That email doesn't look right.","auth/too-many-requests":"Too many tries. Wait a few minutes.","auth/network-request-failed":"No connection. Check your signal and try again.","auth/operation-not-allowed":"New accounts are turned off.","auth/admin-restricted-operation":"New accounts are turned off."};
 var authMsg=e=>AUTH_MSG[e?.code]||"Something went wrong. Try again.";
@@ -163,6 +177,7 @@ async function beginSignOut(forced){
   }
   signingOut=true;
   if(tombUnsub){try{tombUnsub()}catch(e){}tombUnsub=null}
+  try{if(typeof window.__warboxDiscardImport==="function")window.__warboxDiscardImport()}catch{}
   cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();
   try{GearLogic.clearUserLocal(localStorage)}catch{}
   try{render()}catch{}
@@ -313,7 +328,7 @@ async function startCloud(){
       return;
     }
     const switched=localStorage.getItem("gearLocker.uid")&&localStorage.getItem("gearLocker.uid")!==u.uid;
-    if(switched){try{GearLogic.clearUserLocal(localStorage)}catch{};cloudUnsubs.forEach(x=>x());cloudUnsubs=[];fsdb=await openFirestore(true)}
+    if(switched){try{if(typeof window.__warboxDiscardImport==="function")window.__warboxDiscardImport()}catch{}try{GearLogic.clearUserLocal(localStorage)}catch{};cloudUnsubs.forEach(x=>x());cloudUnsubs=[];fsdb=await openFirestore(true)}
     try{localStorage.setItem("gearLocker.uid",u.uid)}catch{}
     cloudUser=u;$("gate").hidden=true;$("acct").hidden=false;$("acctTxt").textContent=u.email;refreshVerify();syncKeepNote();setSync("","Connecting…");
     pushed={};firstLoad=true;
@@ -378,7 +393,7 @@ async function qaStorageCheckRun(){
   else toast("Storage check failed. Another account or a signed-out check was not blocked ("+otherCode+" / "+signedOutCode+").",6000);
 }
 }
-var APP_VERSION="41";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+var APP_VERSION="42";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 var swReloadPending=false;
 function showUpdateToast(){
   const el=$("toast");if(!el)return;
@@ -418,7 +433,7 @@ function openDetail(i,quiet){
   const wnote=restricted?GearLogic.publicWeightNote(i.weightNote||""):(i.weightNote||"");
   const priceState=restricted?(i.valueSource==="manual"&&shownVal?"Entered by you":(+i.value>0&&!shownVal?"Old lookup, not counted":"")):lookingUp.has(i.id)?"Looking up…":/^estimate/i.test(i.priceNote||"")&&i.priceSource==="market"?`Estimate ${esc(i.priceDate||"")}`:(i.marketCheck==="requested"&&!window.LOOKUP_URL)?"Market check queued":i.priceSource==="market"?`Market check ${esc(i.priceDate||"")}`:i.priceSource==="manual"?"Entered by you":"";
   const valueNote=i.valueSource==="manual"?"Entered by you":(i.priceSource==="manual"?"":priceState);
-  const canLookup=lookupsOn()&&!held&&(window.LOOKUP_URL||(!restricted&&i.marketCheck!=="requested"&&!isGun));
+  const canLookup=lookupsOn()&&!held&&!GearLogic.importSkipsLookup(i)&&(window.LOOKUP_URL||(!restricted&&i.marketCheck!=="requested"&&!isGun));
   $("detail").innerHTML=`
    <div class="dh"><div><h2>${esc(i.name)}${i.nick?` <span class="tag" style="font-size:.8rem">${esc(i.nick)}</span>`:""}</h2><div class="dsub">${esc([i.brand,i.color,i.category].filter(Boolean).join(" · "))}</div></div>
      <div class="vbtns"><button class="btn" type="button" data-dact="edit">Edit</button><button class="btn ghost" type="button" data-dact="share">Share</button>${canLookup?(lookingUp.has(i.id)?`<button class="btn ghost" type="button" disabled>Looking up…</button>`:`<button class="btn ghost" type="button" data-dact="mkt">${restricted||isGun?"Look up weight":"Market check"}</button>`):""}</div></div>
@@ -464,7 +479,7 @@ async function apiLookup(list){
 }
 var lookupBody=i=>{const restricted=GearLogic.saleRestricted(i);return {id:i.id,name:i.name,brand:i.brand||"",category:i.category||"",condition:i.condition||"",color:i.color||"",notes:"",arm:i.arm||"",caliber:i.caliber||"",load:i.load||"",weightOnly:restricted}};
 function applyLookup(id,res){
-  const it=all.find(x=>x.id===id);if(!it||it.deleted||!res||!res.ok)return false;
+  const it=all.find(x=>x.id===id);if(!it||it.deleted||!res||!res.ok||GearLogic.importSkipsLookup(it))return false;
   const restricted=GearLogic.saleRestricted(it);
   const held=GearLogic.magShelfPending(it);
   if(restricted){delete it.usedLow;delete it.usedHigh;delete it.priceNote;it.marketSources=[]}
@@ -484,14 +499,14 @@ function applyLookup(id,res){
 }
 async function runLookups(ids,quiet){
   if(!window.LOOKUP_URL||!cloudUser)return;
-  ids=[...new Set(ids)].filter(id=>!lookingUp.has(id)&&GearLogic.singleLookupIds([all.find(i=>i.id===id&&!i.deleted)]).length);
+  ids=[...new Set(ids)].filter(id=>{const row=all.find(i=>i.id===id&&!i.deleted);return row&&!GearLogic.importSkipsLookup(row)&&GearLogic.singleLookupIds([row]).length});
   if(!ids.length)return;
   ids.forEach(id=>lookingUp.add(id));render();
   let ok=0,fail="";
   for(let k=0;k<ids.length;k+=4){
     const chunk=ids.slice(k,k+4);
     try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){const msg=lookupFailMessage(r.error||"No result");it.lookupError=msg.slice(0,160);fail=fail||msg}}})}
-    catch(e){fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);if(it&&!it.deleted)it.lookupError=fail.slice(0,160)});if(/turned off|confirm your email|daily lookup limit/i.test(String(e&&e.message||""))){ids.slice(k).forEach(id=>lookingUp.delete(id));render();break}}
+    catch(e){fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);if(it&&!it.deleted)it.lookupError=fail.slice(0,160)});if(/turned off|confirm your email|daily lookup limit|this month's lookups/i.test(String(e&&e.message||""))){ids.slice(k).forEach(id=>lookingUp.delete(id));render();break}}
     chunk.forEach(id=>lookingUp.delete(id));render();await persist();
     if(viewing&&!$("detail").hidden&&chunk.includes(viewing.id))openDetail(all.find(i=>i.id===viewing.id),true);
   }
@@ -505,12 +520,12 @@ saveCurrent=async function(extra){
   const restricted=GearLogic.saleRestricted(rec);
   const changed=!before||before.name!==rec.name||before.brand!==rec.brand||before.category!==rec.category||before.arm!==rec.arm||(!restricted&&before.condition!==rec.condition);
   const needs=GearLogic.saveNeedsLookup(rec);
-  if(window.LOOKUP_URL&&cloudUser&&!extra&&!GearLogic.magShelfPending(rec)&&(changed||needs))runLookups([rec.id],true).catch(()=>{});
+  if(window.LOOKUP_URL&&cloudUser&&!extra&&!GearLogic.magShelfPending(rec)&&(changed||needs)&&!GearLogic.importSkipsLookup(rec))runLookups([rec.id],true).catch(()=>{});
   return rec;
 };
 if(window.LOOKUP_URL){
   $("mktBtn").onclick=async()=>{if(!$("form").reportValidity())return;const rec=await saveCurrent({});if(!rec)return;closeForm();formFrom=null;lookingUp.add(rec.id);openDetail(all.find(i=>i.id===rec.id),true);lookingUp.delete(rec.id);runLookups([rec.id])};
-  $("bulkMktBtn").onclick=()=>{const ids=GearLogic.bulkLookupIds(live());if(!ids.length){toast("Everything already has prices and weights");return}toast(`Looking up ${ids.length} item${ids.length>1?"s":""}…`);runLookups(ids)};
+  $("bulkMktBtn").onclick=()=>{const ids=GearLogic.bulkLookupIds(live()).filter(id=>{const row=live().find(i=>i.id===id);return row&&!GearLogic.importSkipsLookup(row)});if(!ids.length){toast("Everything already has prices and weights");return}toast(`Looking up ${ids.length} item${ids.length>1?"s":""}…`);runLookups(ids)};
   $("bulkMktBtn").textContent="Look up all";
   const _wish=ACT.wish;
   ACT.wish=async(act,b)=>{
@@ -530,7 +545,7 @@ if(window.LOOKUP_URL){
 
 /* ---------- sheets, scroll lock, add button ---------- */
 var lockY=0;
-function anySheetOpen(){return !$("secSheet").hidden||!$("magSheet").hidden||($("beltSheet")&&!$("beltSheet").hidden)||!$("timerSheet").hidden||!$("drillSheet").hidden||!$("battSheet").hidden||!$("buildSheet").hidden||!$("moveSheet").hidden||!$("form").hidden||!$("detail").hidden||!$("swapSheet").hidden||!$("shareSheet").hidden||!!document.querySelector(".view:not([hidden]) .edSheet")}
+function anySheetOpen(){return !$("secSheet").hidden||!$("magSheet").hidden||($("beltSheet")&&!$("beltSheet").hidden)||!$("timerSheet").hidden||!$("drillSheet").hidden||!$("battSheet").hidden||!$("buildSheet").hidden||!$("moveSheet").hidden||!$("form").hidden||!$("detail").hidden||!$("swapSheet").hidden||!$("shareSheet").hidden||($("importSheet")&&!$("importSheet").hidden)||!!document.querySelector(".view:not([hidden]) .edSheet")}
 function syncLock(){
   const want=anySheetOpen(),has=document.body.classList.contains("locked");
   if(want&&!has){lockY=window.scrollY;document.body.style.top=`-${lockY}px`;document.body.classList.add("locked")}
@@ -545,6 +560,7 @@ document.addEventListener("click",e=>{
 });
 document.addEventListener("keydown",e=>{
   if(e.key!=="Escape")return;
+  if($("importSheet")&&!$("importSheet").hidden){if(typeof window.__warboxImportEscape==="function"&&window.__warboxImportEscape())return}
   if(!$("drillSheet").hidden){drillEd=null;renderDrillEd();return}
   if(!$("timerSheet").hidden){closeTimer();return}
   if(!$("battSheet").hidden){battEdit=null;renderBattSheet();return}

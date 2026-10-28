@@ -28,7 +28,7 @@ function renderArms(){
   const n=secs.reduce((a,s)=>a+s.rows.length,0),val=secs.reduce((a,s)=>a+s.rows.reduce((b,i)=>b+GearLogic.countedValue(i)*(+i.qty||1),0),0);
   const noSer=secs.reduce((a,s)=>a+s.rows.filter(i=>!i.serial&&s.k!=="KN").length,0);
   v.innerHTML=`<div class="vhead"><div><h2>Armory</h2><p>Serial numbers and records for your guns, suppressors, optics, lights, lasers and knives, for insurance and theft reports. Only you can see this when signed in.</p></div>
-    <div class="vbtns"><button class="btn ghost" type="button" data-arm="ser">${showSer?"Hide serials":"Show serials"}</button><button class="btn ghost" type="button" data-arm="import">Import record</button><button class="btn ghost" type="button" data-arm="print">Print record</button><button class="btn" type="button" data-arm="new" id="armAdd">+ Add</button></div></div>
+    <div class="vbtns"><button class="btn ghost" type="button" data-arm="ser">${showSer?"Hide serials":"Show serials"}</button><button class="btn ghost" type="button" data-arm="import">Import</button><button class="btn ghost" type="button" data-arm="print">Print record</button><button class="btn" type="button" data-arm="new" id="armAdd">+ Add</button></div></div>
   <section class="stats armsStats"><div class="stat"><b>${noSer}</b><span>Missing serial</span></div><div class="stat"><b>${n}</b><span>On record</span></div><div class="stat"><b>${money(val)}</b><span>Value</span></div><div class="stat"><b>${(()=>{const pd=secs.reduce((a,s)=>a+s.rows.reduce((b,i)=>b+(+i.paid||0)*(+i.qty||1),0),0);return pd?money(pd):"—"})()}</b><span>What I paid</span></div></section>
   ${n?secs.filter(s=>s.rows.length).map(s=>{const sv=s.rows.reduce((b,i)=>b+GearLogic.countedValue(i)*(+i.qty||1),0);
     return `<section class="group"><div class="ghead"><h3>${esc(ARM[s.k].label)}</h3><span>${s.rows.length}${sv?` · ${money(sv)}`:""}</span></div>
@@ -37,7 +37,7 @@ function renderArms(){
       <span class="nm">${esc(i.name)}${i.nick?` <span class="tag">${esc(i.nick)}</span>`:""}<small>${esc(sub)}</small></span>
       <span class="ser">${s.k==="KN"?esc(i.markings||""):i.serial?`<span class="mono">${esc(maskSer(i.serial))}</span>`:`<span class="tag">no serial</span>`}</span>
       <span class="val">${GearLogic.countedValue(i)?money(GearLogic.countedValue(i)*(+i.qty||1)):"—"}</span></button>`}).join("")}</section>`}).join("")
-  :`<div class="empty"><b>Nothing on record yet</b>Tap <em>Import record</em> to bring in your serial number Word file, or add guns and gear with a serial.</div>`}
+  :`<div class="empty"><b>Nothing on record yet</b>Tap <em>Import</em> to bring in a file, or add guns and gear with a serial.</div>`}
   ${armImport?importSheet():""}`;
   syncLock();
 }
@@ -177,7 +177,7 @@ $("armsView").addEventListener("click",async e=>{
   const b=e.target.closest("[data-arm]");if(!b)return;const a=b.dataset.arm;
   if(a==="ser"){showSer=!showSer;renderArms();return}
   if(a==="new"){openArmForm();return}
-  if(a==="import"){$("armFile").click();return}
+  if(a==="import"){if(typeof window.__warboxOpenImport==="function"){window.__warboxOpenImport();return}$("armFile").click();return}
   if(a==="print"){if(!ARM_KEYS.some(k=>armRows(k).length)){toast("Nothing on record yet");return}buildArmsPrint();printingKit=true;window.print();return}
   if(a==="icancel"){armImport=null;renderArms();return}
   if(a==="igo"){await doImport();return}

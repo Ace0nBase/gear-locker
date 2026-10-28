@@ -20,6 +20,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#A8865A">
 <link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/import.css">
 </head>
 <body>
 <div class="gate" id="gate" hidden>
@@ -47,6 +48,7 @@
       <div class="acct" id="acct" hidden><span class="sync" id="syncDot"></span><span id="acctTxt"></span><button type="button" id="signOut">Sign out</button><span class="ver" id="ver"></span><span class="ver" id="keepLive" hidden>Online only on this device</span></div>
     </div>
     <div class="hbtns">
+      <button class="btn ghost" id="importBtn" type="button" data-import="open">Import</button>
       <button class="btn ghost" id="printBtn" type="button">Print</button>
       <button class="btn ghost" id="csvBtn" type="button">Export CSV</button>
       <button class="btn" id="addBtn" type="button">+ Add item</button>
@@ -159,6 +161,9 @@
   <div class="sheetWrap" id="moveSheet" hidden><div class="sheetBg" data-mv="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Move some"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-mv="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
   <div class="sheetWrap" id="shareSheet" hidden><div class="sheetBg" data-sh="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Share"><div class="sheetTop"><span class="grab"></span><button class="xBtn" type="button" data-sh="close" aria-label="Close">✕</button></div><div class="panel imp"></div></div></div>
   <input type="file" id="armFile" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+  <input type="file" id="importFile" accept=".csv,.tsv,.txt,.xlsx,.json,text/csv,text/tab-separated-values,application/json" multiple hidden>
+  <div class="sheetWrap" id="importSheet" hidden><div class="sheetBg" data-import="ask-close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Import"><div class="sheetTop"><button class="btn ghost importBack" type="button" data-import="back">Back</button><span class="grab"></span><button class="xBtn" type="button" data-import="ask-close" aria-label="Close">✕</button></div><div class="panel imp" id="importBody"></div></div></div>
+  <div id="importUndo" class="importUndo" role="status" hidden></div>
 
   <div class="view" id="kitView" hidden>
     <div class="chips" id="kitChips" role="group" aria-label="Choose a scenario"></div>
@@ -195,6 +200,8 @@
 <script src="js/field.js" defer></script>
 <script src="js/security.js" defer></script>
 <script src="js/comms.js" defer></script>
+<script type="module" src="js/import-engine.js"></script>
+<script type="module" src="js/import-ui.js"></script>
 
 </body>
 </html>

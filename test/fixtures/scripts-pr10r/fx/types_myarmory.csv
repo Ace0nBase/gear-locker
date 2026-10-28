@@ -1,0 +1,16 @@
+Manufacturer,Model,Type,Serial Number,Caliber,Purchase Price,Purchased From,Rounds Fired
+Tarnway,Ranger,Bolt-Action Rifle,FA-001,.308,100,Shop,0
+Tarnway,Sidearm,Pistol,FA-002,9mm,100,Shop,0
+Tarnway,Scatter,Shotgun,FA-003,12 ga,100,Shop,0
+Tarnway,Wheel,Revolver,FA-004,.357,100,Shop,0
+Tarnway,Compact,Handgun,FA-005,9mm,100,Shop,0
+Tarnway,Short,Carbine,FA-006,5.56,100,Shop,0
+Optic Co,Glass,Rifle scope,,.308,200,Shop,0
+Safe Co,Cabinet,Gun safe,,,50,Shop,0
+Kit Co,Brush,Cleaning kit,,,20,Shop,0
+Kitchen,Opener,Can opener,,,5,Shop,0
+Armor Co,Panel,Lower leg panel,,,30,Shop,0
+Gear Co,Strap,Sling,,,15,Shop,0
+Gear Co,Rig,Holster,,,40,Shop,0
+Federal,Tin,Ammo can,,,18,Shop,0
+Old Co,Shelf,Mags & Ammo Storage,,,12,Shop,0
