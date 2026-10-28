@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { deleteUserFirestore } from "../api/account-delete.js";
-import { firestoreAccessToken, parseServiceAccount, resetFirestoreTokenCache } from "../api/firestore-admin.js";
+import { firestoreAccessToken, parseServiceAccount, resetFirestoreTokenCache, serviceAccountLogLine } from "../api/firestore-admin.js";
 import { emailHoldKey, enqueueRedaction, redactStoredEmail, releaseEmailHold, runQueuedRedactions } from "../api/redact.js";
 import {
   LEND_EMAIL_CAP, REDACT_MAX_AGE_MS, lendMailDocId, orderRedactions, redactionFailureBody, redactionJobBody,
@@ -290,5 +290,57 @@ test("the Firestore token is an RS256 JWT and is reused until it expires", async
   const key = await emailHoldKey("hold-key", "A@B.co");
   assert.equal(key, await emailHoldKey("hold-key", "a@b.co"));
   assert.notEqual(key, await emailHoldKey("other-key", "a@b.co"));
+  resetFirestoreTokenCache();
+});
+
+test("the hourly service-account check logs only ok or a status code", async () => {
+  resetFirestoreTokenCache();
+  const missing = await serviceAccountLogLine({}, async () => { throw new Error("no network"); });
+  assert.equal(missing, "sa_token: fail 0");
+
+  const pair = await crypto.subtle.generateKey(
+    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey));
+  let bin = "";
+  for (const b of pkcs8) bin += String.fromCharCode(b);
+  const pem = "-----BEGIN PRIVATE KEY-----\n" + btoa(bin).match(/.{1,64}/g).join("\n") + "\n-----END PRIVATE KEY-----\n";
+  const env = {
+    FIREBASE_PROJECT: "gear-locker-c248c",
+    FIREBASE_SA_JSON: JSON.stringify({ client_email: "probe@gear-locker-c248c.iam.gserviceaccount.com", private_key: pem }),
+  };
+  const secretBody = JSON.stringify({ error: "private_key leaked", access_token: "ya29.secret" });
+  resetFirestoreTokenCache();
+  const denied = await serviceAccountLogLine(env, async () => ({
+    ok: false, status: 401, json: async () => JSON.parse(secretBody), text: async () => secretBody,
+  }));
+  assert.equal(denied, "sa_token: fail 401");
+  assert.equal(denied.includes("ya29"), false);
+  assert.equal(denied.includes("private_key"), false);
+
+  resetFirestoreTokenCache();
+  const reads = [];
+  const ok = await serviceAccountLogLine(env, async (url) => {
+    if (String(url).includes("oauth2.googleapis.com")) {
+      return { ok: true, status: 200, json: async () => ({ access_token: "ya29.secret", expires_in: 3600 }), text: async () => secretBody };
+    }
+    reads.push(String(url));
+    return { ok: true, status: 200, json: async () => ({ documents: [] }), text: async () => secretBody };
+  });
+  assert.equal(ok, "sa_token: ok");
+  assert.equal(reads.length, 1);
+  assert.match(reads[0], /\/documents\/deletedUsers\?pageSize=1$/);
+
+  resetFirestoreTokenCache();
+  const forbidden = await serviceAccountLogLine(env, async (url) => {
+    if (String(url).includes("oauth2.googleapis.com")) {
+      return { ok: true, status: 200, json: async () => ({ access_token: "ya29.secret", expires_in: 3600 }), text: async () => "" };
+    }
+    return { ok: false, status: 403, json: async () => ({ error: { message: secretBody } }), text: async () => secretBody };
+  });
+  assert.equal(forbidden, "sa_token: fail 403");
+  assert.match(forbidden, /^sa_token: fail \d+$/);
   resetFirestoreTokenCache();
 });

@@ -86,3 +86,36 @@ export async function firestoreAccessToken(env, fetchImpl) {
   cached = { email: account.clientEmail, token, exp: now + expiresIn * 1000 };
   return token;
 }
+
+function httpStatus(value) {
+  const n = Math.floor(+value);
+  if (!Number.isFinite(n) || n < 0 || n > 999) return 0;
+  return n;
+}
+
+// One read-only Firestore list. The log line is only "sa_token: ok" or "sa_token: fail <status>".
+export async function serviceAccountLogLine(env, fetchImpl) {
+  const fetchFn = fetchImpl || fetch;
+  let line = "sa_token: fail 0";
+  try {
+    let mintStatus = 0;
+    const token = await firestoreAccessToken(env, async (url, opts) => {
+      const res = await fetchFn(url, opts);
+      if (String(url) === TOKEN_URL) mintStatus = httpStatus(res.status);
+      return res;
+    });
+    if (!token) {
+      line = "sa_token: fail " + mintStatus;
+    } else {
+      const project = String((env && env.FIREBASE_PROJECT) || "gear-locker-c248c");
+      const url = "https://firestore.googleapis.com/v1/projects/" + encodeURIComponent(project) + "/databases/(default)/documents/deletedUsers?pageSize=1";
+      const res = await fetchFn(url, { method: "GET", headers: { authorization: "Bearer " + token } });
+      await res.text().catch(() => "");
+      line = res.ok ? "sa_token: ok" : "sa_token: fail " + httpStatus(res.status);
+    }
+  } catch {
+    line = "sa_token: fail 0";
+  }
+  console.log(line);
+  return line;
+}
