@@ -307,6 +307,11 @@ function usageStub(env) {
   if (typeof ns.idFromName === "function" && typeof ns.get === "function") return ns.get(ns.idFromName("global"));
   return null;
 }
+async function pruneUsageCounters(env) {
+  const stub = usageStub(env);
+  if (!stub || typeof stub.prune !== "function") return;
+  try { await stub.prune({ now: new Date().toISOString() }); } catch {}
+}
 async function spendSeed(env) {
   if (!env.WATCH) return 0;
   try { return +(await env.WATCH.get(SPEND_KEY)) || 0; }
@@ -869,6 +874,7 @@ export default {
     for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
     ctx.waitUntil((async () => {
       await serviceAccountLogLine(env);
+      await pruneUsageCounters(env);
       await retryQueuedCleanups(env);
       await runQueuedRedactions(env);
       if (env.ANTHROPIC_API_KEY) await runDueWatches(env, +(env.WATCH_BATCH || 6));

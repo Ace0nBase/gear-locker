@@ -210,6 +210,34 @@ export function monthQuotaKey(uid, date) {
   return `m:${uid}:${y}-${m}`;
 }
 
+function utcDateOnly(date) {
+  const d = date instanceof Date && !isNaN(date.getTime()) ? date : new Date(date || Date.now());
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
+function previousUtcMonth(date) {
+  const d = utcDateOnly(date);
+  const month = d.getUTCMonth();
+  const year = month === 0 ? d.getUTCFullYear() - 1 : d.getUTCFullYear();
+  const prev = month === 0 ? 12 : month;
+  return `${year}-${String(prev).padStart(2, "0")}`;
+}
+
+// Daily and alert counters older than 7 UTC days, and monthly counters older than the previous UTC month, can go.
+// The spend total, the seeded flag, and holds are not counters.
+export function quotaCounterExpired(key, now) {
+  const k = String(key || "");
+  if (!k || k === "spend:free" || k === "seeded:spend" || k.startsWith("hold:")) return false;
+  const day = k.match(/^[qa]:[^:]+:(\d{4}-\d{2}-\d{2})$/);
+  if (day) {
+    const cutoff = utcDay(new Date(utcDateOnly(now).getTime() - 7 * 86400000));
+    return day[1] < cutoff;
+  }
+  const month = k.match(/^m:[^:]+:(\d{4}-\d{2})$/);
+  if (month) return month[1] < previousUtcMonth(now);
+  return false;
+}
+
 export const DEFAULT_PLAN_LIMITS = { free: 10, pro: 100, armory: 500 };
 export const DEFAULT_REVIEW_DAILY_LIMIT = 8;
 export const DEFAULT_FREE_SPEND_CAP_USD = 25;
@@ -2083,7 +2111,7 @@ export function radioTxLabel(freq) {
 const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
-  parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
+  parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, alertQuotaKey, monthQuotaKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
   DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_SPEND_RATES,
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,

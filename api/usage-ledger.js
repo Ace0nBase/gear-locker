@@ -5,7 +5,7 @@
 // The class extends DurableObject so the real binding exposes these methods over RPC.
 
 import { DurableObject } from "cloudflare:workers";
-import { applyReserve, applyReconcile } from "../js/logic.js";
+import { applyReserve, applyReconcile, quotaCounterExpired } from "../js/logic.js";
 
 const SPEND = "spend:free";
 const SEEDED = "seeded:spend";
@@ -80,6 +80,18 @@ export class UsageLedger extends DurableObject {
     const values = {};
     for (const key of (req && req.keys) || []) values[String(key)] = this._get(String(key));
     return { ok: true, values };
+  }
+
+  prune(req) {
+    const now = req && req.now ? new Date(req.now) : new Date();
+    const rows = this._rows("SELECT k FROM kv");
+    let removed = 0;
+    for (const row of rows) {
+      if (!quotaCounterExpired(row.k, now)) continue;
+      this._del(row.k);
+      removed++;
+    }
+    return { ok: true, removed };
   }
 
   clearUser(req) {
