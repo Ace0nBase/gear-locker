@@ -156,13 +156,25 @@ export function parseAllowlist(raw) {
   return String(raw || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
 }
 
+export function betaOnly(env) {
+  return /^(1|true|yes|on)$/i.test(String(env && env.BETA_ONLY || "").trim());
+}
+
+export function isReviewEmail(email, env) {
+  const list = parseAllowlist(env && env.REVIEW_EMAILS);
+  return list.includes(String(email || "").trim().toLowerCase());
+}
+
+// A confirmed email can use lookups. BETA_ONLY=true puts the allowlist back in front.
 export function decideAccess(user, env) {
-  const allow = parseAllowlist(env && env.ALLOWED_EMAILS);
   const email = String((user && user.email) || "").trim().toLowerCase();
-  if (!allow.length) return { ok: false, status: 403, error: "Lookups are turned off until the owner adds approved emails.", email };
-  if (!email || !allow.includes(email)) return { ok: false, status: 403, error: "Lookups are turned off for this account. Ask the owner to add your email.", email };
-  if (!user.email_verified) return { ok: false, status: 403, error: "Confirm your email first (check your inbox), then try again.", email };
-  return { ok: true, status: 200, error: "", email };
+  if (!user || !user.email_verified) return { ok: false, status: 403, error: "Confirm your email first (check your inbox), then try again.", email };
+  if (betaOnly(env)) {
+    const allow = parseAllowlist(env && env.ALLOWED_EMAILS);
+    if (!allow.length) return { ok: false, status: 403, error: "Lookups are turned off until the owner adds approved emails.", email };
+    if (!email || !allow.includes(email)) return { ok: false, status: 403, error: "Lookups are turned off for this account. Ask the owner to add your email.", email };
+  }
+  return { ok: true, status: 200, error: "", email, review: isReviewEmail(email, env) };
 }
 
 export function chargeDecision(used, add, limit) {
@@ -187,6 +199,401 @@ export function quotaKey(uid, date) {
 
 export function alertQuotaKey(uid, date) {
   return `a:${uid}:${utcDay(date)}`;
+}
+
+export function monthQuotaKey(uid, date) {
+  const d = date instanceof Date ? date : new Date(date || Date.now());
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return `m:${uid}:${y}-${m}`;
+}
+
+export const DEFAULT_PLAN_LIMITS = { free: 40, pro: 400, armory: 2000 };
+export const DEFAULT_REVIEW_DAILY_LIMIT = 8;
+export const DEFAULT_FREE_SPEND_CAP_USD = 25;
+export const DEFAULT_SPEND_RATES = { inputPerMillion: 1, outputPerMillion: 5, searchEach: 0.01 };
+export const DEFAULT_FALLBACK_RATES = { inputPerMillion: 3, outputPerMillion: 15, searchEach: 0.01 };
+
+function configuredNumber(raw, fallback) {
+  if (raw == null || raw === "") return fallback;
+  const n = +raw;
+  return isFinite(n) && n >= 0 ? n : fallback;
+}
+
+export function planMonthlyLimit(plan, env) {
+  const name = plan === "pro" || plan === "armory" ? plan : "free";
+  const keys = { free: "PLAN_LIMIT_FREE", pro: "PLAN_LIMIT_PRO", armory: "PLAN_LIMIT_ARMORY" };
+  return configuredNumber(env && env[keys[name]], DEFAULT_PLAN_LIMITS[name]);
+}
+
+export function reviewDailyLimit(env) {
+  return configuredNumber(env && env.REVIEW_DAILY_LIMIT, DEFAULT_REVIEW_DAILY_LIMIT);
+}
+
+export function spendCapMicro(env) {
+  return Math.round(configuredNumber(env && env.FREE_SPEND_CAP_USD, DEFAULT_FREE_SPEND_CAP_USD) * 1e6);
+}
+
+export function spendRates(env) {
+  return {
+    inputPerMillion: configuredNumber(env && env.SPEND_INPUT_PER_MILLION, DEFAULT_SPEND_RATES.inputPerMillion),
+    outputPerMillion: configuredNumber(env && env.SPEND_OUTPUT_PER_MILLION, DEFAULT_SPEND_RATES.outputPerMillion),
+    searchEach: configuredNumber(env && env.SPEND_SEARCH_EACH, DEFAULT_SPEND_RATES.searchEach),
+  };
+}
+
+export function ratesForModel(env, model) {
+  const base = spendRates(env);
+  if (!env || !env.FALLBACK_MODEL || model !== env.FALLBACK_MODEL) return base;
+  return {
+    inputPerMillion: configuredNumber(env.FALLBACK_INPUT_PER_MILLION, DEFAULT_FALLBACK_RATES.inputPerMillion),
+    outputPerMillion: configuredNumber(env.FALLBACK_OUTPUT_PER_MILLION, DEFAULT_FALLBACK_RATES.outputPerMillion),
+    searchEach: configuredNumber(env.FALLBACK_SEARCH_EACH, base.searchEach),
+  };
+}
+
+// The hold uses the higher of the primary and fallback rates. A blank FALLBACK_MODEL turns the fallback off.
+export function priciestRates(env) {
+  const base = spendRates(env);
+  const fallbackOn = !env || env.FALLBACK_MODEL == null || String(env.FALLBACK_MODEL) !== "";
+  if (!fallbackOn) return base;
+  const alt = ratesForModel(
+    { ...(env || {}), FALLBACK_MODEL: (env && env.FALLBACK_MODEL) || "claude-sonnet-5-5" },
+    (env && env.FALLBACK_MODEL) || "claude-sonnet-5-5",
+  );
+  return {
+    inputPerMillion: Math.max(base.inputPerMillion, alt.inputPerMillion),
+    outputPerMillion: Math.max(base.outputPerMillion, alt.outputPerMillion),
+    searchEach: Math.max(base.searchEach, alt.searchEach),
+  };
+}
+
+// RevenueCat is not connected. Every account stays on the free plan until that lookup exists.
+export function accountPlan() {
+  return "free";
+}
+
+function tokenCount(...vals) {
+  return vals.reduce((sum, v) => sum + Math.max(0, Math.round(+v || 0)), 0);
+}
+
+// input_tokens plus cache and web-search result tokens. The search count is billed on its own.
+export function usageFromResponse(data) {
+  const u = data && data.usage && typeof data.usage === "object" ? data.usage : {};
+  const tool = u.server_tool_use && typeof u.server_tool_use === "object" ? u.server_tool_use : {};
+  return {
+    input_tokens: tokenCount(u.input_tokens, u.cache_creation_input_tokens, u.cache_read_input_tokens, tool.web_search_tokens, tool.web_search_result_tokens, u.web_search_tokens),
+    output_tokens: Math.max(0, Math.round(+u.output_tokens || 0)),
+    web_search_requests: Math.max(0, Math.round(+tool.web_search_requests || +u.web_search_requests || 0)),
+  };
+}
+
+export function addUsage(a, b) {
+  const x = a || {};
+  const y = b || {};
+  return {
+    input_tokens: Math.max(0, +x.input_tokens || 0) + Math.max(0, +y.input_tokens || 0),
+    output_tokens: Math.max(0, +x.output_tokens || 0) + Math.max(0, +y.output_tokens || 0),
+    web_search_requests: Math.max(0, +x.web_search_requests || 0) + Math.max(0, +y.web_search_requests || 0),
+  };
+}
+
+// Micro-dollars (millionths of a dollar) so the KV counter stays a whole number.
+export function estimateSpendMicro(usage, rates) {
+  const u = usage || {};
+  const r = rates || DEFAULT_SPEND_RATES;
+  const input = Math.round((Math.max(0, +u.input_tokens || 0) / 1e6) * configuredNumber(r.inputPerMillion, DEFAULT_SPEND_RATES.inputPerMillion) * 1e6);
+  const output = Math.round((Math.max(0, +u.output_tokens || 0) / 1e6) * configuredNumber(r.outputPerMillion, DEFAULT_SPEND_RATES.outputPerMillion) * 1e6);
+  const search = Math.round(Math.max(0, +u.web_search_requests || 0) * configuredNumber(r.searchEach, DEFAULT_SPEND_RATES.searchEach) * 1e6);
+  return input + output + search;
+}
+
+export function freeSpendBlocked(spentMicro, capMicro, plan, review) {
+  if (review || plan !== "free") return false;
+  return Math.max(0, +spentMicro || 0) >= Math.max(0, +capMicro || 0);
+}
+
+export const LOOKUPS_PAUSED = "Lookups are paused for now. You can keep using the rest of War Box.";
+const MONTHLY_FULL = "You've used this month's lookups. They reset next month.";
+
+export function usageDecision(opts) {
+  opts = opts || {};
+  const plan = opts.plan === "pro" || opts.plan === "armory" ? opts.plan : "free";
+  const review = !!opts.review;
+  if (freeSpendBlocked(opts.spentMicro, opts.capMicro, plan, review)) {
+    return { ok: false, status: 403, error: LOOKUPS_PAUSED, plan, review };
+  }
+  const daily = chargeDecision(opts.dailyUsed, opts.dailyAdd, opts.dailyLimit);
+  if (!daily.ok) {
+    return { ok: false, status: 429, error: `Daily lookup limit reached (${daily.limit} per day). Try again tomorrow.`, plan, review, daily };
+  }
+  if (review) return { ok: true, status: 200, error: "", plan, review, daily, month: null };
+  const month = chargeDecision(opts.monthUsed, opts.monthAdd, opts.monthLimit);
+  if (!month.ok) return { ok: false, status: 429, error: MONTHLY_FULL, plan, review, daily, month };
+  return { ok: true, status: 200, error: "", plan, review, daily, month };
+}
+
+export const USER_COLLECTIONS = ["items", "ammo", "sessions", "dope", "maint", "wish", "loans", "freqs", "pace", "meta"];
+
+export function accountDeletePlan(uid) {
+  const id = String(uid || "");
+  return {
+    collections: USER_COLLECTIONS.slice(),
+    lendField: "lender",
+    kvExact: [`w:${id}`],
+    kvPrefixes: [`q:${id}:`, `a:${id}:`, `m:${id}:`],
+  };
+}
+
+export const DELETE_AUTH_MAX_AGE_SEC = 300;
+export const ACCOUNT_DELETE_TIMEOUT_MS = 45000;
+
+// auth_time is seconds. A few seconds of clock skew still counts as a fresh sign-in.
+export function signInIsRecent(authTime, nowSec) {
+  const at = +authTime;
+  const now = nowSec == null ? Math.floor(Date.now() / 1000) : +nowSec;
+  if (!isFinite(at) || at <= 0 || !isFinite(now)) return false;
+  const age = now - at;
+  return age >= -60 && age <= DELETE_AUTH_MAX_AGE_SEC;
+}
+
+export function reserveFits(spent, reserve, cap) {
+  return Math.max(0, +spent || 0) + Math.max(0, +reserve || 0) <= Math.max(0, +cap || 0);
+}
+
+export const MAX_OUTPUT_TOKENS = 4000;
+
+export function clampMaxTokens(n) {
+  const v = Math.floor(+n);
+  if (!isFinite(v) || v < 1) return 1;
+  return Math.min(MAX_OUTPUT_TOKENS, v);
+}
+
+// Two characters per token overestimates Claude's count, so the hold stays above the bill.
+export function estimateInputTokens(text) {
+  return Math.max(0, Math.ceil(String(text == null ? "" : text).length / 2));
+}
+
+// Each web search can come back this large, and later rounds send those results again.
+export const SEARCH_RESULT_TOKENS = 16000;
+
+export function roundFits(spentMicro, nextMicro, holdMicro) {
+  if (holdMicro == null) return true;
+  return Math.max(0, Math.round(+spentMicro || 0)) + Math.max(0, Math.round(+nextMicro || 0)) <= Math.max(0, Math.round(+holdMicro || 0));
+}
+
+// rounds counts every continuation, including the last JSON turn.
+// calls counts a fallback model. searches is the per-round web_search max_uses.
+export const MODEL_CALLS = {
+  lookup: { maxTokens: 4000, searches: 3, rounds: 5, calls: 2, promptTokens: 8000 },
+  identify: { maxTokens: 600, searches: 0, rounds: 1, calls: 1, promptTokens: 20000 },
+  deal: { maxTokens: 3000, searches: 2, rounds: 3, calls: 1, promptTokens: 6000 },
+  battery: { maxTokens: 2000, searches: 2, rounds: 3, calls: 1, promptTokens: 4000 },
+  pace: { maxTokens: 4000, searches: 2, rounds: 4, calls: 1, promptTokens: 8000 },
+  paceFollow: { maxTokens: 3000, searches: 0, rounds: 1, calls: 1, promptTokens: 8000 },
+};
+
+// One model call. Later rounds re-send the prompt, earlier output, and earlier search results.
+// Each searching round can also bill fresh result tokens on that response (web_search_tokens).
+function oneCallUsage(input, rounds, maxTokens, searches) {
+  let input_tokens = 0;
+  for (let i = 0; i < rounds; i++) {
+    const resent = i * maxTokens + i * searches * SEARCH_RESULT_TOKENS;
+    input_tokens += input + resent + searches * SEARCH_RESULT_TOKENS;
+  }
+  return {
+    input_tokens,
+    output_tokens: maxTokens * rounds,
+    web_search_requests: searches * rounds,
+  };
+}
+
+// Hold = real input, search results re-sent on later rounds, and max output, including a fallback call.
+export function worstCaseUsage(spec) {
+  spec = spec || {};
+  const maxTokens = clampMaxTokens(spec.maxTokens);
+  const rounds = Math.max(1, Math.floor(+spec.rounds || 1));
+  const searches = Math.max(0, Math.floor(+spec.searches || 0));
+  const calls = Math.max(1, Math.floor(+spec.calls || 1));
+  const input = Math.max(0, Math.floor(spec.inputTokens == null
+    ? (spec.promptTokens == null ? 8000 : +spec.promptTokens)
+    : +spec.inputTokens));
+  let total = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 };
+  const once = oneCallUsage(input, rounds, maxTokens, searches);
+  for (let i = 0; i < calls; i++) total = addUsage(total, once);
+  return total;
+}
+
+export function operationWorstUsage(name, inputTokens) {
+  if (name === "pace") {
+    const pace = { ...MODEL_CALLS.pace };
+    const follow = { ...MODEL_CALLS.paceFollow };
+    if (inputTokens != null) {
+      pace.inputTokens = inputTokens;
+      follow.inputTokens = inputTokens;
+    }
+    return addUsage(worstCaseUsage(pace), worstCaseUsage(follow));
+  }
+  const spec = { ...(MODEL_CALLS[name] || MODEL_CALLS.lookup) };
+  if (inputTokens != null) spec.inputTokens = inputTokens;
+  return worstCaseUsage(spec);
+}
+
+// One searching round budgeted at the input cap. The hold covers it so a large result stays inside the reserve.
+export function flooredSearchRoundMicro(env, spec) {
+  spec = spec || {};
+  const searches = Math.max(0, Math.floor(+spec.searches || 0));
+  if (!searches) return 0;
+  return estimateSpendMicro({
+    input_tokens: ROUND_INPUT_TOKEN_CAP,
+    output_tokens: clampMaxTokens(spec.maxTokens),
+    web_search_requests: searches,
+  }, priciestRates(env));
+}
+
+// Priced at the higher of the primary and fallback model rates.
+// A searching op reserves at least one round at the input cap.
+// SPEND_RESERVE_USD can only raise a lookup hold, never lower it under that worst case.
+export function callHoldMicro(env, op, inputTokens) {
+  const name = op || "lookup";
+  const usage = operationWorstUsage(name, inputTokens);
+  let worst = estimateSpendMicro(usage, priciestRates(env));
+  const spec = name === "pace" ? MODEL_CALLS.pace : MODEL_CALLS[name];
+  if (spec) worst = Math.max(worst, flooredSearchRoundMicro(env, spec));
+  if ((op == null || op === "lookup") && env && env.SPEND_RESERVE_USD != null && String(env.SPEND_RESERVE_USD).trim() !== "") {
+    worst = Math.max(worst, Math.round(configuredNumber(env.SPEND_RESERVE_USD, 0) * 1e6));
+  }
+  return worst;
+}
+
+export function worstCaseSpendMicro(env, nameOrSpec) {
+  if (nameOrSpec && typeof nameOrSpec === "object") return estimateSpendMicro(worstCaseUsage(nameOrSpec), priciestRates(env));
+  return callHoldMicro(env, nameOrSpec || "lookup");
+}
+
+export function lookupReserveMicro(env) {
+  return callHoldMicro(env, "lookup");
+}
+
+export function reconcileSpendMicro(current, reserved, actual) {
+  return Math.max(0, Math.round((+current || 0) - (+reserved || 0) + Math.max(0, +actual || 0)));
+}
+
+const ALERTS_FULL = "You've used today's price alerts. Try again tomorrow.";
+
+// One synchronous decision for spend, daily quota, monthly quota, and alert quota.
+export function applyReserve(state, req) {
+  state = state || {};
+  req = req || {};
+  const spend = Math.max(0, Math.round(+state.spend || 0));
+  const daily = Math.max(0, Math.round(+state.daily || 0));
+  const month = Math.max(0, Math.round(+state.month || 0));
+  const alert = Math.max(0, Math.round(+state.alert || 0));
+  const same = { spend, daily, month, alert };
+  const reserve = Math.max(0, Math.round(+req.reserve || 0));
+  const skipSpend = !!req.skipSpend;
+  if (!skipSpend && !reserveFits(spend, reserve, req.cap)) {
+    return { ok: false, status: 403, error: LOOKUPS_PAUSED, reserved: 0, state: same };
+  }
+  const dailyAdd = Math.max(0, +req.dailyAdd || 0);
+  const dailyDecision = chargeDecision(daily, dailyAdd, req.dailyLimit);
+  if (dailyAdd && !dailyDecision.ok) {
+    return { ok: false, status: 429, error: `Daily lookup limit reached (${dailyDecision.limit} per day). Try again tomorrow.`, reserved: 0, state: same };
+  }
+  let monthNext = month;
+  if (!req.skipMonth) {
+    const monthAdd = Math.max(0, +req.monthAdd || 0);
+    const monthDecision = chargeDecision(month, monthAdd, req.monthLimit);
+    if (monthAdd && !monthDecision.ok) return { ok: false, status: 429, error: MONTHLY_FULL, reserved: 0, state: same };
+    monthNext = monthAdd ? monthDecision.next : month;
+  }
+  const alertAdd = Math.max(0, +req.alertAdd || 0);
+  let alertNext = alert;
+  if (alertAdd) {
+    const alertDecision = chargeDecision(alert, alertAdd, req.alertLimit);
+    if (!alertDecision.ok) return { ok: false, status: 429, error: ALERTS_FULL, reserved: 0, state: same };
+    alertNext = alertDecision.next;
+  }
+  const held = skipSpend ? 0 : reserve;
+  return {
+    ok: true,
+    status: 200,
+    error: "",
+    reserved: held,
+    state: { spend: spend + held, daily: dailyAdd ? dailyDecision.next : daily, month: monthNext, alert: alertNext },
+  };
+}
+
+// The real cost is recorded in full. An overage above the hold is kept.
+export function applyReconcile(state, req) {
+  state = state || {};
+  req = req || {};
+  const reserved = Math.max(0, Math.round(+req.reserved || 0));
+  const actual = Math.max(0, Math.round(+req.actual || 0));
+  return {
+    ok: true,
+    billed: actual,
+    state: {
+      spend: reconcileSpendMicro(state.spend, reserved, actual),
+      daily: Math.max(0, Math.round(+state.daily || 0)),
+      month: Math.max(0, Math.round(+state.month || 0)),
+      alert: Math.max(0, Math.round(+state.alert || 0)),
+    },
+  };
+}
+
+export const SERVER_DELETE_STEPS = ["firestore", "watch", "auth", "usage"];
+
+export function deleteRetryRoute(hasTombstone) {
+  return hasTombstone ? ["server"] : ["client-data", "tombstone", "server"];
+}
+
+// Attempt 1 can die on a 502, a timeout, or offline. Auth and usage counters stay.
+// A later sign-in only posts to the server, which finishes shares, the auth user, and counters.
+export function runDeleteAttempt(state, serverResult) {
+  const route = deleteRetryRoute(!!(state && state.tombstone));
+  const next = {
+    tombstone: !!(state && state.tombstone),
+    shares: Math.max(0, +(state && state.shares) || 0),
+    gear: Math.max(0, +(state && state.gear) || 0),
+    auth: !!(state && state.auth),
+    kv: !!(state && state.kv),
+  };
+  const queriedShares = route[0] !== "server";
+  if (queriedShares) {
+    next.gear = 0;
+    next.shares = 0;
+    next.tombstone = true;
+  }
+  if (serverResult !== "ok") return { ok: false, route, queriedShares, steps: [], state: next };
+  next.shares = 0;
+  next.gear = 0;
+  next.auth = false;
+  next.kv = false;
+  next.tombstone = true;
+  return { ok: true, route, queriedShares, steps: SERVER_DELETE_STEPS.slice(), state: next };
+}
+
+const LOAN_EMAIL_FIELDS = ["friendEmail", "lenderEmail", "borrowerEmail", "borrowerEmailLower"];
+
+// Clear this person's email on a loan or lend. Item names are never consulted.
+export function loanEmailRedaction(loan, email) {
+  const want = String(email || "").trim().toLowerCase();
+  if (!want || !loan || typeof loan !== "object") return null;
+  let hit = false;
+  const copy = { ...loan };
+  for (const field of LOAN_EMAIL_FIELDS) {
+    if (String(loan[field] || "").trim().toLowerCase() === want) {
+      copy[field] = "";
+      hit = true;
+    }
+  }
+  return hit ? copy : null;
+}
+
+// RevenueCat is not set up. This is the hook that will delete the customer later.
+export function deleteRevenueCatCustomer() {
+  return { ok: true, skipped: true };
 }
 
 export function selectDueWatches(users, opts) {
@@ -259,10 +666,317 @@ export function loanSharePlan(loan, opts) {
 }
 
 // Drop client-only flags before a row is written to the server.
+// A loan stores friendEmailLower so the server can find it without a lend.
 export function serverRow(row) {
   const copy = { ...(row || {}) };
   delete copy.offlinePending;
+  if (Object.prototype.hasOwnProperty.call(copy, "friendEmail")) {
+    copy.friendEmailLower = String(copy.friendEmail || "").trim().toLowerCase();
+  }
   return copy;
+}
+
+// The borrower's lend rows name the lender and the loan id. A private loan with no lend has no path.
+export function loanTargetsFromLends(lends) {
+  const paths = [];
+  const seen = new Set();
+  for (const lend of lends || []) {
+    if (!lend) continue;
+    const loanId = String(lend.id || "").trim();
+    const lender = String(lend.lender || "").trim();
+    if (!loanId || !lender || /[/\s]/.test(loanId) || /[/\s]/.test(lender)) return { ok: false, paths: [] };
+    const key = lender + "/" + loanId;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    paths.push({ lender, loanId });
+  }
+  return { ok: true, paths };
+}
+
+// A bad lend is skipped. It must not fail the whole account delete.
+export function loanRedactTargets(lends) {
+  const paths = [];
+  const skipped = [];
+  const seen = new Set();
+  for (const lend of lends || []) {
+    if (!lend) continue;
+    const loanId = String(lend.id || "").trim();
+    const lender = String(lend.lender || "").trim();
+    if (!loanId || !lender || /[/\s]/.test(loanId) || /[/\s]/.test(lender)) {
+      skipped.push({ loanId, lender, reason: "lend" });
+      continue;
+    }
+    const key = lender + "/" + loanId;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    paths.push({ lender, loanId });
+  }
+  return { paths, skipped };
+}
+
+// Every saved loan that names a friend email gets a lend mirror. Verified sign-in backfills the ones that missed.
+export function loansToMirror(loans, verified) {
+  const jobs = [];
+  for (const loan of loans || []) {
+    if (!loan || !loan.id) continue;
+    const plan = loanSharePlan(loan, { verified: !!verified });
+    if (!plan.writeLend && !plan.deleteLend) continue;
+    jobs.push({ id: String(loan.id), writeLend: !!plan.writeLend, deleteLend: !!plan.deleteLend });
+  }
+  return jobs;
+}
+
+export const ACCOUNT_DELETED_NOTE = "Your account is deleted.";
+
+// The note is written just before sign-out. This page load is the only one that may clear it.
+export function deletedAccountGate(loadedWith, shown) {
+  const fromLoad = String(loadedWith || "");
+  const already = String(shown || "");
+  const text = fromLoad || already;
+  return {
+    text: text || "Sign in to open War Box.",
+    clearStored: !!fromLoad,
+    shown: text,
+  };
+}
+
+// Both queues are written before the sign-in is deleted. A failed queue leaves the sign-in in place.
+export function deleteCleanupResult(queuesSaved, countersCleared) {
+  if (!queuesSaved) {
+    return { status: 502, body: { error: "Couldn't finish deleting the account. Your sign-in is still here. Try again." } };
+  }
+  return {
+    status: 200,
+    body: { ok: true, deleted: true, cleanup: countersCleared ? "done" : "pending" },
+  };
+}
+
+// One small record per uid. The hourly job can clear usage counters and then drops the record.
+export const CLEANUP_MAX_ATTEMPTS = 24;
+export const CLEANUP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+export const CLEANUP_RECORD_MAX_BYTES = 256;
+
+export function cleanupQueueBody(uid, nowIso) {
+  const id = String(uid || "").trim();
+  if (!id || id.length > 128 || /[\s/]/.test(id)) return null;
+  const raw = JSON.stringify({ uid: id, at: String(nowIso || ""), attempts: 0 });
+  if (raw.length > CLEANUP_RECORD_MAX_BYTES) return null;
+  return raw;
+}
+
+// Redaction entries are dropped. The record expires after 24 attempts or 7 days, with backoff between tries.
+export function cleanupRetryPlan(record, nowMs) {
+  const now = nowMs == null ? Date.now() : +nowMs;
+  if (!record || typeof record !== "object") return { action: "delete" };
+  if (record.usageCleared) return { action: "delete" };
+  const atMs = Date.parse(record.at);
+  const attempts = Math.max(0, Math.floor(+record.attempts || 0));
+  const age = Number.isFinite(atMs) ? now - atMs : CLEANUP_MAX_AGE_MS + 1;
+  if (attempts >= CLEANUP_MAX_ATTEMPTS || age > CLEANUP_MAX_AGE_MS) return { action: "delete" };
+  const lastMs = Date.parse(record.lastTry);
+  const basis = Number.isFinite(lastMs) ? lastMs : (Number.isFinite(atMs) ? atMs : now);
+  const waitHours = attempts <= 0 ? 0 : Math.min(24, 2 ** (attempts - 1));
+  if (attempts > 0 && now < basis + waitHours * 60 * 60 * 1000) return { action: "wait" };
+  const body = {
+    uid: String(record.uid || "").slice(0, 128),
+    at: Number.isFinite(atMs) ? record.at : new Date(now).toISOString(),
+    attempts: attempts + 1,
+    lastTry: new Date(now).toISOString(),
+  };
+  const raw = JSON.stringify(body);
+  if (raw.length > CLEANUP_RECORD_MAX_BYTES) return { action: "delete" };
+  return { action: "retry", body, raw };
+}
+
+// One lender can publish this many lends to the same email. Rules enforce it on create.
+export const LEND_EMAIL_CAP = 40;
+
+// Confirmed lender loans go first inside a page. The server job has no overall cap.
+export function orderRedactions(candidates, limit) {
+  const all = candidates || [];
+  const n = limit == null ? all.length : Math.max(0, Math.floor(+limit));
+  const ranked = all.map((row, index) => ({
+    row,
+    index,
+    rank: row && row.match ? (row.clearLoan ? 2 : 1) : 0,
+  }));
+  ranked.sort((a, b) => (b.rank - a.rank) || (a.index - b.index));
+  const ordered = ranked.map(item => item.row);
+  return { now: ordered.slice(0, n), later: ordered.slice(n) };
+}
+
+// Uppercase hex matches Firestore rules hashing.sha256(...).toHexString().
+export async function lendMailDocId(email) {
+  const addr = String(email || "").trim().toLowerCase();
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(addr));
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+// One cron pass stays under the Workers subrequest limit. The job resumes next hour.
+export const REDACT_PAGE_SIZE = 4;
+export const REDACT_OPS_BUDGET = 20;
+export const REDACT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+export const REDACT_RECORD_MAX_BYTES = 800;
+
+export function redactionJobBody(uid, email, nowIso) {
+  const id = String(uid || "").trim();
+  const addr = String(email || "").trim().toLowerCase();
+  if (!id || id.length > 128 || /[\s/]/.test(id)) return null;
+  if (!addr || addr.length > 200 || !addr.includes("@")) return null;
+  const raw = JSON.stringify({
+    uid: id,
+    email: addr,
+    at: String(nowIso || ""),
+    attempts: 0,
+    phase: "loans",
+    cursor: "",
+    lendCursor: "",
+  });
+  if (raw.length > REDACT_RECORD_MAX_BYTES) return null;
+  return raw;
+}
+
+function redactionRecord(record, extra) {
+  const atMs = Date.parse(record && record.at);
+  const body = {
+    uid: String((record && record.uid) || "").slice(0, 128),
+    email: String((record && record.email) || "").trim().toLowerCase().slice(0, 200),
+    at: Number.isFinite(atMs) ? record.at : "",
+    attempts: extra.attempts,
+    lastTry: extra.lastTry,
+    phase: extra.phase || (record && record.phase) || "loans",
+    cursor: String(extra.cursor != null ? extra.cursor : (record && record.cursor) || "").slice(0, 300),
+    lendCursor: String(extra.lendCursor != null ? extra.lendCursor : (record && record.lendCursor) || "").slice(0, 300),
+  };
+  let raw = JSON.stringify(body);
+  if (raw.length > REDACT_RECORD_MAX_BYTES) {
+    body.cursor = "";
+    body.lendCursor = "";
+    raw = JSON.stringify(body);
+  }
+  if (!body.uid || !body.email || raw.length > REDACT_RECORD_MAX_BYTES) return null;
+  return raw;
+}
+
+// The job expires 30 days after it was queued. Backoff skips a rewrite while the wait is still running.
+export function redactionRetryPlan(record, nowMs) {
+  const now = nowMs == null ? Date.now() : +nowMs;
+  if (!record || typeof record !== "object") return { action: "delete" };
+  const atMs = Date.parse(record.at);
+  const age = Number.isFinite(atMs) ? now - atMs : REDACT_MAX_AGE_MS + 1;
+  if (!record.email || age > REDACT_MAX_AGE_MS) return { action: "delete" };
+  const attempts = Math.max(0, Math.floor(+record.attempts || 0));
+  const lastMs = Date.parse(record.lastTry);
+  const basis = Number.isFinite(lastMs) ? lastMs : (Number.isFinite(atMs) ? atMs : now);
+  const waitHours = attempts <= 0 ? 0 : Math.min(24, 2 ** (attempts - 1));
+  if (attempts > 0 && now < basis + waitHours * 60 * 60 * 1000) return { action: "wait" };
+  return { action: "retry" };
+}
+
+export function redactionProgressBody(record, state, nowMs) {
+  const now = nowMs == null ? Date.now() : +nowMs;
+  return redactionRecord(record, {
+    attempts: 0,
+    lastTry: new Date(now).toISOString(),
+    phase: state && state.phase,
+    cursor: state && state.cursor,
+    lendCursor: state && state.lendCursor,
+  });
+}
+
+export function redactionFailureBody(record, nowMs) {
+  const now = nowMs == null ? Date.now() : +nowMs;
+  const atMs = Date.parse(record && record.at);
+  if (!Number.isFinite(atMs) || now - atMs > REDACT_MAX_AGE_MS) return null;
+  return redactionRecord(record, {
+    attempts: Math.max(0, Math.floor(+(record && record.attempts) || 0)) + 1,
+    lastTry: new Date(now).toISOString(),
+  });
+}
+
+// A searching round can carry this much input. The loop applies it only after a round that searched,
+// so the first call uses the real estimate and still has to fit the hold.
+export const ROUND_INPUT_TOKEN_CAP = 1_200_000;
+
+export function roundInputTokens(estimated, searches, searchedAlready) {
+  const est = Math.max(0, Math.floor(+estimated || 0));
+  const n = Math.max(0, Math.floor(+searches || 0));
+  if (!n || !searchedAlready) return est;
+  return Math.max(est, ROUND_INPUT_TOKEN_CAP);
+}
+
+function sameJson(a, b) {
+  if (a === b) return true;
+  if (a == null || b == null || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!sameJson(a[i], b[i])) return false;
+    return true;
+  }
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const key of keys) if (!sameJson(a[key], b[key])) return false;
+  return true;
+}
+
+// updatedAt changes on every build of the lend doc. Extra server fields, such as borrowerReturned, stay.
+export function lendNeedsWrite(desired, existing) {
+  if (existing == null) return true;
+  if (!desired || typeof existing !== "object") return true;
+  for (const key of Object.keys(desired)) {
+    if (key === "updatedAt" || key === "serverUpdatedAt") continue;
+    if (!sameJson(desired[key], existing[key])) return true;
+  }
+  return false;
+}
+
+export function lendAddress(doc) {
+  const lower = String((doc && doc.borrowerEmailLower) || "").trim().toLowerCase();
+  if (lower) return lower;
+  return String((doc && (doc.borrowerEmail || doc.friendEmail)) || "").trim().toLowerCase();
+}
+
+// A different friend needs a new lend. The same address, including a case change, stays put.
+// The new address is refused when that lender is already at the cap, so the old lend is left alone.
+export function lendRetarget(existing, desired, count) {
+  const from = lendAddress(existing);
+  const to = lendAddress(desired);
+  if (!to) return { action: from ? "drop" : "keep" };
+  if (!from) return { action: "create" };
+  if (from === to) return { action: "keep" };
+  if (Math.floor(+count || 0) >= LEND_EMAIL_CAP) {
+    return { action: "blocked", message: "That email already has the maximum number of loans from you." };
+  }
+  return { action: "replace", from, to };
+}
+
+// Missing or different lends are written. A changed friend email is a replace, not an in-place edit.
+// A second pass over the stored doc, with a new updatedAt, is empty.
+export function lendMirrorOps(jobs, desiredById, remoteById) {
+  const remote = remoteById || {};
+  const desired = desiredById || {};
+  const ops = [];
+  for (const job of jobs || []) {
+    const id = String((job && job.id) || "");
+    if (!id) continue;
+    const has = Object.prototype.hasOwnProperty.call(remote, id);
+    const existing = has ? remote[id] : undefined;
+    if (job.writeLend) {
+      const doc = desired[id];
+      if (!doc) continue;
+      const retarget = has ? lendRetarget(existing, doc, 0) : { action: "create" };
+      if (retarget.action === "replace") {
+        ops.push({ id, op: "replace" });
+        continue;
+      }
+      const compared = retarget.action === "keep" && existing
+        ? { ...doc, borrowerEmail: existing.borrowerEmail, borrowerEmailLower: existing.borrowerEmailLower }
+        : doc;
+      if (lendNeedsWrite(compared, has ? existing : undefined)) ops.push({ id, op: "set" });
+    } else if (job.deleteLend && existing) {
+      ops.push({ id, op: "delete" });
+    }
+  }
+  return ops;
 }
 
 // A recovered loan keeps the item name when the inventory link is gone.
@@ -1292,7 +2006,18 @@ export function radioTxLabel(freq) {
 const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
-  parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
+  parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
+  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_SPEND_RATES,
+  planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision,
+  USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
+  DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, LOOKUPS_PAUSED,
+  reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
+  ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
+  CLEANUP_MAX_ATTEMPTS, CLEANUP_MAX_AGE_MS, CLEANUP_RECORD_MAX_BYTES, orderRedactions,
+  LEND_EMAIL_CAP, lendMailDocId, lendAddress, lendRetarget, REDACT_PAGE_SIZE, REDACT_OPS_BUDGET, REDACT_MAX_AGE_MS, REDACT_RECORD_MAX_BYTES,
+  redactionJobBody, redactionRetryPlan, redactionProgressBody, redactionFailureBody,
+  lendNeedsWrite, lendMirrorOps,
+  ROUND_INPUT_TOKEN_CAP, roundInputTokens, flooredSearchRoundMicro,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, bulkLookupIds, singleLookupIds, applyMarketPrices,

@@ -1,5 +1,5 @@
 /* ---------- cloud sync (Firebase) ---------- */
-var cloudUser=null,fsdb=null,cloudUnsubs=[],pushed={},pushTimer=null,kitsPushed="",cloudReady=new Set(),firstLoad=true;
+var cloudUser=null,fsdb=null,cloudUnsubs=[],pushed={},pushTimer=null,kitsPushed="",cloudReady=new Set(),firstLoad=true,accountDeleting=false,accountDeleteError="",tombUnsub=null;
 var CLOUD_COLS=["items",...COLS];
 var clean=o=>JSON.parse(JSON.stringify(o));
 var inflightWrites={}, kitsServerAt="";
@@ -9,8 +9,8 @@ function mergeCloudRows(local,remote){var m=new Map();(local||[]).forEach(i=>{if
 var arrOf=c=>c==="items"?all:db[c];
 function setArr(c,a){if(c==="items")all=a;else db[c]=a}
 function userRef(){return fsdb.collection("users").doc(cloudUser.uid)}
-function setSync(state,txt){const d=$("syncDot");d.className="sync "+state;d.title=txt||"";}
-function pushCloudSoon(){if(!cloudUser||!fsdb)return Promise.resolve();clearTimeout(pushTimer);var delay=GearLogic.cloudWriteDelay(typeof navigator!=="undefined"?navigator.onLine:true);if(delay===0)return pushCloud();pushTimer=setTimeout(pushCloud,delay);return Promise.resolve()}
+function setSync(state,txt){if(accountDeleteError){state="off";txt=accountDeleteError}const d=$("syncDot");if(!d)return;d.className="sync "+state;d.title=txt||"";}
+function pushCloudSoon(){if(accountDeleting||!cloudUser||!fsdb)return Promise.resolve();clearTimeout(pushTimer);var delay=GearLogic.cloudWriteDelay(typeof navigator!=="undefined"?navigator.onLine:true);if(delay===0)return pushCloud();pushTimer=setTimeout(pushCloud,delay);return Promise.resolve()}
 function offlineNow(){return typeof navigator!=="undefined"&&navigator.onLine===false}
 function seenLocal(pairs){
   var unsubs=[];
@@ -31,7 +31,7 @@ function seenLocal(pairs){
 }
 function commitDurable(commit,pairs){if(!offlineNow())return commit;var watch=seenLocal(pairs);return Promise.race([commit,watch.promise]).finally(()=>watch.cancel())}
 async function pushCloud(){
-  if(!cloudUser||cloudReady.size<CLOUD_COLS.length+1)return;
+  if(accountDeleting||!cloudUser||cloudReady.size<CLOUD_COLS.length+1)return;
   const ops=[];
   CLOUD_COLS.forEach(c=>arrOf(c).forEach(r=>{const k=c+"/"+r.id;if(r.id&&pushed[k]!==r.updatedAt){ops.push([c,r]);pushed[k]=r.updatedAt}}));
   const kj=JSON.stringify(kits);const kitsChanged=kj!==kitsPushed;
@@ -153,13 +153,16 @@ async function openFirestore(clearDisk){
   return db;
 }
 var signingOut=false;
-async function beginSignOut(){
+async function beginSignOut(forced){
   if(signingOut)return;
-  try{await pushCloud()}catch{}
-  var settled=true;
-  if(fsdb&&typeof fsdb.waitForPendingWrites==="function")settled=await GearLogic.settleOrTimeout(fsdb.waitForPendingWrites(),GearLogic.SIGN_OUT_WAIT_MS);
-  if(GearLogic.signOutConfirmNeeded(settled)&&!confirm("Some changes are still saving on this device. Sign out anyway? Those changes can be lost."))return;
+  if(!forced){
+    try{await pushCloud()}catch{}
+    var settled=true;
+    if(fsdb&&typeof fsdb.waitForPendingWrites==="function")settled=await GearLogic.settleOrTimeout(fsdb.waitForPendingWrites(),GearLogic.SIGN_OUT_WAIT_MS);
+    if(GearLogic.signOutConfirmNeeded(settled)&&!confirm("Some changes are still saving on this device. Sign out anyway? Those changes can be lost."))return;
+  }
   signingOut=true;
+  if(tombUnsub){try{tombUnsub()}catch(e){}tombUnsub=null}
   cloudUnsubs.forEach(x=>x());cloudUnsubs=[];all=[];kits={};db=emptyDb();
   try{GearLogic.clearUserLocal(localStorage)}catch{}
   try{render()}catch{}
@@ -167,8 +170,131 @@ async function beginSignOut(){
   try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch{}
   location.reload();
 }
+function watchTombstone(){
+  if(tombUnsub){try{tombUnsub()}catch(e){}}
+  tombUnsub=null;
+  if(!cloudUser||!fsdb)return;
+  tombUnsub=fsdb.collection("deletedUsers").doc(cloudUser.uid).onSnapshot(function(snap){
+    if(snap.exists&&!accountDeleting)beginSignOut(true);
+  },function(){});
+}
+function blockIfDeleteFailed(){
+  if(!accountDeleteError)return false;
+  if(typeof toast==="function")toast(accountDeleteError,5000);
+  return true;
+}
+function showDeleteFailure(msg){
+  accountDeleteError=msg||"Your gear was removed, but the sign-in is still here. Try again.";
+  accountDeleting=true;
+  all=[];kits={};db=emptyDb();
+  try{mirror()}catch(e){}
+  try{render()}catch(e){}
+  setSync("off",accountDeleteError);
+  var banner=$("deleteBanner");
+  if(!banner){
+    banner=document.createElement("div");
+    banner.id="deleteBanner";
+    banner.setAttribute("role","alert");
+    var acct=$("acct");
+    if(acct&&acct.parentNode)acct.parentNode.insertBefore(banner,acct.nextSibling);
+    else document.body.appendChild(banner);
+  }
+  banner.hidden=false;
+  banner.textContent=accountDeleteError;
+}
+async function updateDocRefs(pairs){
+  const list=(pairs||[]).filter(function(p){return p&&p[0]});
+  for(let i=0;i<list.length;i+=400){
+    const b=fsdb.batch();
+    list.slice(i,i+400).forEach(function(p){b.update(p[0],p[1])});
+    await b.commit();
+  }
+}
+async function deleteDocRefs(refs){
+  const list=(refs||[]).filter(Boolean);
+  for(let i=0;i<list.length;i+=400){
+    const b=fsdb.batch();
+    list.slice(i,i+400).forEach(ref=>b.delete(ref));
+    await b.commit();
+  }
+}
+async function releaseDeletedEmailHold(){
+  try{
+    var u=firebase.auth().currentUser;
+    if(!u||!u.emailVerified||!window.LOOKUP_URL)return;
+    var tok=await u.getIdToken();
+    await fetch(window.LOOKUP_URL.replace(/\/$/,"")+"/account/session",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+tok},body:"{}"});
+  }catch(e){}
+}
+async function deleteMyAccount(password,signal){
+  const u=firebase.auth().currentUser;
+  if(!u||!fsdb||!cloudUser)throw new Error("Sign in again, then delete the account.");
+  if(!window.LOOKUP_URL)throw new Error("Account deletion needs a connection. Try again when you're online.");
+  try{await u.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(u.email,password))}
+  catch(e){
+    const code=e&&e.code||"";
+    if(code==="auth/wrong-password"||code==="auth/invalid-credential"||code==="auth/invalid-login-credentials")throw new Error("That password doesn't match. Your account is still here.");
+    if(code==="auth/too-many-requests")throw new Error("Too many tries. Wait a few minutes. Your account is still here.");
+    throw new Error("Couldn't confirm your password. Your account is still here.");
+  }
+  accountDeleting=true;
+  clearTimeout(pushTimer);pushTimer=null;
+  cloudUnsubs.forEach(x=>{try{x()}catch(err){}});cloudUnsubs=[];
+  if(typeof lendUnsubs!=="undefined"&&lendUnsubs){lendUnsubs.forEach(x=>{try{x()}catch(err){}});lendUnsubs.length=0}
+  const gearMsg="Couldn't finish removing your gear. Your sign-in is still here. Try again.";
+  const signInMsg="Your gear was removed, but the sign-in is still here. Try again.";
+  let tombSnap=null;
+  try{tombSnap=await fsdb.collection("deletedUsers").doc(u.uid).get()}catch(e){}
+  const straight=GearLogic.deleteRetryRoute(!!(tombSnap&&tombSnap.exists))[0]==="server";
+  let removedAny=false;
+  if(!straight)try{
+    for(const c of GearLogic.USER_COLLECTIONS){
+      const snap=await userRef().collection(c).get();
+      if(snap.docs.length)removedAny=true;
+      await deleteDocRefs(snap.docs.map(d=>d.ref));
+    }
+    const shareSnap=await fsdb.collection("shares").where("owner","==",u.uid).get();
+    const shareRefs=shareSnap.docs.map(d=>d.ref);
+    const seen=new Set(shareSnap.docs.map(d=>d.id));
+    Object.values((kits&&kits._shares)||{}).forEach(function(sid){
+      const id=String(sid||"");
+      if(id&&!seen.has(id))shareRefs.push(fsdb.collection("shares").doc(id));
+    });
+    if(shareRefs.length)removedAny=true;
+    await deleteDocRefs(shareRefs);
+    const lends=await fsdb.collection("lends").where(GearLogic.accountDeletePlan(u.uid).lendField,"==",u.uid).get();
+    if(lends.docs.length)removedAny=true;
+    await deleteDocRefs(lends.docs.map(d=>d.ref));
+    const tomb=fsdb.collection("deletedUsers").doc(u.uid);
+    const tombSnap=await tomb.get();
+    if(!tombSnap.exists)await tomb.set({uid:u.uid,at:now()});
+    removedAny=true;
+  }catch(e){
+    if(!removedAny)accountDeleting=false;
+    else showDeleteFailure(gearMsg);
+    throw new Error(gearMsg);
+  }
+  let tok;
+  try{tok=await u.getIdToken(true)}catch(e){showDeleteFailure(signInMsg);throw new Error(signInMsg)}
+  let res;
+  try{res=await fetch(window.LOOKUP_URL.replace(/\/$/,"")+"/account/delete",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+tok},body:"{}",signal:signal||undefined})}
+  catch(e){
+    const msg=e&&e.name==="AbortError"?"That took too long. Try deleting the account again.":signInMsg;
+    showDeleteFailure(msg);throw new Error(msg);
+  }
+  const deletedBody=await res.json().catch(()=>({}));
+  if(!res.ok){const msg=deletedBody.error||signInMsg;showDeleteFailure(msg);throw new Error(msg)}
+  try{sessionStorage.setItem("gearLocker.accountDeleted",GearLogic.ACCOUNT_DELETED_NOTE)}catch(e){}
+  try{GearLogic.clearUserLocal(localStorage)}catch(e){}
+  try{await firebase.auth().signOut()}catch(e){}
+  try{await firebase.firestore().terminate();await firebase.firestore().clearPersistence()}catch(e){}
+  location.reload();
+}
 async function startCloud(){
   if(!initFirebase())return;
+  var accountDeletedOnLoad="";
+  try{accountDeletedOnLoad=sessionStorage.getItem("gearLocker.accountDeleted")||""}catch(e){}
+  var shownDeletedNote="";
   $("gate").hidden=false;$("gateFields").hidden=true;$("gateMsg").textContent="Opening War Box…";
   fsdb=await openFirestore(false);
   const auth=firebase.auth();
@@ -179,8 +305,11 @@ async function startCloud(){
   auth.setPersistence(keep?P.LOCAL:P.SESSION).catch(()=>{});
   auth.onAuthStateChanged(async u=>{
     if(!u){
-      cloudUser=null;cloudUnsubs.forEach(x=>x());cloudUnsubs=[];
-      $("gate").hidden=false;$("acct").hidden=true;$("gateFields").hidden=false;$("gateMsg").textContent="Sign in to open War Box.";refreshVerify();syncKeepNote();
+      cloudUser=null;if(tombUnsub){try{tombUnsub()}catch(e){}tombUnsub=null}cloudUnsubs.forEach(x=>x());cloudUnsubs=[];
+      var gate=GearLogic.deletedAccountGate(accountDeletedOnLoad,shownDeletedNote);
+      shownDeletedNote=gate.shown;
+      if(gate.clearStored){accountDeletedOnLoad="";try{sessionStorage.removeItem("gearLocker.accountDeleted")}catch(e){}}
+      $("gate").hidden=false;$("acct").hidden=true;$("gateFields").hidden=false;$("gateMsg").textContent=gate.text;refreshVerify();syncKeepNote();
       return;
     }
     const switched=localStorage.getItem("gearLocker.uid")&&localStorage.getItem("gearLocker.uid")!==u.uid;
@@ -189,7 +318,16 @@ async function startCloud(){
     cloudUser=u;$("gate").hidden=true;$("acct").hidden=false;$("acctTxt").textContent=u.email;refreshVerify();syncKeepNote();setSync("","Connecting…");
     pushed={};firstLoad=true;
     await boot();
+    var tombSnap=null;
+    try{tombSnap=await fsdb.collection("deletedUsers").doc(u.uid).get()}catch(e){}
+    if(tombSnap&&tombSnap.exists){
+      showDeleteFailure("Your gear was removed, but the sign-in is still here. Try again.");
+      watchTombstone();
+      return;
+    }
     subscribeCloud();
+    watchTombstone();
+    if(u.emailVerified)releaseDeletedEmailHold();
   });
   function syncKeepNote(){const on=!!$("gKeep").checked;const note=$("gKeepNote");if(note)note.hidden=on;const live=$("keepLive");if(live)live.hidden=on||$("acct").hidden}
   $("gKeep").addEventListener("change",syncKeepNote);
@@ -202,7 +340,7 @@ async function startCloud(){
   $("verifyDone").onclick=async()=>{try{var u=await confirmEmailNow();if(u&&u.emailVerified)toast("Email confirmed.");else toast("Not confirmed yet. Open the link in the email, then tap this again.",5000)}catch(e){toast("Couldn't check. Try again.")}};
   if($("qaVerify"))$("qaVerify").onclick=async()=>{if(!window.GEAR_QA)return;var u=firebase.auth().currentUser;if(!u){toast("Sign in on this test page first");return}try{var r=await fetch("http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:update",{method:"POST",headers:{Authorization:"Bearer owner","Content-Type":"application/json"},body:JSON.stringify({localId:u.uid,emailVerified:true})});if(!r.ok)throw new Error("emulator");u=await confirmEmailNow();toast(u&&u.emailVerified?"Marked confirmed in the local emulator":"Couldn't mark it confirmed. Is npm run qa still running?")}catch(e){toast("Couldn't mark it confirmed. Is npm run qa still running?")}};
   if($("qaStorage"))$("qaStorage").onclick=qaStorageCheck;
-async function confirmEmailNow(){var user=firebase.auth().currentUser;if(!user)return null;await GearLogic.refreshAuthClaims(user);cloudUser=firebase.auth().currentUser;refreshVerify();if(cloudUser&&cloudUser.emailVerified)watchLends();return cloudUser}
+async function confirmEmailNow(){var user=firebase.auth().currentUser;if(!user)return null;await GearLogic.refreshAuthClaims(user);cloudUser=firebase.auth().currentUser;refreshVerify();if(cloudUser&&cloudUser.emailVerified){watchLends();if(typeof repairLoanMirrors==="function")repairLoanMirrors();releaseDeletedEmailHold()}return cloudUser}
 async function storageCode(ref){try{await ref.getMetadata();return "ok"}catch(e){return e&&e.code||"error"}}
 async function qaStorageCheck(){
   if(!window.GEAR_QA||!firebase.auth().currentUser){toast("Sign in on this test page first");return}
@@ -240,7 +378,7 @@ async function qaStorageCheckRun(){
   else toast("Storage check failed. Another account or a signed-out check was not blocked ("+otherCode+" / "+signedOutCode+").",6000);
 }
 }
-var APP_VERSION="39";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+var APP_VERSION="41";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 var swReloadPending=false;
 function showUpdateToast(){
   const el=$("toast");if(!el)return;
@@ -419,7 +557,7 @@ document.addEventListener("keydown",e=>{
   if(curTab==="arms"&&armImport){armImport=null;renderArms();return}
   if(COLOF[curTab]&&ED[curTab]){ED[curTab]=null;renderExtra()}
 });
-$("fab").onclick=()=>{if(curTab==="arms")openArmForm();else if(curTab==="inv")openForm();else if(COLOF[curTab])openEd(curTab,NEWREC[curTab]?NEWREC[curTab]():{})};
+$("fab").onclick=()=>{if(blockIfDeleteFailed())return;if(curTab==="arms")openArmForm();else if(curTab==="inv")openForm();else if(COLOF[curTab])openEd(curTab,NEWREC[curTab]?NEWREC[curTab]():{})};
 var _showTab=showTab;
 showTab=function(k){
   if(!$("form").hidden)closeForm();if(!$("detail").hidden)closeDetail();

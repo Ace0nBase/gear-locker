@@ -1,21 +1,34 @@
 # Production deploys: Cloudflare Workers Builds on the main branch only (connected 2026-10-20).
 # Do not add a GitHub Action that runs wrangler deploy. Do not point a branch build at this worker name.
-# Dashboard variables override the defaults in worker.js (keep_vars). Set ALLOWED_EMAILS before merging.
+# keep_vars preserves dashboard-only variables. Plain vars in this file are part of the deploy.
+# BETA_ONLY stays unset. Other limits use the defaults in worker.js.
 name = "gear-locker-api"
 main = "worker.js"
 compatibility_date = "2026-10-15"
 workers_dev = true
-# Keep any variables set in the dashboard; settings live in DEFAULTS inside worker.js.
 keep_vars = true
 
-# Price-alert storage
+# Price-alert storage. Watch lists stay here. Spend and quotas live in UsageLedger.
 [[kv_namespaces]]
 binding = "WATCH"
 id = "3830bb679d28482db6ca2ec6e69b95f1"
+
+# SQLite-backed so Workers Free can run it. KV-backed classes are not used.
+[[durable_objects.bindings]]
+name = "USAGE"
+class_name = "UsageLedger"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["UsageLedger"]
 
 # Hourly price-alert checks
 [triggers]
 crons = ["17 * * * *"]
 
-# The Claude API key is a secret set in the Cloudflare dashboard
-# (Worker -> Settings -> Variables and Secrets -> ANTHROPIC_API_KEY). Deploys keep it.
+# Dashboard secrets, never in this file. Deploys keep them.
+# ANTHROPIC_API_KEY — the Claude API key.
+# FIREBASE_SERVER_API_KEY — a second Google API key, Identity Toolkit API only, no application restriction.
+# It deletes the Auth user. The public web key stays in the browser and is not used here.
+# FIREBASE_SA_JSON — service account JSON for project gear-locker-c248c, role Cloud Datastore User.
+# EMAIL_HMAC_KEY — random string used to key the deleted-email hold. Clients cannot read it.

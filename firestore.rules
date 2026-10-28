@@ -10,14 +10,34 @@ service cloud.firestore {
         && request.auth.token.email is string
         && request.auth.token.email.size() > 3;
     }
+    function sameEmail(stored) {
+      return stored is string
+        && request.auth.token.email is string
+        && stored.lower() == request.auth.token.email.lower();
+    }
     function borrowerMatch() {
       return emailOk() && (
-        resource.data.borrowerEmail == request.auth.token.email
-        || resource.data.borrowerEmailLower == request.auth.token.email
+        sameEmail(resource.data.borrowerEmail)
+        || sameEmail(resource.data.borrowerEmailLower)
       );
     }
     function isLender() {
       return signedIn() && resource.data.lender == request.auth.uid;
+    }
+    function tombstoned() {
+      return signedIn() && exists(/databases/$(database)/documents/deletedUsers/$(request.auth.uid));
+    }
+    function lendMailPath(addr) {
+      return /databases/$(database)/documents/users/$(request.auth.uid)/lendMail/$(hashing.sha256(addr.lower()).toHexString());
+    }
+    function lendMailIncreased(id) {
+      let path = lendMailPath(request.resource.data.borrowerEmailLower);
+      return existsAfter(path)
+        && getAfter(path).data.loanId == id
+        && getAfter(path).data.n is int
+        && getAfter(path).data.n >= 1
+        && getAfter(path).data.n <= 40
+        && getAfter(path).data.n == (exists(path) ? get(path).data.n + 1 : 1);
     }
     function itemOk(m) {
       return m is map
@@ -114,18 +134,38 @@ service cloud.firestore {
     }
 
     match /users/{uid}/{col}/{docId} {
-      allow read, write: if signedIn()
+      allow read: if signedIn()
+        && request.auth.uid == uid
+        && col in ['items','ammo','sessions','dope','maint','wish','loans','freqs','pace','meta'];
+      allow create, update: if signedIn()
+        && request.auth.uid == uid
+        && !tombstoned()
+        && col in ['items','ammo','sessions','dope','maint','wish','loans','freqs','pace','meta'];
+      allow delete: if signedIn()
         && request.auth.uid == uid
         && col in ['items','ammo','sessions','dope','maint','wish','loans','freqs','pace','meta'];
     }
 
+    // The named person may clear only their email. They cannot read the owner's loan or its notes.
+    // The copy they can read is /lends/{id}. A missing loan and someone else's loan both deny.
+    match /{path=**}/loans/{loanId} {
+      allow update: if emailOk()
+        && resource != null
+        && sameEmail(resource.data.friendEmail)
+        && request.resource.data.friendEmail == ""
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['friendEmail','updatedAt','serverUpdatedAt']);
+    }
+
     match /shares/{sid} {
       allow get: if true;
-      allow list: if false;
+      allow list: if signedIn() && resource.data.owner == request.auth.uid;
       allow create: if signedIn()
+        && !tombstoned()
         && request.resource.data.owner == request.auth.uid
         && shareShape(request.resource.data);
       allow update: if signedIn()
+        && !tombstoned()
         && resource.data.owner == request.auth.uid
         && request.resource.data.owner == resource.data.owner
         && shareShape(request.resource.data);
@@ -135,20 +175,66 @@ service cloud.firestore {
     match /lends/{id} {
       allow get: if isLender() || borrowerMatch();
       allow list: if isLender();
-      allow list: if emailOk() && resource.data.borrowerEmail == request.auth.token.email;
-      allow list: if emailOk() && resource.data.borrowerEmailLower == request.auth.token.email;
+      allow list: if emailOk() && sameEmail(resource.data.borrowerEmail);
+      allow list: if emailOk() && sameEmail(resource.data.borrowerEmailLower);
       allow create: if emailOk()
+        && !tombstoned()
         && request.auth.uid == request.resource.data.lender
         && request.resource.data.lenderEmail == request.auth.token.email
         && request.resource.data.borrowerEmail is string
         && request.resource.data.borrowerEmailLower is string
         && request.resource.data.borrowerEmail.size() > 3
-        && request.resource.data.borrowerEmailLower.size() > 3;
-      allow update: if (isLender()
-          && request.resource.data.lender == resource.data.lender)
+        && request.resource.data.borrowerEmailLower.size() > 3
+        && request.resource.data.borrowerEmailLower == request.resource.data.borrowerEmail.lower()
+        && lendMailIncreased(id);
+      allow update: if !tombstoned() && ((isLender()
+          && request.resource.data.lender == resource.data.lender
+          && request.resource.data.borrowerEmail == resource.data.borrowerEmail
+          && request.resource.data.borrowerEmailLower == resource.data.borrowerEmailLower)
         || (borrowerMatch()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['borrowerReturned','updatedAt','serverUpdatedAt']));
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['borrowerReturned','updatedAt','serverUpdatedAt'])));
+      allow update: if emailOk()
+        && (sameEmail(resource.data.borrowerEmail) || sameEmail(resource.data.borrowerEmailLower))
+        && request.resource.data.borrowerEmail == ""
+        && request.resource.data.borrowerEmailLower == ""
+        && request.resource.data.lender == resource.data.lender
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['borrowerEmail','borrowerEmailLower','updatedAt','serverUpdatedAt']);
       allow delete: if isLender();
+    }
+
+    match /users/{uid}/lendMail/{hash} {
+      allow get, list: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && !tombstoned()
+        && request.resource.data.keys().hasOnly(['n', 'loanId'])
+        && request.resource.data.n == 1
+        && request.resource.data.loanId is string
+        && request.resource.data.loanId.size() > 0
+        && request.resource.data.loanId.size() < 200;
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && !tombstoned()
+        && request.resource.data.keys().hasOnly(['n', 'loanId'])
+        && request.resource.data.n is int
+        && request.resource.data.loanId is string
+        && request.resource.data.n == resource.data.n + 1
+        && request.resource.data.n <= 40;
+      allow delete: if signedIn() && request.auth.uid == uid && tombstoned();
+    }
+
+    match /deletedUsers/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list: if false;
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && !exists(/databases/$(database)/documents/deletedUsers/$(uid))
+        && request.resource.data.keys().hasOnly(['uid','at'])
+        && request.resource.data.keys().hasAll(['uid','at'])
+        && request.resource.data.uid == uid
+        && request.resource.data.at is string;
+      allow update, delete: if false;
     }
 
     match /{document=**} {

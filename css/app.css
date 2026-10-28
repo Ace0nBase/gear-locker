@@ -253,6 +253,7 @@ body:has(#gate:not([hidden])) .fab{display:none!important}
 }
 
 .acct{font-size:.78rem;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#deleteBanner{margin:8px 12px;padding:10px 12px;border-radius:10px;background:#6e2e24;color:#fff;font-size:.95rem}
 .acct button{background:none;border:0;color:var(--accent);text-decoration:underline;padding:10px 8px;min-height:44px;font-size:.78rem}
 .sync{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted)}
 .sync.on{background:var(--accent)} .sync.off{background:var(--danger)}
