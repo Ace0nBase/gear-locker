@@ -929,7 +929,28 @@ export function lendNeedsWrite(desired, existing) {
   return false;
 }
 
-// Missing or different lends are written. A second pass over the stored doc, with a new updatedAt, is empty.
+export function lendAddress(doc) {
+  const lower = String((doc && doc.borrowerEmailLower) || "").trim().toLowerCase();
+  if (lower) return lower;
+  return String((doc && (doc.borrowerEmail || doc.friendEmail)) || "").trim().toLowerCase();
+}
+
+// A different friend needs a new lend. The same address, including a case change, stays put.
+// The new address is refused when that lender is already at the cap, so the old lend is left alone.
+export function lendRetarget(existing, desired, count) {
+  const from = lendAddress(existing);
+  const to = lendAddress(desired);
+  if (!to) return { action: from ? "drop" : "keep" };
+  if (!from) return { action: "create" };
+  if (from === to) return { action: "keep" };
+  if (Math.floor(+count || 0) >= LEND_EMAIL_CAP) {
+    return { action: "blocked", message: "That email already has the maximum number of loans from you." };
+  }
+  return { action: "replace", from, to };
+}
+
+// Missing or different lends are written. A changed friend email is a replace, not an in-place edit.
+// A second pass over the stored doc, with a new updatedAt, is empty.
 export function lendMirrorOps(jobs, desiredById, remoteById) {
   const remote = remoteById || {};
   const desired = desiredById || {};
@@ -942,7 +963,15 @@ export function lendMirrorOps(jobs, desiredById, remoteById) {
     if (job.writeLend) {
       const doc = desired[id];
       if (!doc) continue;
-      if (lendNeedsWrite(doc, has ? existing : undefined)) ops.push({ id, op: "set" });
+      const retarget = has ? lendRetarget(existing, doc, 0) : { action: "create" };
+      if (retarget.action === "replace") {
+        ops.push({ id, op: "replace" });
+        continue;
+      }
+      const compared = retarget.action === "keep" && existing
+        ? { ...doc, borrowerEmail: existing.borrowerEmail, borrowerEmailLower: existing.borrowerEmailLower }
+        : doc;
+      if (lendNeedsWrite(compared, has ? existing : undefined)) ops.push({ id, op: "set" });
     } else if (job.deleteLend && existing) {
       ops.push({ id, op: "delete" });
     }
@@ -1985,7 +2014,7 @@ const GearLogic = {
   reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
   ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
   CLEANUP_MAX_ATTEMPTS, CLEANUP_MAX_AGE_MS, CLEANUP_RECORD_MAX_BYTES, orderRedactions,
-  LEND_EMAIL_CAP, lendMailDocId, REDACT_PAGE_SIZE, REDACT_OPS_BUDGET, REDACT_MAX_AGE_MS, REDACT_RECORD_MAX_BYTES,
+  LEND_EMAIL_CAP, lendMailDocId, lendAddress, lendRetarget, REDACT_PAGE_SIZE, REDACT_OPS_BUDGET, REDACT_MAX_AGE_MS, REDACT_RECORD_MAX_BYTES,
   redactionJobBody, redactionRetryPlan, redactionProgressBody, redactionFailureBody,
   lendNeedsWrite, lendMirrorOps,
   ROUND_INPUT_TOKEN_CAP, roundInputTokens, flooredSearchRoundMicro,

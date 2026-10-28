@@ -107,6 +107,8 @@ export async function deleteUserFirestore(env, idToken, user, fetchImpl) {
     for (const col of USER_COLLECTIONS) {
       await deleteCollection(fetchFn, idToken, root + "/users/" + encodeURIComponent(uid) + "/" + encodeURIComponent(col));
     }
+    // Counters are not in USER_COLLECTIONS. Rules allow this delete only after the tombstone exists.
+    await deleteCollection(fetchFn, idToken, root + "/users/" + encodeURIComponent(uid) + "/lendMail");
     await deleteQuery(fetchFn, idToken, root, {
       from: [{ collectionId: "lends" }],
       where: equalFilter("lender", uid),

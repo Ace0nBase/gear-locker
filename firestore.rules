@@ -221,7 +221,7 @@ service cloud.firestore {
         && request.resource.data.loanId is string
         && request.resource.data.n == resource.data.n + 1
         && request.resource.data.n <= 40;
-      allow delete: if false;
+      allow delete: if signedIn() && request.auth.uid == uid && tombstoned();
     }
 
     match /deletedUsers/{uid} {

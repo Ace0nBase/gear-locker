@@ -48,13 +48,13 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device and the service worker is version 37", () => {
+test("sign-out clears this device and the service worker is version 41", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v37/);
-  assert.match(read("js/cloud.js"), /APP_VERSION="37"/);
+  assert.match(sw, /war-box-v41/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="41"/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
   assert.match(manifest, /maskable-512\.png/);
@@ -70,7 +70,9 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/cloud.js"), /enablePersistence\(\{synchronizeTabs:true\}\)/);
   assert.doesNotMatch(read("js/cloud.js"), /if\(!window\.GEAR_QA\)\{try\{fsdb\.enablePersistence/);
   assert.match(read("js/social.js"), /loanSharePlan/);
-  assert.match(read("js/social.js"), /lendNeedsWrite/);
+  assert.match(read("js/social.js"), /lendMirrorOps/);
+  assert.match(read("js/social.js"), /lendRetarget/);
+  assert.match(read("js/logic.js"), /lendNeedsWrite/);
   assert.match(read("js/social.js"), /hasPendingWrites/);
   assert.doesNotMatch(read("js/social.js"), /deletedEmails/);
   assert.doesNotMatch(read("js/social.js"), /loan sharing isn't switched on yet/);
@@ -233,6 +235,9 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.doesNotMatch(read("js/cloud.js"), /loanRedactTargets/);
   assert.match(read("js/logic.js"), /friendEmailLower/);
   assert.match(read("firestore.rules"), /lendMailIncreased/);
+  assert.match(read("firestore.rules"), /tombstoned\(\)/);
+  assert.match(read("api/account-delete.js"), /lendMail/);
+  assert.doesNotMatch(read("js/logic.js"), /"lendMail"/);
   assert.match(read("firestore.rules"), /request\.resource\.data\.borrowerEmail == resource\.data\.borrowerEmail/);
   assert.match(read("js/cloud.js"), /\/account\/session/);
   assert.match(read("api/worker.js"), /\/account\/session/);

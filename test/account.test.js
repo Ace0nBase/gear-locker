@@ -9,6 +9,7 @@ import {
   SEARCH_RESULT_TOKENS, roundFits, roundInputTokens, loanTargetsFromLends, loanRedactTargets, loansToMirror,
   deleteRetryRoute, runDeleteAttempt, SERVER_DELETE_STEPS, LOOKUPS_PAUSED,
   ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
+  LEND_EMAIL_CAP, lendRetarget,
   CLEANUP_MAX_ATTEMPTS, CLEANUP_MAX_AGE_MS, CLEANUP_RECORD_MAX_BYTES,
   lendMirrorOps,
   ROUND_INPUT_TOKEN_CAP,
@@ -427,6 +428,38 @@ test("own shares page until they are gone, and lends that name the user are not 
   assert.equal(lendQueries, 1);
 });
 
+test("account deletion removes lendMail counters and leaves none behind", async () => {
+  const names = [
+    "projects/demo/databases/(default)/documents/users/abc/lendMail/HASH1",
+    "projects/demo/databases/(default)/documents/users/abc/lendMail/HASH2",
+  ];
+  const left = new Set(names);
+  const deleted = [];
+  const fetchImpl = async (url, opts) => {
+    const method = (opts && opts.method) || "GET";
+    const json = (status, data) => ({ status, json: async () => data });
+    if (method === "DELETE") {
+      const name = decodeURIComponent(String(url).split("/documents/")[1] || "");
+      const full = "projects/demo/databases/(default)/documents/" + name;
+      deleted.push(full);
+      left.delete(full);
+      return json(200, {});
+    }
+    if (method === "GET" && String(url).includes("/lendMail")) {
+      return json(200, { documents: [...left].map(name => ({ name })) });
+    }
+    if (String(url).includes(":runQuery")) return json(200, [{}]);
+    return json(200, { documents: [] });
+  };
+  const out = await deleteUserFirestore({ FIREBASE_PROJECT: "demo" }, "token", { sub: "abc", email: "a@b.co" }, fetchImpl);
+  assert.equal(out.ok, true);
+  assert.equal(left.size, 0);
+  assert.deepEqual(deleted.sort(), names.slice().sort());
+  const again = await deleteUserFirestore({ FIREBASE_PROJECT: "demo" }, "token", { sub: "abc", email: "a@b.co" }, fetchImpl);
+  assert.equal(again.ok, true);
+  assert.equal(left.size, 0);
+});
+
 
 test("server cleanup treats a missing document as already gone", async () => {
   let shares = 1;
@@ -549,7 +582,13 @@ test("a second lend repair writes nothing, and a missing lend is not deleted", (
   assert.deepEqual(lendMirrorOps(jobs, { L1: desired }, {}), [{ id: "L1", op: "set" }]);
   const stored = { ...desired, updatedAt: "t2", serverUpdatedAt: "t2", borrowerReturned: "2026-10-01" };
   assert.deepEqual(lendMirrorOps(jobs, { L1: { ...desired, updatedAt: "t3" } }, { L1: stored }), []);
-  assert.deepEqual(lendMirrorOps(jobs, { L1: { ...desired, borrowerEmail: "other@example.com" } }, { L1: stored }), [{ id: "L1", op: "set" }]);
+  assert.deepEqual(lendMirrorOps(jobs, { L1: { ...desired, borrowerEmail: "qa-b@example.test" } }, { L1: stored }), []);
+  const moved = { ...desired, borrowerEmail: "new@example.com", borrowerEmailLower: "new@example.com" };
+  assert.deepEqual(lendMirrorOps(jobs, { L1: moved }, { L1: stored }), [{ id: "L1", op: "replace" }]);
+  assert.equal(lendRetarget(stored, moved, 3).action, "replace");
+  assert.equal(lendRetarget(stored, moved, LEND_EMAIL_CAP).action, "blocked");
+  assert.match(lendRetarget(stored, moved, LEND_EMAIL_CAP).message, /maximum number of loans/);
+  assert.equal(lendRetarget(stored, desired, 0).action, "keep");
   const drop = [{ id: "L1", writeLend: false, deleteLend: true }];
   assert.deepEqual(lendMirrorOps(drop, {}, {}), []);
   assert.deepEqual(lendMirrorOps(drop, {}, { L1: stored }), [{ id: "L1", op: "delete" }]);

@@ -36,6 +36,35 @@ function lendDoc(x){const it=itemById(x.itemId)||{};let from="";try{from=localSt
   var email=String(x.friendEmail||"").trim();
   return {lender:cloudUser.uid,lenderName:from||String(cloudUser.email||"").split("@")[0],lenderEmail:tokenEmail(),borrowerEmail:email,borrowerEmailLower:email.toLowerCase(),borrowerName:x.borrower||"",
     item:{name:it.name||x.itemName||"",brand:it.brand||x.itemBrand||"",color:it.color||x.itemColor||"",category:it.category||x.itemCategory||""},out:x.out||"",due:x.due||"",returned:x.returned||"",updatedAt:now()}}
+async function lendMailCount(email){
+  const mail=userRef().collection("lendMail").doc(await GearLogic.lendMailDocId(email));
+  const snap=await mail.get();
+  const n=snap.exists?Math.floor(+((snap.data()||{}).n)||0):0;
+  return {mail,n};
+}
+async function publishLend(id,desired,mail,n){
+  const create=fsdb.batch();
+  create.set(mail,{n:n+1,loanId:id});
+  create.set(fsdb.collection("lends").doc(id),desired,{merge:true});
+  await create.commit();
+  lentRemote[id]=desired;
+}
+async function retargetLend(id,desired){
+  const email=desired.borrowerEmailLower||desired.borrowerEmail;
+  const counted=await lendMailCount(email);
+  const plan=GearLogic.lendRetarget(lentRemote[id],desired,counted.n);
+  if(plan.action==="blocked")return plan;
+  if(plan.action==="replace"){
+    try{await fsdb.collection("lends").doc(id).delete()}
+    catch(e){return {action:"blocked",message:"Couldn't move this loan off the old email. It is still shared there."}}
+    delete lentRemote[id];
+  }
+  if(plan.action==="replace"||plan.action==="create"){
+    if(counted.n>=GearLogic.LEND_EMAIL_CAP)return {action:"blocked",message:"That email already has the maximum number of loans from you."};
+    await publishLend(id,desired,counted.mail,counted.n);
+  }
+  return plan;
+}
 async function mirrorLend(x,removed){
   if(!fsdb||!cloudUser||!x||!x.id)return;
   const plan=GearLogic.loanSharePlan(x,{removed:!!removed,verified:!!cloudUser.emailVerified});
@@ -44,31 +73,31 @@ async function mirrorLend(x,removed){
   const row=local||x;
   if(plan.writeLend)row.lendShared=true;
   else if(plan.deleteLend&&!row.deleted)row.lendShared=false;
+  const desired=lendDoc(row);
+  const ops=GearLogic.lendMirrorOps([{id:x.id,writeLend:plan.writeLend,deleteLend:plan.deleteLend}],{[x.id]:desired},lentRemote);
+  const op=ops[0]&&ops[0].op;
   const batch=fsdb.batch();
   batch.set(userRef().collection("loans").doc(x.id),stampRow(row));
   const ref=fsdb.collection("lends").doc(x.id);
-  const desired=lendDoc(row);
-  const needs=plan.writeLend&&GearLogic.lendNeedsWrite(desired,lentRemote[x.id]);
-  const creating=needs&&!lentRemote[x.id];
-  if(needs&&!creating)batch.set(ref,desired,{merge:true});
+  if(op==="set"&&lentRemote[x.id])batch.set(ref,desired,{merge:true});
   pushed["loans/"+x.id]=row.updatedAt;
   try{await batch.commit()}
   catch(e){delete pushed["loans/"+x.id];toast("Couldn't send the loan to your friend's app: "+(e.message||"try again"),5000);return}
-  if(creating){
+  if(op==="set"&&!lentRemote[x.id]){
     try{
-      const mail=userRef().collection("lendMail").doc(await GearLogic.lendMailDocId(desired.borrowerEmailLower||desired.borrowerEmail));
-      const snap=await mail.get();
-      const n=snap.exists?Math.floor(+((snap.data()||{}).n)||0):0;
-      if(n>=GearLogic.LEND_EMAIL_CAP)toast("That email already has the maximum number of loans from you.",5000);
-      else{
-        const create=fsdb.batch();
-        create.set(mail,{n:n+1,loanId:x.id});
-        create.set(ref,desired,{merge:true});
-        await create.commit();
-      }
+      const counted=await lendMailCount(desired.borrowerEmailLower||desired.borrowerEmail);
+      const gate=GearLogic.lendRetarget(null,desired,counted.n);
+      if(gate.action==="blocked")toast(gate.message,5000);
+      else await publishLend(x.id,desired,counted.mail,counted.n);
     }catch(e){toast("Couldn't send the loan to your friend's app: "+(e.message||"try again"),5000)}
   }
-  if(plan.deleteLend&&lentRemote[x.id]){try{await ref.delete()}catch(e){}}
+  if(op==="replace"){
+    try{
+      const moved=await retargetLend(x.id,desired);
+      if(moved&&moved.action==="blocked")toast(moved.message,5000);
+    }catch(e){toast("Couldn't send the loan to your friend's app: "+(e.message||"try again"),5000)}
+  }
+  if(op==="delete"&&lentRemote[x.id]){try{await ref.delete()}catch(e){}}
 }
 async function recoverOrphanLends(){
   if(!fsdb||!cloudUser||!cloudUser.emailVerified)return;
@@ -112,10 +141,10 @@ async function repairLoanMirrors(){
     desired[job.id]=lendDoc(loan);
   }
   const plan=GearLogic.lendMirrorOps(jobs,desired,lentRemote);
-  const sets=plan.filter(function(op){return op.op==="set"});
+  const sets=plan.filter(function(op){return op.op==="set"&&lentRemote[op.id]});
+  const creates=plan.filter(function(op){return op.op==="set"&&!lentRemote[op.id]||op.op==="replace"});
   const dels=plan.filter(function(op){return op.op==="delete"});
-  const updates=sets.filter(function(op){return lentRemote[op.id]});
-  const creates=sets.filter(function(op){return !lentRemote[op.id]});
+  const updates=sets;
   for(let i=0;i<updates.length;i+=400){
     const batch=fsdb.batch();
     updates.slice(i,i+400).forEach(function(op){
@@ -127,14 +156,8 @@ async function repairLoanMirrors(){
     const doc=desired[op.id];
     if(!doc)continue;
     try{
-      const mail=userRef().collection("lendMail").doc(await GearLogic.lendMailDocId(doc.borrowerEmailLower||doc.borrowerEmail));
-      const snap=await mail.get();
-      const n=snap.exists?Math.floor(+((snap.data()||{}).n)||0):0;
-      if(n>=GearLogic.LEND_EMAIL_CAP)continue;
-      const batch=fsdb.batch();
-      batch.set(mail,{n:n+1,loanId:op.id});
-      batch.set(fsdb.collection("lends").doc(op.id),doc,{merge:true});
-      await batch.commit();
+      const moved=await retargetLend(op.id,doc);
+      if(moved&&moved.action==="blocked"&&moved.message)toast(moved.message,5000);
     }catch(e){}
   }
   for(const op of dels){try{await fsdb.collection("lends").doc(op.id).delete()}catch(e){}}
@@ -142,6 +165,18 @@ async function repairLoanMirrors(){
 {const _save=SAVE.loans;SAVE.loans=async d=>{
   if(d.friendEmail&&!/^\S+@\S+\.\S+$/.test(String(d.friendEmail).trim())){toast("That email doesn't look right");return}
   if(!d.remindAt&&d.due)d.remindAt=d.due+"T09:00";
+  const prior=d.id?L("loans").find(y=>y.id===d.id):null;
+  const remote=prior&&lentRemote[prior.id];
+  if(remote&&fsdb&&cloudUser){
+    const preview=GearLogic.lendRetarget(remote,{friendEmail:d.friendEmail},0);
+    if(preview.action==="replace"){
+      try{
+        const counted=await lendMailCount(preview.to);
+        const gate=GearLogic.lendRetarget(remote,{friendEmail:d.friendEmail},counted.n);
+        if(gate.action==="blocked"){toast(gate.message,5000);return}
+      }catch(e){toast("Couldn't check that email. Try again.",5000);return}
+    }
+  }
   const before=new Set(L("loans").map(y=>y.id));await _save(d);const x=d.id?L("loans").find(y=>y.id===d.id):L("loans").find(y=>!before.has(y.id));if(x)await mirrorLend(x)}}
 {const _del=DEL.loans;DEL.loans=async d=>{const x=L("loans").find(y=>y.id===d.id);await _del(d);if(x)await mirrorLend(x,true)}}
 ACT.loans=async(act,b)=>{

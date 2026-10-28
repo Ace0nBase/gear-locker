@@ -240,4 +240,7 @@ test("a lender cannot change the borrower email, and the lend counter cannot be 
   const hash = await lendMailDocId("friend@example.com");
   await assertFails(deleteDoc(doc(owner, "users/owner/lendMail/" + hash)));
   assert.equal((await getDoc(doc(owner, "users/owner/lendMail/" + hash))).exists(), true);
+  await assertSucceeds(setDoc(doc(owner, "deletedUsers/owner"), { uid: "owner", at: "2026-10-28T00:00:00.000Z" }));
+  await assertSucceeds(deleteDoc(doc(owner, "users/owner/lendMail/" + hash)));
+  assert.equal((await getDoc(doc(owner, "users/owner/lendMail/" + hash))).exists(), false);
 });
