@@ -48,14 +48,14 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device, the app is version 53, and the service worker cache is version 53", () => {
+test("sign-out clears this device, the app is version 54, and the service worker cache is version 54", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v53/);
+  assert.match(sw, /war-box-v54/);
   assert.match(sw, /skip-waiting/);
-  assert.match(read("js/cloud.js"), /APP_VERSION="53"/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="54"/);
   assert.match(read("js/cloud.js"), /function markLookupError/);
   assert.match(read("js/core.js"), /i\.lookupError&&!lookingUp\.has\(i\.id\)/);
   assert.match(read("js/cloud.js"), /textContent="v"\+APP_VERSION/);
@@ -341,7 +341,7 @@ test("user-facing copy and docs avoid belted and linked ammo phrases", () => {
     if (file === "js/logic.js") return src.replace(/export const PRICE_BACKSTOP =[\s\S]*?;/, "");
     if (file === "api/worker.js") return src
       .replace(/function prompt\(it\) \{[\s\S]*?\n\}\nconst textOf/, "const textOf")
-      .replace(/const ask = `[\s\S]*?`;\n  const r = await modelFetch/, "const r = await modelFetch")
+      .replace(/const ask = `[\s\S]*?`;\n  let r;\n  try \{\n    r = await modelFetch/, "r = await modelFetch")
       .replace(/function dealPrompt\(w\) \{[\s\S]*?\n\}\nfunction priceRouteBlocked/, "function priceRouteBlocked");
     return src;
   };

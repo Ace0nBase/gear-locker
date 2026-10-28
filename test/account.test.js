@@ -6,7 +6,7 @@ import {
   deleteRevenueCatCustomer, accountDeletePlan, accountPlan, USER_COLLECTIONS,
   signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
   clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, lookupItemHoldMicro, lookupTypicalMicro, operationTypicalMicro, priciestRates, spendRates, applyReserve, applyReconcile, DAILY_SPEND_FULL,
-  poolSpendKey, inflightKey, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, dailySpendKey, USAGE_HOLD_STALE_MS, BUSY_RETRY_MS, busyQueueStep, POOL_SEED_KEY, MODEL_TIMEOUT_MS,
+  poolSpendKey, inflightKey, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, dailySpendKey, USAGE_HOLD_STALE_MS, BUSY_RETRY_MS, busyQueueStep, POOL_SEED_KEY, REQUEST_DEADLINE_MS, ROUND_FLOOR_MS, requestDeadline, roundAllowed, poolLifetimeExpired, estimateInputTokens,
   SEARCH_RESULT_TOKENS, roundFits, roundInputTokens, loanTargetsFromLends, loanRedactTargets, loansToMirror,
   deleteRetryRoute, runDeleteAttempt, SERVER_DELETE_STEPS, LOOKUPS_PAUSED,
   ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
@@ -692,8 +692,14 @@ test("a lookup that dies releases its pool hold and in-flight slots after two mi
 });
 
 test("a call that finishes after its hold was released is still billed, and live calls stay within 4", () => {
-  assert.equal(MODEL_TIMEOUT_MS, 90_000);
-  assert.ok(MODEL_TIMEOUT_MS < USAGE_HOLD_STALE_MS);
+  assert.equal(REQUEST_DEADLINE_MS, 100_000);
+  assert.equal(ROUND_FLOOR_MS, 30_000);
+  assert.ok(REQUEST_DEADLINE_MS < USAGE_HOLD_STALE_MS);
+  const window = requestDeadline(0, REQUEST_DEADLINE_MS);
+  assert.equal(roundAllowed(window, 70_000, ROUND_FLOOR_MS), true);
+  assert.equal(roundAllowed(window, 70_001, ROUND_FLOOR_MS), false);
+  assert.equal(poolLifetimeExpired("2026-10-31T23:00:00Z"), false);
+  assert.equal(poolLifetimeExpired("2026-11-01T00:00:00Z"), true);
   const day = "2026-10-28";
   const t0 = Date.parse(day + "T12:00:00Z");
   const spendKey = "spend:free:2026-10";
@@ -799,8 +805,11 @@ test("the lifetime pool seeds October 2026 and a November lookup starts at zero"
   assert.equal(sql.rows.get(novKey), 18_000);
   assert.equal(sql.rows.get("spend:free"), 20e6);
   assert.equal(sql.rows.has("seeded:pool"), false);
-  ledger.prune({ now: "2026-11-02T00:00:00Z" });
+  ledger.prune({ now: "2026-10-31T23:00:00Z" });
   assert.equal(sql.rows.get("spend:free"), 20e6);
+  ledger.prune({ now: "2026-11-02T00:00:00Z" });
+  assert.equal(sql.rows.has("spend:free"), false);
+  assert.equal(sql.rows.get(novKey), 18_000);
 });
 
 test("stale release lists in-flight keys only", () => {

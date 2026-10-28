@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import worker, { UsageLedger } from "../api/worker.js";
-import { attemptQuotaKey, dailySpendKey, estimateSpendMicro, inflightKey, lookupItemHoldMicro, lookupTypicalMicro, monthQuotaKey, monthRefundKey, poolSpendKey, ratesForModel } from "../js/logic.js";
+import { attemptQuotaKey, dailySpendKey, estimateInputTokens, estimateSpendMicro, inflightKey, lookupItemHoldMicro, lookupTypicalMicro, monthQuotaKey, monthRefundKey, poolSpendKey, ratesForModel } from "../js/logic.js";
 
 const src = fs.readFileSync(new URL("../api/worker.js", import.meta.url), "utf8");
 
@@ -126,8 +126,9 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.match(src, /lookupPriced/);
   assert.match(src, /partial: true/);
   assert.match(src, /modelFetch/);
-  assert.match(src, /90_000/);
-  assert.match(src, /signal: modelSignal/);
+  assert.match(src, /100_000|REQUEST_DEADLINE_MS/);
+  assert.match(src, /deadline\.signal/);
+  assert.match(src, /canContinue\(deadline\)/);
   assert.ok(src.indexOf("function modelFetch") < src.indexOf("async function callClaude"));
 });
 
@@ -180,11 +181,33 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
   const raceBatchStarted = new Promise(resolve => { markRaceBatchStarted = resolve; });
   let raceGate = null;
   let hangAnthropic = false;
+  let primFail = false;
+  let fallbackCalls = 0;
+  let abortEstimate = 0;
   globalThis.fetch = async (url, opts) => {
     const u = String(url);
     if (u.includes("googleapis.com")) return new Response(JSON.stringify(jwks), { status: 200, headers: { "content-type": "application/json" } });
     if (u.includes("api.anthropic.com")) {
+      if (primFail) {
+        anthropic += 1;
+        const body = JSON.parse(opts.body);
+        if (String(body.model).includes("sonnet")) {
+          fallbackCalls += 1;
+          await new Promise((resolve, reject) => {
+            const signal = opts && opts.signal;
+            const fail = () => reject(new DOMException("The operation was aborted", "AbortError"));
+            if (signal) {
+              if (signal.aborted) fail();
+              else signal.addEventListener("abort", fail, { once: true });
+            } else setTimeout(resolve, 5000);
+          });
+        }
+        await new Promise(r => setTimeout(r, 800));
+        return new Response(JSON.stringify({ error: { message: "bad model" }, usage: { input_tokens: 1000, output_tokens: 20 } }), { status: 400, headers: { "content-type": "application/json" } });
+      }
       if (hangAnthropic) {
+        const body = JSON.parse(opts.body);
+        abortEstimate += estimateSpendMicro({ input_tokens: estimateInputTokens(JSON.stringify(body.messages || [])), output_tokens: 0, web_search_requests: 0 });
         anthropic += 1;
         await new Promise((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error("model call was not aborted")), 5000);
@@ -475,7 +498,7 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     const hangLedger = new UsageLedger({ storage: { sql: hangSql } }, {});
     hangSql.rows.set("seeded:spend", 1);
     hangSql.rows.set("seeded:pool", 1);
-    const hangEnv = { ...envFor(hangLedger), MODEL_TIMEOUT_MS: "1500", PLAN_LIMIT_FREE: "20", FREE_DAILY_SPEND_CAP_USD: "10", FREE_SPEND_CAP_USD: "25" };
+    const hangEnv = { ...envFor(hangLedger), REQUEST_DEADLINE_MS: "1500", PLAN_LIMIT_FREE: "20", FREE_DAILY_SPEND_CAP_USD: "10", FREE_SPEND_CAP_USD: "25" };
     hangAnthropic = true;
     const hangStarted = Date.now();
     const firstHang = worker.fetch(new Request("https://gear-locker-api.example/lookup", {
@@ -501,6 +524,58 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     assert.equal(hung.status, 502, JSON.stringify(hungBody));
     assert.ok(Date.now() - hangStarted < 4000);
     assert.equal(hangSql.rows.get(flightNow) || 0, 0);
+    hangAnthropic = false;
+
+    primFail = true;
+    fallbackCalls = 0;
+    const pfSql = fakeSql();
+    const pfLedger = new UsageLedger({ storage: { sql: pfSql } }, {});
+    pfSql.rows.set("seeded:spend", 1);
+    pfSql.rows.set("seeded:pool", 1);
+    const pfEnv = { ...envFor(pfLedger), REQUEST_DEADLINE_MS: "1200", ROUND_FLOOR_MS: "500", PLAN_LIMIT_FREE: "20", FREE_DAILY_SPEND_CAP_USD: "10", FREE_SPEND_CAP_USD: "25" };
+    const pfStarted = Date.now();
+    const pfFirst = worker.fetch(new Request("https://gear-locker-api.example/lookup", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ items: [1, 2, 3, 4].map(n => ({ id: "pf" + n, name: "HANGME PRIMFAIL " + n, category: "Pouches" })) }),
+    }), pfEnv);
+    const pfFlight = inflightKey(sub, new Date());
+    const pfWait = Date.now() + 1000;
+    while ((pfSql.rows.get(pfFlight) || 0) < 4 && Date.now() < pfWait) await new Promise(r => setTimeout(r, 10));
+    assert.equal(pfSql.rows.get(pfFlight) || 0, 4);
+    const pfBusy = await worker.fetch(new Request("https://gear-locker-api.example/lookup", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ items: [5, 6, 7, 8].map(n => ({ id: "pf" + n, name: "HANGME PRIMFAIL " + n, category: "Pouches" })) }),
+    }), pfEnv);
+    const pfBusyBody = await pfBusy.json();
+    assert.equal(pfBusy.status, 429, JSON.stringify(pfBusyBody));
+    assert.match(pfBusyBody.error, /Try again in a moment/);
+    assert.equal(pfSql.rows.get(pfFlight) || 0, 4);
+    const pfDone = await pfFirst;
+    await pfDone.json();
+    assert.equal(fallbackCalls, 0);
+    assert.ok(Date.now() - pfStarted < 2500);
+    assert.equal(pfSql.rows.get(pfFlight) || 0, 0);
+    primFail = false;
+
+    hangAnthropic = true;
+    abortEstimate = 0;
+    const abSql = fakeSql();
+    const abLedger = new UsageLedger({ storage: { sql: abSql } }, {});
+    abSql.rows.set("seeded:spend", 1);
+    abSql.rows.set("seeded:pool", 1);
+    const abEnv = { ...envFor(abLedger), REQUEST_DEADLINE_MS: "120", PLAN_LIMIT_FREE: "20", FREE_DAILY_SPEND_CAP_USD: "10", FREE_SPEND_CAP_USD: "25" };
+    const abRes = await worker.fetch(new Request("https://gear-locker-api.example/lookup", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ items: [1, 2, 3, 4].map(n => ({ id: "ab" + n, name: "Abort " + n, category: "Pouches" })) }),
+    }), abEnv);
+    const abBody = await abRes.json();
+    assert.equal(abRes.status, 502, JSON.stringify(abBody));
+    assert.ok(abortEstimate > 0);
+    assert.equal(abSql.rows.get(dailySpendKey(sub, new Date())), abortEstimate);
+    assert.equal(abSql.rows.get(poolSpendKey(new Date())), abortEstimate);
     hangAnthropic = false;
   } finally {
     globalThis.fetch = orig;

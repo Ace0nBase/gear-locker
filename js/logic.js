@@ -249,8 +249,10 @@ export const FREE_INFLIGHT_LIMIT = 4;
 export const LOOKUP_BUSY = "Lookups are busy right now. Try again in a moment.";
 // Longer than a real lookup, shorter than leaving a dead request pinned all day.
 export const USAGE_HOLD_STALE_MS = 2 * 60 * 1000;
-// Model calls abort inside this, so a live request cannot outlast its hold.
-export const MODEL_TIMEOUT_MS = 90 * 1000;
+// One deadline for every model call in a request, inside the hold window.
+export const REQUEST_DEADLINE_MS = 100 * 1000;
+// Do not start a fallback or another round with less than this left.
+export const ROUND_FLOOR_MS = 30 * 1000;
 // The old lifetime pool counter belongs to the month it was already counting.
 export const POOL_SEED_KEY = "spend:free:2026-10";
 export const BUSY_RETRY_MS = [1000, 2000, 4000, 8000, 8000];
@@ -261,6 +263,31 @@ export function busyQueueStep(tries, waits) {
   const n = Math.max(0, Math.floor(+tries || 0));
   if (n < list.length) return { retry: true, waitMs: list[n], stop: false };
   return { retry: false, waitMs: 0, stop: true };
+}
+
+export function requestDeadline(nowMs, budgetMs) {
+  const start = nowMs == null || nowMs === "" ? Date.now() : Math.round(+nowMs);
+  const raw = budgetMs == null || budgetMs === "" ? REQUEST_DEADLINE_MS : Math.round(+budgetMs);
+  const budget = Number.isFinite(raw) && raw > 0 ? raw : REQUEST_DEADLINE_MS;
+  return { start, end: start + budget };
+}
+
+export function deadlineRemaining(deadline, nowMs) {
+  if (!deadline || deadline.end == null) return REQUEST_DEADLINE_MS;
+  return Math.max(0, Math.round(+deadline.end) - Math.round(+nowMs || Date.now()));
+}
+
+// The first call of a request may start. A later round or a fallback needs the floor.
+export function roundAllowed(deadline, nowMs, floorMs) {
+  if (!deadline || deadline.end == null) return true;
+  const floor = floorMs == null || floorMs === "" ? ROUND_FLOOR_MS : Math.max(0, Math.round(+floorMs));
+  return deadlineRemaining(deadline, nowMs) >= floor;
+}
+
+// After October 2026 the lifetime pool key is no longer the current month.
+export function poolLifetimeExpired(now) {
+  const d = now instanceof Date && !isNaN(now.getTime()) ? now : new Date(now || Date.now());
+  return d.getUTCFullYear() > 2026 || (d.getUTCFullYear() === 2026 && d.getUTCMonth() + 1 > 10);
 }
 
 function utcDateOnly(date) {
@@ -2366,7 +2393,7 @@ const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, attemptQuotaKey, dailySpendKey, poolSpendKey, inflightKey, alertQuotaKey, monthQuotaKey, monthRefundKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
-  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, BUSY_RETRY_MS, busyQueueStep, MODEL_TIMEOUT_MS, USAGE_HOLD_STALE_MS, POOL_SEED_KEY, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
+  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, BUSY_RETRY_MS, busyQueueStep, REQUEST_DEADLINE_MS, ROUND_FLOOR_MS, requestDeadline, roundAllowed, poolLifetimeExpired, USAGE_HOLD_STALE_MS, POOL_SEED_KEY, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupPriced, lookupBatchAllowance,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, DELETED_USER_TTL_MS, deletedUserExpireAt, tombstoneDue, LOOKUPS_PAUSED,

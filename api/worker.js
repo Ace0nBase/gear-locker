@@ -16,7 +16,7 @@
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced, lookupTypicalMicro, operationTypicalMicro, poolSpendKey, inflightKey, FREE_INFLIGHT_LIMIT, MONTHLY_REFUND_CAP } from "../js/logic.js";
+import { decideAccess, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced, lookupTypicalMicro, operationTypicalMicro, poolSpendKey, inflightKey, FREE_INFLIGHT_LIMIT, MONTHLY_REFUND_CAP, REQUEST_DEADLINE_MS, ROUND_FLOOR_MS, roundAllowed } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
 import { serviceAccountLogLine, sweepTombstones } from "./firestore-admin.js";
@@ -157,18 +157,40 @@ function loopCeiling(env, model, messages, maxTokens, searches, searchedAlready)
     web_search_requests: n,
   }, ratesForModel(env, model));
 }
-const MODEL_TIMEOUT_MS = 90_000;
-function modelSignal(env) {
-  const ms = Math.max(1, Math.round(+(env && env.MODEL_TIMEOUT_MS) || MODEL_TIMEOUT_MS));
-  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") return AbortSignal.timeout(ms);
-  const ctrl = new AbortController();
-  setTimeout(() => ctrl.abort(), ms);
-  return ctrl.signal;
+function configuredMs(raw, fallback) {
+  if (raw == null || String(raw).trim() === "") return fallback;
+  const n = Math.round(+raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
-function modelFetch(env, url, opts) {
-  return fetch(url, { ...(opts || {}), signal: modelSignal(env) });
+function isAbortError(e) {
+  return !!(e && (e.name === "AbortError" || e.aborted || /abort/i.test(String(e.message || ""))));
 }
-async function callClaude(env, model, it, budget) {
+function openDeadline(env) {
+  const budget = configuredMs(env && env.REQUEST_DEADLINE_MS, REQUEST_DEADLINE_MS);
+  const floor = configuredMs(env && env.ROUND_FLOOR_MS, ROUND_FLOOR_MS);
+  const start = Date.now();
+  let signal;
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") signal = AbortSignal.timeout(budget);
+  else {
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), budget);
+    signal = ctrl.signal;
+  }
+  return { start, end: start + budget, signal, floor };
+}
+function canContinue(deadline) {
+  return roundAllowed(deadline, Date.now(), deadline && deadline.floor);
+}
+function modelFetch(env, url, opts, deadline) {
+  const signal = deadline && deadline.signal ? deadline.signal : openDeadline(env).signal;
+  return fetch(url, { ...(opts || {}), signal });
+}
+function billAbort(env, model, messages, usage, spent) {
+  const estimate = { input_tokens: estimateInputTokens(JSON.stringify(messages || "")), output_tokens: 0, web_search_requests: 0 };
+  const next = addUsage(usage, estimate);
+  return { usage: next, spent: Math.max(0, Math.round(+spent || 0)) + spendOf(env, model, estimate) };
+}
+async function callClaude(env, model, it, budget, deadline) {
   const spec = MODEL_CALLS.lookup;
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: spec.searches }];
   const messages = [{ role: "user", content: prompt(it) }];
@@ -177,7 +199,7 @@ async function callClaude(env, model, it, budget) {
       method: "POST",
       headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: claudeBody(model, { max_tokens: maxTokens, ...(withTools ? { tools } : {}), messages }),
-    });
+    }, deadline);
     const data = await r.json().catch(() => ({}));
     if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.status = r.status; e.usage = usageFromResponse(data); throw e; }
     return data;
@@ -190,6 +212,16 @@ async function callClaude(env, model, it, budget) {
   let askedJson = false;
   let searched = false;
   for (let i = 0; i < spec.rounds; i++) {
+    if (deadline && deadline.signal && deadline.signal.aborted) {
+      const e = new Error("The operation was aborted");
+      e.name = "AbortError";
+      e.aborted = true;
+      const billed = billAbort(env, model, messages, usage, spent);
+      e.usage = billed.usage;
+      e.spent = billed.spent;
+      throw e;
+    }
+    if (i > 0 && !canContinue(deadline)) break;
     const searching = !askedJson && (i === 0 || (data && data.stop_reason === "pause_turn"));
     const searches = searching ? spec.searches : 0;
     if (limit != null && !roundFits(spent, estimateSpendMicro({
@@ -199,6 +231,13 @@ async function callClaude(env, model, it, budget) {
     }, ratesForModel(env, model)), limit)) break;
     try { data = await send(spec.maxTokens, searching); }
     catch (e) {
+      if (isAbortError(e)) {
+        const billed = billAbort(env, model, messages, usage, spent);
+        e.aborted = true;
+        e.usage = billed.usage;
+        e.spent = billed.spent;
+        throw e;
+      }
       const roundUsage = e.usage;
       usage = addUsage(usage, roundUsage);
       spent += spendOf(env, model, roundUsage);
@@ -241,20 +280,30 @@ function parseResult(data) {
 }
 
 const CATS = GEAR_CATEGORIES;
-async function identify(env, img, hint) {
+async function identify(env, img, hint, deadline) {
+  deadline = deadline || openDeadline(env);
   const priced = pricedPhotoCategories(CATS);
   const ask = `This photo shows one piece of tactical, outdoor, shooting or medical gear that the owner wants to add to their inventory app.${hint ? ` They called it: "${hint}".` : ""}
 Identify it. Look for logos, labels, tags, stitching patterns and distinctive design to name the maker and model if you can; if you can't tell the maker, say what kind of item it is.
 If the photo is a firearm, suppressor, lower receiver, magazine, ammunition belt, trigger part, or auto-fire device, set category to "". A plate carrier or chest rig uses Armor & Carriers. A battle belt, duty belt, or rigger's belt uses Belts. Do not mention a price or a place to buy it.
 Reply with ONLY this JSON object:
 {"name": "short item name, e.g. 'Double M4 mag pouch' or 'IFAK pouch'", "brand": "maker and model if identifiable with reasonable confidence, else empty string", "category": one of ${JSON.stringify(priced)} or "", "color": "color or camo pattern", "confidence": "high|medium|low", "summary": "one short sentence on what it looks like and what gave it away"}`;
-  const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: claudeBody(env.MODEL || "claude-haiku-5-5", { max_tokens: MODEL_CALLS.identify.maxTokens, messages: [{ role: "user", content: [
-      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: img } },
-      { type: "text", text: ask } ] }] }),
-  });
+  let r;
+  try {
+    r = await modelFetch(env, "https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: claudeBody(env.MODEL || "claude-haiku-5-5", { max_tokens: MODEL_CALLS.identify.maxTokens, messages: [{ role: "user", content: [
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: img } },
+        { type: "text", text: ask } ] }] }),
+    }, deadline);
+  } catch (e) {
+    if (isAbortError(e)) {
+      e.aborted = true;
+      e.usage = { input_tokens: estimateInputTokens(ask), output_tokens: 0, web_search_requests: 0 };
+    }
+    throw e;
+  }
   const data = await r.json().catch(() => ({}));
   const usage = usageFromResponse(data);
   if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.usage = usage; throw e; }
@@ -287,7 +336,8 @@ function priceRouteBlocked(it) {
   if (category === "Magazines" || category === "Magazines & Belts") return true;
   return saleRestricted(it || {});
 }
-async function dealCheck(env, w, budget) {
+async function dealCheck(env, w, budget, deadline) {
+  deadline = deadline || openDeadline(env);
   if (priceRouteBlocked(w)) return { price: null, where: "", url: "", condition: "", note: "", date: localDay(new Date()), hit: false, usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 } };
   const spec = MODEL_CALLS.deal;
   const model = env.MODEL || "claude-haiku-5-5";
@@ -295,10 +345,20 @@ async function dealCheck(env, w, budget) {
   const messages = [{ role: "user", content: dealPrompt(w) }];
   let data, all = [], usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
+    if (i > 0 && !canContinue(deadline)) break;
     if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, spec.searches, searched), budget)) break;
-    const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST",
-      headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) });
+    let r;
+    try {
+      r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST",
+        headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) }, deadline);
+    } catch (e) {
+      if (!isAbortError(e)) throw e;
+      const billed = billAbort(env, model, messages, usage, spent);
+      e.aborted = true;
+      e.usage = billed.usage;
+      throw e;
+    }
     data = await r.json().catch(() => ({}));
     const roundUsage = usageFromResponse(data);
     usage = addUsage(usage, roundUsage);
@@ -597,7 +657,7 @@ async function runDueWatches(env, budget) {
     if (!hold.ok) continue;
     const wasHit = !!(w.best && w.best.hit);
     try {
-      const b = await dealCheck(env, w, hold.reserved || null);
+      const b = await dealCheck(env, w, hold.reserved || null, openDeadline(env));
       const spentUsage = b.usage;
       delete b.usage;
       w.best = b; w.lastErr = "";
@@ -616,7 +676,8 @@ async function runDueWatches(env, budget) {
 }
 
 /* ---------- battery facts for a device ---------- */
-async function batteryLookup(env, d, budget) {
+async function batteryLookup(env, d, budget, deadline) {
+  deadline = deadline || openDeadline(env);
   const ask = `What battery does this device use, and how long does it normally last?
 Device: ${d.brand} ${d.name} (${d.category}${d.type ? ", " + d.type : ""})
 Use web search (at most 2 searches) on the maker's spec page or manual. If it uses no battery at all (iron sights, tritium/fiber optic, non-illuminated magnifier), say so.
@@ -629,8 +690,18 @@ Reply with ONLY this JSON:
   const messages = [{ role: "user", content: ask }];
   let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
+    if (i > 0 && !canContinue(deadline)) break;
     if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, spec.searches, searched), budget)) break;
-    const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) });
+    let r;
+    try {
+      r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) }, deadline);
+    } catch (e) {
+      if (!isAbortError(e)) throw e;
+      const billed = billAbort(env, model, messages, usage, spent);
+      e.aborted = true;
+      e.usage = billed.usage;
+      throw e;
+    }
     data = await r.json().catch(() => ({}));
     const roundUsage = usageFromResponse(data);
     usage = addUsage(usage, roundUsage);
@@ -647,7 +718,8 @@ Reply with ONLY this JSON:
 }
 
 /* ---------- PACE plan builder ---------- */
-async function paceBuild(env, b, budget) {
+async function paceBuild(env, b, budget, deadline) {
+  deadline = deadline || openDeadline(env);
   const fl = b.freqs.map(f => `${f.i}: ${f.name} | ${f.rx} MHz${f.duplex === "+" || f.duplex === "-" ? ` ${f.duplex}${f.offset}` : f.duplex === "split" ? ` tx ${f.tx}` : f.duplex === "off" ? " rx-only" : " simplex"}${f.tone ? " " + f.tone : ""} | ${f.mode} | ${f.service}${f.group ? " | " + f.group : ""}${f.notes ? " | " + f.notes : ""}${f.onRadio ? " | programmed" : " | not on a radio"}`).join("\n");
   const ask = `Build a practical communications PACE plan (Primary, Alternate, Contingency, Emergency).
 
@@ -687,8 +759,18 @@ Reply with ONLY this JSON:
   const messages = [{ role: "user", content: ask }];
   let data = null, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
+    if (i > 0 && !canContinue(deadline)) break;
     if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, searches, searched), budget)) break;
-    const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, ...(searches ? { tools } : {}), messages }) });
+    let r;
+    try {
+      r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, ...(searches ? { tools } : {}), messages }) }, deadline);
+    } catch (e) {
+      if (!isAbortError(e)) throw e;
+      const billed = billAbort(env, model, messages, usage, spent);
+      e.aborted = true;
+      e.usage = billed.usage;
+      throw e;
+    }
     data = await r.json().catch(() => ({}));
     const roundUsage = usageFromResponse(data);
     usage = addUsage(usage, roundUsage);
@@ -699,11 +781,20 @@ Reply with ONLY this JSON:
     messages.push({ role: "assistant", content: data.content });
   }
   let j = data ? findJson(textOf(data.content), ["steps"]) : null;
-  if (!j && data && (budget == null || roundFits(spent, loopCeiling(env, model, messages, MODEL_CALLS.paceFollow.maxTokens, 0), budget))) {
+  if (!j && data && canContinue(deadline) && (budget == null || roundFits(spent, loopCeiling(env, model, messages, MODEL_CALLS.paceFollow.maxTokens, 0), budget))) {
     messages.push({ role: "assistant", content: (data.content || []).filter(x => x.type !== "text" || (x.text || "").trim()) });
     messages.push({ role: "user", content: "Now reply with ONLY the JSON object described above. No other text." });
-    if (budget == null || roundFits(spent, loopCeiling(env, model, messages, MODEL_CALLS.paceFollow.maxTokens, 0), budget)) {
-      const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: MODEL_CALLS.paceFollow.maxTokens, messages }) });
+    if (canContinue(deadline) && (budget == null || roundFits(spent, loopCeiling(env, model, messages, MODEL_CALLS.paceFollow.maxTokens, 0), budget))) {
+      let r;
+      try {
+        r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: MODEL_CALLS.paceFollow.maxTokens, messages }) }, deadline);
+      } catch (e) {
+        if (!isAbortError(e)) throw e;
+        const billed = billAbort(env, model, messages, usage, spent);
+        e.aborted = true;
+        e.usage = billed.usage;
+        throw e;
+      }
       data = await r.json().catch(() => ({}));
       const roundUsage = usageFromResponse(data);
       usage = addUsage(usage, roundUsage);
@@ -718,7 +809,8 @@ Reply with ONLY this JSON:
   for (const k of ["p", "a", "c", "e"]) { const s = j.steps[k] || {}; steps[k] = { method: S(s.method, 30), f: Number.isInteger(s.f) && s.f >= 0 && s.f < b.freqs.length ? s.f : null, n: Number.isInteger(s.n) && s.n >= 0 && s.n < nf.length ? s.n : null, detail: S(s.detail, 200), when: S(s.when, 120) }; }
   return { result: { name: S(j.name, 40), summary: S(j.summary, 200), steps, checkin: S(j.checkin, 120), rally: S(j.rally, 160), codes: S(j.codes, 160), newFreqs: nf, gaps: (Array.isArray(j.gaps) ? j.gaps : []).slice(0, 6).map(g => S(g, 160)) }, usage };
 }
-async function lookupOne(env, it, budget) {
+async function lookupOne(env, it, budget, deadline) {
+  deadline = deadline || openDeadline(env);
   const clean = {
     id: String(it.id || "").slice(0, 80), name: String(it.name || "").slice(0, 120), brand: String(it.brand || "").slice(0, 120),
     category: String(it.category || "").slice(0, 60), condition: String(it.condition || "Good").slice(0, 20), color: String(it.color || "").slice(0, 40),
@@ -734,16 +826,16 @@ async function lookupOne(env, it, budget) {
   const limit = budget == null ? null : budget;
   const fallbackCeiling = () => loopCeiling(env, env.FALLBACK_MODEL, [{ role: "user", content: prompt(clean) }], MODEL_CALLS.lookup.maxTokens, MODEL_CALLS.lookup.searches, false);
   try {
-    data = await callClaude(env, primary, clean, { limit, spent: 0 });
+    data = await callClaude(env, primary, clean, { limit, spent: 0 }, deadline);
     usage = addUsage(usage, data.usage);
     spendMicro = data.spent || 0;
   }
   catch (e) {
     usage = addUsage(usage, e.usage);
     spendMicro = e.spent != null ? e.spent : spendOf(env, primary, e.usage);
-    if (env.FALLBACK_MODEL && (e.status === 400 || e.status === 404) && (limit == null || roundFits(spendMicro, fallbackCeiling(), limit))) {
+    if (!isAbortError(e) && canContinue(deadline) && env.FALLBACK_MODEL && (e.status === 400 || e.status === 404) && (limit == null || roundFits(spendMicro, fallbackCeiling(), limit))) {
       try {
-        data = await callClaude(env, env.FALLBACK_MODEL, clean, { limit, spent: spendMicro });
+        data = await callClaude(env, env.FALLBACK_MODEL, clean, { limit, spent: spendMicro }, deadline);
         usage = addUsage(usage, data.usage);
         spendMicro = data.spent || spendMicro;
       }
@@ -871,7 +963,8 @@ export default {
         const watchHold = await reserveCall(env, user, "deal", 1, { alertAdd: 1, inputTokens: estimateInputTokens(JSON.stringify(body)) });
         if (!watchHold.ok) return json({ error: watchHold.error || "Try again tomorrow." }, watchHold.status || 429, h);
         try {
-          const b = await dealCheck(env, w, watchHold.reserved || null);
+          const deadline = openDeadline(env);
+          const b = await dealCheck(env, w, watchHold.reserved || null, deadline);
           await settleCall(ctx, finishCall(env, watchHold.id, watchHold.reserved, b.usage, spendExtra(watchHold)));
           delete b.usage;
           w.best = b; w.lastErr = "";
@@ -890,7 +983,8 @@ export default {
       const paceHold = await reserveCall(env, user, "pace", 1, { inputTokens: estimateInputTokens(JSON.stringify(b)) });
       if (!paceHold.ok) return json({ error: paceHold.error }, paceHold.status, h);
       try {
-        const built = await paceBuild(env, b, paceHold.reserved || null);
+        const deadline = openDeadline(env);
+        const built = await paceBuild(env, b, paceHold.reserved || null, deadline);
         await settleCall(ctx, finishCall(env, paceHold.id, paceHold.reserved, built.usage, spendExtra(paceHold)));
         return json({ result: built.result }, 200, h);
       }
@@ -901,7 +995,8 @@ export default {
       const battHold = await reserveCall(env, user, "battery", 1, { inputTokens: estimateInputTokens(JSON.stringify(body)) });
       if (!battHold.ok) return json({ error: battHold.error }, battHold.status, h);
       try {
-        const found = await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) }, battHold.reserved || null);
+        const deadline = openDeadline(env);
+        const found = await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) }, battHold.reserved || null, deadline);
         await settleCall(ctx, finishCall(env, battHold.id, battHold.reserved, found.usage, spendExtra(battHold)));
         return json({ result: found.result }, 200, h);
       }
@@ -918,7 +1013,8 @@ export default {
       const idHold = await reserveCall(env, user, "identify", 1, { inputTokens: estimateInputTokens(String(body.hint || "") + String(body.category || "")) });
       if (!idHold.ok) return json({ error: idHold.error }, idHold.status, h);
       try {
-        const found = await identify(env, img, String(body.hint || "").slice(0, 80));
+        const deadline = openDeadline(env);
+        const found = await identify(env, img, String(body.hint || "").slice(0, 80), deadline);
         await settleCall(ctx, finishCall(env, idHold.id, idHold.reserved, found.usage, spendExtra(idHold)));
         return json({ result: found.result }, 200, h);
       }
@@ -954,7 +1050,8 @@ export default {
     refused = accepted.slice(charged).map(it => ({ id: String((it && it.id) || ""), ok: false, error: lookBill.refusedError || allowance.error })).concat(refused);
     if (!run.length) return json({ error: lookBill.refusedError || allowance.error, results: refused }, 429, h);
 
-    const packed = await Promise.all(run.map((it, i) => lookupOne(env, it, lookBill.reserved ? budgets[i] : null).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160), usage: e.usage, spendMicro: e.spendMicro }))));
+    const deadline = openDeadline(env);
+    const packed = await Promise.all(run.map((it, i) => lookupOne(env, it, lookBill.reserved ? budgets[i] : null, deadline).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160), usage: e.usage, spendMicro: e.spendMicro }))));
     let actual = 0;
     const results = packed.map(r => {
       actual += Math.max(0, Math.round(Number.isFinite(+r.spendMicro) ? +r.spendMicro : estimateSpendMicro(r.usage, spendRates(env))));
