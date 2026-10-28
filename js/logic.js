@@ -247,6 +247,8 @@ export function inflightKey(uid, date) {
 
 export const FREE_INFLIGHT_LIMIT = 4;
 export const LOOKUP_BUSY = "Lookups are busy right now. Try again in a moment.";
+// Longer than a real lookup, shorter than leaving a dead request pinned all day.
+export const USAGE_HOLD_STALE_MS = 2 * 60 * 1000;
 
 function utcDateOnly(date) {
   const d = date instanceof Date && !isNaN(date.getTime()) ? date : new Date(date || Date.now());
@@ -607,15 +609,15 @@ export function lookupTypicalMicro(env) {
   }, spendRates(env));
 }
 
-// A few cents for one identify, battery, pace, or deal call. Not the worst-case hold.
+// One real call, not the worst-case hold. Photo ID includes the image. The others include their searches.
 export function operationTypicalMicro(env, op) {
   const name = op || "lookup";
   if (name === "lookup") return lookupTypicalMicro(env);
   const shapes = {
-    identify: { input_tokens: 8000, output_tokens: 400, web_search_requests: 0 },
-    battery: { input_tokens: 4000, output_tokens: 500, web_search_requests: 2 },
-    pace: { input_tokens: 6000, output_tokens: 800, web_search_requests: 2 },
-    deal: { input_tokens: 4000, output_tokens: 500, web_search_requests: 2 },
+    identify: { input_tokens: MODEL_CALLS.identify.promptTokens, output_tokens: MODEL_CALLS.identify.maxTokens, web_search_requests: 0 },
+    battery: { input_tokens: MODEL_CALLS.battery.promptTokens + 4000, output_tokens: 600, web_search_requests: MODEL_CALLS.battery.searches },
+    pace: { input_tokens: MODEL_CALLS.pace.promptTokens + MODEL_CALLS.paceFollow.promptTokens, output_tokens: 1200, web_search_requests: MODEL_CALLS.pace.searches },
+    deal: { input_tokens: MODEL_CALLS.deal.promptTokens + 2000, output_tokens: 600, web_search_requests: MODEL_CALLS.deal.searches },
   };
   return estimateSpendMicro(shapes[name] || shapes.deal, spendRates(env));
 }

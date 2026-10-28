@@ -126,3 +126,55 @@ test("the hourly sweep deletes expireAt hits by age, then walks markers with no 
     resetFirestoreTokenCache();
   }
 });
+
+test("a bad tombstone cursor is deleted and the next run can list again", async () => {
+  resetFirestoreTokenCache();
+  const { privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const pem = privateKey.export({ type: "pkcs8", format: "pem" });
+  const kv = new Map([["tombstone:cursor", "bad-cursor"]]);
+  const env = {
+    FIREBASE_PROJECT: "demo",
+    FIREBASE_SA_JSON: JSON.stringify({
+      client_email: "sweep@example.iam.gserviceaccount.com",
+      private_key: pem,
+    }),
+    WATCH: {
+      get: async (key) => kv.get(key) || null,
+      put: async (key, value) => { kv.set(key, value); },
+      delete: async (key) => { kv.delete(key); },
+    },
+  };
+  const logs = [];
+  const orig = console.log;
+  console.log = (...args) => logs.push(args.join(" "));
+  const oldAt = new Date(NOW - DELETED_USER_TTL_MS - 5000).toISOString();
+  let listed = 0;
+  const fetchImpl = async (url, opts) => {
+    const u = String(url);
+    const method = String(opts && opts.method || "GET");
+    const json = (status, data) => ({ status, ok: status >= 200 && status < 300, json: async () => data, text: async () => "" });
+    if (u.includes("oauth2.googleapis.com")) return json(200, { access_token: "tok", expires_in: 3600 });
+    if (method === "POST" && u.includes(":runQuery")) return json(200, [{}]);
+    if (method === "DELETE") return json(200, {});
+    listed++;
+    const token = new URL(u).searchParams.get("pageToken") || "";
+    if (token === "bad-cursor") return json(400, { error: { message: "bad page secret-user-cursor" } });
+    return json(200, {
+      documents: [doc("aged-user", { at: { stringValue: oldAt } })],
+    });
+  };
+  try {
+    const first = await sweepTombstones(env, fetchImpl, NOW, { pageSize: 2, deleteBudget: 10 });
+    assert.equal(first.deleted, 0);
+    assert.equal(kv.has("tombstone:cursor"), false);
+    assert.equal(logs.includes("tombstones: cursor reset"), true);
+    assert.equal(logs.join("\n").includes("secret-user"), false);
+    assert.equal(logs.join("\n").includes("bad-cursor"), false);
+    const second = await sweepTombstones(env, fetchImpl, NOW, { pageSize: 2, deleteBudget: 10 });
+    assert.equal(second.deleted, 1);
+    assert.equal(listed, 2);
+  } finally {
+    console.log = orig;
+    resetFirestoreTokenCache();
+  }
+});

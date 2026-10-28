@@ -5,10 +5,11 @@
 // The class extends DurableObject so the real binding exposes these methods over RPC.
 
 import { DurableObject } from "cloudflare:workers";
-import { applyReserve, applyReconcile, quotaCounterExpired } from "../js/logic.js";
+import { applyReserve, applyReconcile, quotaCounterExpired, USAGE_HOLD_STALE_MS } from "../js/logic.js";
 
 const SPEND = "spend:free";
 const SEEDED = "seeded:spend";
+const POOL_SEEDED = "seeded:pool";
 
 export class UsageLedger extends DurableObject {
   constructor(ctx, env) {
@@ -41,14 +42,82 @@ export class UsageLedger extends DurableObject {
     this.ctx.storage.sql.exec("DELETE FROM kv WHERE k = ?", k).toArray();
   }
 
+  _keys() {
+    return this._rows("SELECT k FROM kv").map(row => String(row.k));
+  }
+
+  // Copy the lifetime pool into this month once. max(old ledger, old KV, month already recorded).
+  _seedPool(spendKey, kvSpend) {
+    if (!/^spend:free:\d{4}-\d{2}$/.test(String(spendKey || ""))) return false;
+    if (this._has(POOL_SEEDED)) return false;
+    const kvKnown = kvSpend != null && kvSpend !== "";
+    if (!kvKnown && !this._has(SPEND)) return false;
+    const oldLedger = this._get(SPEND);
+    const oldKv = kvKnown ? Math.max(0, Math.round(+kvSpend || 0)) : 0;
+    const cur = this._get(spendKey);
+    this._put(spendKey, Math.max(oldLedger, oldKv, cur));
+    this._put(POOL_SEEDED, 1);
+    return true;
+  }
+
+  _releaseStale(id, uid, day, spendKey) {
+    const holdKey = "hold:" + id;
+    if (this._has(holdKey)) {
+      const reserved = Math.max(0, this._get(holdKey));
+      const month = day ? String(day).slice(0, 7) : "";
+      const key = month ? "spend:free:" + month : (spendKey || SPEND);
+      if (reserved) this._put(key, Math.max(0, this._get(key) - reserved));
+      this._del(holdKey);
+    }
+    this._del("ht:" + id);
+    const flightMark = "flight:" + id;
+    if (this._has(flightMark)) {
+      const n = Math.max(0, this._get(flightMark));
+      if (uid && day && n) {
+        const agg = "if:" + uid + ":" + day;
+        this._put(agg, Math.max(0, this._get(agg) - n));
+      }
+      this._del(flightMark);
+    }
+    if (uid && day) this._del("if:" + uid + ":" + day + ":" + id);
+    const dh = "dh:" + id;
+    if (this._has(dh)) {
+      if (uid && day) {
+        const ds = "ds:" + uid + ":" + day;
+        this._put(ds, Math.max(0, this._get(ds) - this._get(dh)));
+      }
+      this._del(dh);
+    }
+  }
+
+  _expireStale(nowMs, spendKey) {
+    const now = Math.round(+nowMs || Date.now());
+    const cutoff = now - USAGE_HOLD_STALE_MS;
+    const keys = this._keys();
+    for (const k of keys) {
+      const entry = k.match(/^if:([^:]+):(\d{4}-\d{2}-\d{2}):(.+)$/);
+      if (!entry) continue;
+      if (this._get(k) > cutoff) continue;
+      this._releaseStale(entry[3], entry[1], entry[2], spendKey);
+    }
+    for (const k of this._keys()) {
+      if (!k.startsWith("ht:")) continue;
+      if (this._get(k) > cutoff) continue;
+      this._releaseStale(k.slice(3), "", "", spendKey);
+    }
+  }
+
   reserve(req) {
     req = req || {};
     const spendKey = String(req.spendKey || SPEND);
+    const now = Math.round(+req.now || Date.now());
     // A monthly pool key starts at 0. The lifetime seed applies only when no month key was named.
     if (!req.spendKey && req.seedSpend != null && req.seedSpend !== "" && !this._has(SEEDED)) {
       this._put(SPEND, Math.max(this._get(SPEND), Math.max(0, Math.round(+req.seedSpend || 0))));
       this._put(SEEDED, 1);
     }
+    const poolSeeded = this._seedPool(spendKey, req.seedSpend);
+    this._expireStale(now, spendKey);
     const flightKey = String(req.inflightKey || "");
     const state = {
       spend: this._get(spendKey),
@@ -59,7 +128,7 @@ export class UsageLedger extends DurableObject {
       inflight: flightKey ? this._get(flightKey) : 0,
     };
     const out = applyReserve(state, req);
-    if (!out.ok) return { ok: false, status: out.status, error: out.error, reserved: 0, charged: 0, dailyHeld: 0 };
+    if (!out.ok) return { ok: false, status: out.status, error: out.error, reserved: 0, charged: 0, dailyHeld: 0, poolSeeded };
     this._put(spendKey, out.state.spend);
     if (req.dailySpendKey) this._put(req.dailySpendKey, out.state.dailySpend);
     if (req.dailyKey && out.state.daily !== state.daily) this._put(req.dailyKey, out.state.daily);
@@ -68,15 +137,25 @@ export class UsageLedger extends DurableObject {
     if (flightKey) this._put(flightKey, out.state.inflight);
     const id = String(req.id || "");
     // A zero hold still marks the call, so a quota refund can run once and a repeat reconcile cannot.
-    if (id) this._put("hold:" + id, out.reserved);
-    if (id && flightKey && out.charged) this._put("flight:" + id, out.charged);
-    return { ok: true, status: 200, error: "", reserved: out.reserved, id, charged: out.charged, dailyHeld: out.dailyHeld || 0, refusedError: out.refusedError || "" };
+    if (id) {
+      this._put("hold:" + id, out.reserved);
+      this._put("ht:" + id, now);
+    }
+    if (id && flightKey && out.charged) {
+      this._put("flight:" + id, out.charged);
+      this._put(flightKey + ":" + id, now);
+    }
+    if (id && out.dailyHeld) this._put("dh:" + id, out.dailyHeld);
+    return { ok: true, status: 200, error: "", reserved: out.reserved, id, charged: out.charged, dailyHeld: out.dailyHeld || 0, refusedError: out.refusedError || "", poolSeeded };
   }
 
   reconcile(req) {
     req = req || {};
     const id = String(req.id || "");
     const spendKey = String(req.spendKey || SPEND);
+    const now = Math.round(+req.now || Date.now());
+    this._seedPool(spendKey, req.seedSpend);
+    this._expireStale(now, spendKey);
     const holdKey = id ? "hold:" + id : "";
     if (holdKey && !this._has(holdKey)) return { ok: true, duplicate: true, spend: this._get(spendKey), billed: 0, refunded: 0 };
     const reserved = holdKey ? this._get(holdKey) : Math.max(0, Math.round(+req.reserved || 0));
@@ -96,11 +175,16 @@ export class UsageLedger extends DurableObject {
     if (out.refunded && refundKey && !req.skipMonth) this._put(refundKey, out.state.refunds);
     if (dailySpendKey) this._put(dailySpendKey, out.state.dailySpend);
     if (holdKey) this._del(holdKey);
+    if (id) {
+      this._del("ht:" + id);
+      this._del("dh:" + id);
+    }
     const flightMark = id ? "flight:" + id : "";
     if (flightMark && this._has(flightMark)) {
       const n = Math.max(0, this._get(flightMark));
       const ik = String(req.inflightKey || "");
       if (ik && n) this._put(ik, Math.max(0, this._get(ik) - n));
+      if (ik) this._del(ik + ":" + id);
       this._del(flightMark);
     }
     return { ok: true, duplicate: false, spend: out.state.spend, billed: out.billed, refunded: out.refunded, daily: out.state.daily, month: out.state.month, refunds: out.state.refunds, dailySpend: out.state.dailySpend };
@@ -114,9 +198,13 @@ export class UsageLedger extends DurableObject {
 
   prune(req) {
     const now = req && req.now ? new Date(req.now) : new Date();
+    const spendKey = String((req && req.spendKey) || "");
+    this._expireStale(now.getTime(), spendKey);
+    const seeded = this._has(POOL_SEEDED);
     const rows = this._rows("SELECT k FROM kv");
     let removed = 0;
     for (const row of rows) {
+      if (row.k === SPEND && !seeded) continue;
       if (!quotaCounterExpired(row.k, now)) continue;
       this._del(row.k);
       removed++;

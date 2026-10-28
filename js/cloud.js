@@ -389,7 +389,7 @@ async function qaStorageCheckRun(){
   else toast("Storage check failed. Another account or a signed-out check was not blocked ("+otherCode+" / "+signedOutCode+").",6000);
 }
 }
-var APP_VERSION="51";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+var APP_VERSION="52";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 var swReloadPending=false;
 function showUpdateToast(){
   const el=$("toast");if(!el)return;
@@ -504,6 +504,7 @@ async function runLookups(ids,quiet){
   const lookupStop=/turned off|confirm your email|daily lookup limit|this month's lookups/i;
   const spendStop=/Today's lookup spending limit is reached/i;
   const busyWait=/try again in a moment/i;
+  const busyWaitMs=[1000,2000,4000,8000,8000];
   let busyTries=0;
   for(let k=0;k<ids.length;){
     const chunk=ids.slice(k,k+4);
@@ -512,12 +513,12 @@ async function runLookups(ids,quiet){
       const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));
       const again=[];
       res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const raw=String(r.error||"");if(busyWait.test(raw)){again.push(r.id);return}const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){const msg=lookupFailMessage(raw||"No result");markLookupError(it,msg);fail=fail||msg}if(lookupStop.test(raw))stop=true}});
-      if(again.length&&busyTries<5){busyTries++;chunk.forEach(id=>{if(!again.includes(id))lookingUp.delete(id)});ids.splice(k,chunk.length,...again);retry=true;await new Promise(r=>setTimeout(r,400))}
+      if(again.length&&busyTries<busyWaitMs.length){const wait=busyWaitMs[busyTries];busyTries++;chunk.forEach(id=>{if(!again.includes(id))lookingUp.delete(id)});ids.splice(k,chunk.length,...again);retry=true;await new Promise(r=>setTimeout(r,wait))}
       else if(again.length)again.forEach(id=>{const it=all.find(x=>x.id===id);if(it&&!it.deleted){const msg=lookupFailMessage("Lookups are busy right now. Try again in a moment.");markLookupError(it,msg);fail=fail||msg}});
     }
     catch(e){
       const raw=String(e&&e.message||"");
-      if(busyWait.test(raw)&&busyTries<5){busyTries++;retry=true;await new Promise(r=>setTimeout(r,400))}
+      if(busyWait.test(raw)&&busyTries<busyWaitMs.length){const wait=busyWaitMs[busyTries];busyTries++;retry=true;await new Promise(r=>setTimeout(r,wait))}
       else{fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);markLookupError(it,fail)});if(lookupStop.test(raw)||spendStop.test(raw)){ids.slice(k).forEach(id=>lookingUp.delete(id));render();await persist();refreshLookupDetail(ids.slice(k));break}}
     }
     if(retry)continue;

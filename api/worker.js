@@ -313,7 +313,19 @@ function usageStub(env) {
 async function pruneUsageCounters(env) {
   const stub = usageStub(env);
   if (!stub || typeof stub.prune !== "function") return;
-  try { await stub.prune({ now: new Date().toISOString() }); } catch {}
+  const now = new Date();
+  try { await stub.prune({ now: now.toISOString(), spendKey: poolSpendKey(now) }); } catch {}
+}
+async function legacyPoolSpend(env) {
+  if (!env || !env.WATCH || typeof env.WATCH.get !== "function") return 0;
+  try { return Math.max(0, Math.round(+(await env.WATCH.get("spend:free")) || 0)); }
+  catch { return null; }
+}
+function settleCall(ctx, promise) {
+  if (ctx && typeof ctx.waitUntil === "function") {
+    try { ctx.waitUntil(promise); } catch { /* the caller still awaits the same promise */ }
+  }
+  return promise;
 }
 async function reserveCall(env, user, op, count, extra) {
   extra = extra || {};
@@ -334,6 +346,7 @@ async function reserveCall(env, user, op, count, extra) {
   const flightKey = skipSpend ? "" : inflightKey(uid, day);
   const namedDaily = extra.dailyEach != null && extra.dailyEach !== "";
   const dailyEach = skipSpend ? 0 : (namedDaily ? Math.max(0, Math.round(+extra.dailyEach)) : operationTypicalMicro(env, op));
+  const legacySpend = await legacyPoolSpend(env);
   try {
     const reserved = await stub.reserve({
       id: crypto.randomUUID(),
@@ -358,8 +371,13 @@ async function reserveCall(env, user, op, count, extra) {
       spendKey,
       inflightKey: flightKey,
       inflightLimit: flightKey ? FREE_INFLIGHT_LIMIT : 0,
+      seedSpend: legacySpend,
+      now: day.getTime(),
     });
-    return { ...reserved, dailyKey, monthKey, refundKey, dailySpendKey: spendDayKey, spendKey, inflightKey: flightKey, skipSpend, skipMonth: review, dailyHeld: reserved.dailyHeld || 0 };
+    if (reserved.poolSeeded && env.WATCH && typeof env.WATCH.delete === "function") {
+      try { await env.WATCH.delete("spend:free"); } catch { /* the ledger already kept the balance */ }
+    }
+    return { ...reserved, dailyKey, monthKey, refundKey, dailySpendKey: spendDayKey, spendKey, inflightKey: flightKey, seedSpend: legacySpend, skipSpend, skipMonth: review, dailyHeld: reserved.dailyHeld || 0 };
   } catch {
     return { ok: false, status: 503, error: LOOKUPS_PAUSED, reserved: 0, charged: 0 };
   }
@@ -385,6 +403,8 @@ async function finishCall(env, id, reserved, usage, extra) {
       dailyHold: extra.skipSpend ? 0 : Math.max(0, Math.round(+extra.dailyHold || 0)),
       spendKey: extra.spendKey || "",
       inflightKey: extra.inflightKey || "",
+      seedSpend: extra.seedSpend,
+      now: Date.now(),
       skipMonth: !!extra.skipMonth,
     });
   } catch { /* the answer is already in hand */ }
@@ -403,6 +423,7 @@ function spendExtra(hold, extra) {
     dailyHold: extra.dailyHold != null ? extra.dailyHold : (hold.dailyHeld || 0),
     spendKey: hold.spendKey || "",
     inflightKey: hold.inflightKey || "",
+    seedSpend: hold.seedSpend,
   };
 }
 async function clearUsageForUser(env, uid) {
@@ -739,7 +760,7 @@ const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "http
 const ROUTES = ["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/watch/push", "/battery", "/ammo", "/pace"];
 
 export default {
-  async fetch(req, rawEnv) {
+  async fetch(req, rawEnv, ctx) {
     const env = { ...DEFAULTS };
     for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
     const h = cors(env, req);
@@ -840,10 +861,10 @@ export default {
         if (!watchHold.ok) return json({ error: watchHold.error || "Try again tomorrow." }, watchHold.status || 429, h);
         try {
           const b = await dealCheck(env, w, watchHold.reserved || null);
-          await finishCall(env, watchHold.id, watchHold.reserved, b.usage, spendExtra(watchHold));
+          await settleCall(ctx, finishCall(env, watchHold.id, watchHold.reserved, b.usage, spendExtra(watchHold)));
           delete b.usage;
           w.best = b; w.lastErr = "";
-        } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await finishCall(env, watchHold.id, watchHold.reserved, e.usage, spendExtra(watchHold)); }
+        } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await settleCall(ctx, finishCall(env, watchHold.id, watchHold.reserved, e.usage, spendExtra(watchHold))); }
         w.lastCheck = new Date().toISOString();
         await saveRec();
         return json(pub(), 200, h);
@@ -859,10 +880,10 @@ export default {
       if (!paceHold.ok) return json({ error: paceHold.error }, paceHold.status, h);
       try {
         const built = await paceBuild(env, b, paceHold.reserved || null);
-        await finishCall(env, paceHold.id, paceHold.reserved, built.usage, spendExtra(paceHold));
+        await settleCall(ctx, finishCall(env, paceHold.id, paceHold.reserved, built.usage, spendExtra(paceHold)));
         return json({ result: built.result }, 200, h);
       }
-      catch (e) { await finishCall(env, paceHold.id, paceHold.reserved, e.usage, spendExtra(paceHold)); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await settleCall(ctx, finishCall(env, paceHold.id, paceHold.reserved, e.usage, spendExtra(paceHold))); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/ammo") return json({ error: "Ammo price search is turned off." }, 410, h);
     if (url.pathname === "/battery") {
@@ -870,10 +891,10 @@ export default {
       if (!battHold.ok) return json({ error: battHold.error }, battHold.status, h);
       try {
         const found = await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) }, battHold.reserved || null);
-        await finishCall(env, battHold.id, battHold.reserved, found.usage, spendExtra(battHold));
+        await settleCall(ctx, finishCall(env, battHold.id, battHold.reserved, found.usage, spendExtra(battHold)));
         return json({ result: found.result }, 200, h);
       }
-      catch (e) { await finishCall(env, battHold.id, battHold.reserved, e.usage, spendExtra(battHold)); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await settleCall(ctx, finishCall(env, battHold.id, battHold.reserved, e.usage, spendExtra(battHold))); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/identify") {
       const subject = {
@@ -887,10 +908,10 @@ export default {
       if (!idHold.ok) return json({ error: idHold.error }, idHold.status, h);
       try {
         const found = await identify(env, img, String(body.hint || "").slice(0, 80));
-        await finishCall(env, idHold.id, idHold.reserved, found.usage, spendExtra(idHold));
+        await settleCall(ctx, finishCall(env, idHold.id, idHold.reserved, found.usage, spendExtra(idHold)));
         return json({ result: found.result }, 200, h);
       }
-      catch (e) { await finishCall(env, idHold.id, idHold.reserved, e.usage, spendExtra(idHold)); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await settleCall(ctx, finishCall(env, idHold.id, idHold.reserved, e.usage, spendExtra(idHold))); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     const max = +(env.MAX_ITEMS || 4);
     const items = Array.isArray(body.items) ? body.items.slice(0, max) : [];
@@ -931,11 +952,11 @@ export default {
       delete copy.spendMicro;
       return copy;
     }).concat(refused);
-    await finishCall(env, lookBill.id, lookBill.reserved, actual, spendExtra(lookBill, {
+    await settleCall(ctx, finishCall(env, lookBill.id, lookBill.reserved, actual, spendExtra(lookBill, {
       countRefund: run.length - packed.filter(lookupPriced).length,
       refundCap: MONTHLY_REFUND_CAP,
       dailyHold: lookBill.dailyHeld,
-    }));
+    })));
     const firstErr = results.find(r => !r.ok)?.error;
     if (results.every(r => !r.ok)) return json({ error: firstErr || "Lookup failed", results }, 502, h);
     return json({ results }, 200, h);

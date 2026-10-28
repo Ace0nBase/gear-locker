@@ -6,7 +6,7 @@ import {
   deleteRevenueCatCustomer, accountDeletePlan, accountPlan, USER_COLLECTIONS,
   signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
   clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, lookupItemHoldMicro, lookupTypicalMicro, operationTypicalMicro, priciestRates, spendRates, applyReserve, applyReconcile, DAILY_SPEND_FULL,
-  poolSpendKey, inflightKey, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, dailySpendKey,
+  poolSpendKey, inflightKey, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, dailySpendKey, USAGE_HOLD_STALE_MS,
   SEARCH_RESULT_TOKENS, roundFits, roundInputTokens, loanTargetsFromLends, loanRedactTargets, loansToMirror,
   deleteRetryRoute, runDeleteAttempt, SERVER_DELETE_STEPS, LOOKUPS_PAUSED,
   ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
@@ -166,8 +166,10 @@ test("a free spend hold is the worst case from the output cap and the search cou
   assert.equal(Math.floor(25e6 / lookupItemHoldMicro({})), 36);
   assert.ok(lookupTypicalMicro({}) < 50_000);
   assert.ok(lookupTypicalMicro({}) * 10 < 750_000);
-  for (const op of ["identify", "battery", "pace", "deal"]) assert.ok(operationTypicalMicro({}, op) > 0, op);
-  assert.ok(operationTypicalMicro({}, "identify") < 50_000);
+  for (const op of ["identify", "battery", "pace", "deal"]) {
+    assert.ok(operationTypicalMicro({}, op) >= 20_000, op);
+    assert.ok(operationTypicalMicro({}, op) < 100_000, op);
+  }
   assert.ok(lookupReserveMicro({ FALLBACK_MODEL: "" }) < lookupReserveMicro({}));
   assert.equal(lookupReserveMicro({}), lookupItemHoldMicro({}));
   assert.ok(priciestRates({}).outputPerMillion > spendRates({}).outputPerMillion);
@@ -450,6 +452,7 @@ test("old daily and monthly lookup counters are pruned and the current pool mont
   const drop = ["spend:free", "spend:free:2026-08", "q:user:2026-10-20", "t:user:2026-10-20", "ds:user:2026-10-20", "if:user:2026-10-20", "a:other:2026-10-01", "m:user:2026-08", "rf:user:2026-08", "m:other:2025-12"];
   for (const key of [...keep, ...drop]) sql.rows.set(key, key.startsWith("spend") ? 25000000 : 3);
   sql.rows.set("seeded:spend", 1);
+  sql.rows.set("seeded:pool", 1);
   const out = ledger.prune({ now: now.toISOString() });
   assert.equal(out.removed, drop.length);
   for (const key of keep) assert.equal(sql.rows.has(key), true, key);
@@ -582,6 +585,110 @@ test("the shared free pool starts over on the next UTC month", () => {
   assert.equal(sql.rows.has("spend:free:2026-09"), false);
   assert.equal(sql.rows.get(octKey), 25e6);
   assert.equal(sql.rows.get(novKey), 1000);
+});
+
+test("a $20 lifetime pool balance is copied into the current month before the old key can be pruned", () => {
+  const sql = fakeSql();
+  const ledger = ledgerWith(sql);
+  const month = "spend:free:2026-10";
+  const now = "2026-10-28T12:00:00Z";
+  sql.rows.set("spend:free", 20e6);
+  ledger.prune({ now });
+  assert.equal(sql.rows.get("spend:free"), 20e6);
+  assert.equal(sql.rows.has(month), false);
+  const actual = 18000;
+  const held = ledger.reserve({
+    id: "mig",
+    reserve: actual,
+    cap: 25e6,
+    spendKey: month,
+    seedSpend: 20e6,
+    dailyAdd: 1,
+    dailyLimit: 40,
+    monthAdd: 1,
+    monthLimit: 10,
+    dailyKey: "t:u:2026-10-28",
+    monthKey: "m:u:2026-10",
+    now: Date.parse(now),
+  });
+  assert.equal(held.ok, true);
+  assert.equal(held.poolSeeded, true);
+  assert.equal(sql.rows.get("seeded:pool"), 1);
+  assert.equal(sql.rows.get("spend:free"), 20e6);
+  const settled = ledger.reconcile({ id: "mig", actual, spendKey: month, seedSpend: 20e6, now: Date.parse(now) });
+  assert.equal(settled.spend, 20e6 + actual);
+  assert.equal(sql.rows.get(month), 20e6 + actual);
+  const again = ledger.reserve({
+    id: "mig2",
+    reserve: 1000,
+    cap: 25e6,
+    spendKey: month,
+    seedSpend: 20e6,
+    dailyAdd: 1,
+    dailyLimit: 40,
+    monthAdd: 1,
+    monthLimit: 10,
+    dailyKey: "t:u:2026-10-28",
+    monthKey: "m:u:2026-10",
+    now: Date.parse(now),
+  });
+  assert.equal(again.ok, true);
+  assert.equal(again.poolSeeded, false);
+  assert.equal(sql.rows.get(month), 20e6 + actual + 1000);
+  ledger.prune({ now });
+  assert.equal(sql.rows.has("spend:free"), false);
+  assert.equal(sql.rows.get(month), 20e6 + actual + 1000);
+});
+
+test("a lookup that dies releases its pool hold and in-flight slots after two minutes", () => {
+  const day = "2026-10-28";
+  const t0 = Date.parse(day + "T12:00:00Z");
+  const spendKey = "spend:free:2026-10";
+  const flight = inflightKey("user1", t0);
+  const base = {
+    reserve: 2_520_000,
+    partial: true,
+    cap: 25e6,
+    spendKey,
+    seedSpend: 0,
+    dailyAdd: 4,
+    dailyLimit: 40,
+    monthAdd: 4,
+    monthLimit: 40,
+    dailyKey: "t:user1:" + day,
+    monthKey: "m:user1:2026-10",
+    dailySpendKey: "ds:user1:" + day,
+    dailySpendCap: 750000,
+    dailyEach: 1000,
+    inflightKey: flight,
+    inflightLimit: 4,
+  };
+  const sql = fakeSql();
+  const ledger = ledgerWith(sql);
+  const held = ledger.reserve({ ...base, id: "die", now: t0 });
+  assert.equal(held.ok, true);
+  assert.equal(held.charged, 4);
+  assert.equal(sql.rows.get(spendKey), 2_520_000);
+  assert.equal(sql.rows.get(flight), 4);
+  ledger.prune({ now: new Date(t0 + 30 * 1000).toISOString(), spendKey });
+  assert.equal(sql.rows.has("hold:die"), true);
+  assert.equal(sql.rows.get(flight), 4);
+  const later = t0 + USAGE_HOLD_STALE_MS + 1000;
+  const again = ledger.reserve({ ...base, id: "after", reserve: 1000, dailyAdd: 1, monthAdd: 1, now: later });
+  assert.equal(again.ok, true);
+  assert.equal(sql.rows.has("hold:die"), false);
+  assert.equal(sql.rows.get(flight), 1);
+  assert.equal(sql.rows.get(spendKey), 1000);
+  assert.equal(sql.rows.get("ds:user1:" + day), 1000);
+
+  const swept = fakeSql();
+  const sweeper = ledgerWith(swept);
+  sweeper.reserve({ ...base, id: "hourly", now: t0 });
+  sweeper.prune({ now: new Date(later).toISOString(), spendKey });
+  assert.equal(swept.rows.has("hold:hourly"), false);
+  assert.equal(swept.rows.get(flight) || 0, 0);
+  assert.equal(swept.rows.get(spendKey) || 0, 0);
+  assert.equal(swept.rows.get("ds:user1:" + day) || 0, 0);
 });
 
 test("a mocked $3.05 lookup records $3.05", () => {

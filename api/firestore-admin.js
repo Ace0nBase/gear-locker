@@ -184,7 +184,13 @@ export async function sweepTombstones(env, fetchImpl, nowMs, opts) {
         const url = parent + "/deletedUsers?pageSize=" + pageSize + (cursor ? "&pageToken=" + encodeURIComponent(cursor) : "");
         const res = await fetchFn(url, { method: "GET", headers: { authorization: "Bearer " + token } });
         const data = await res.json().catch(() => ({}));
-        if (res.ok) {
+        if (!res.ok) {
+          if (cursor) {
+            try { if (watch && typeof watch.delete === "function") await watch.delete(TOMBSTONE_CURSOR); }
+            catch { /* the log below still names the reset */ }
+            console.log("tombstones: cursor reset");
+          }
+        } else {
           const docs = Array.isArray(data.documents) ? data.documents : [];
           let finished = true;
           for (const doc of docs) {
