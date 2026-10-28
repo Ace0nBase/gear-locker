@@ -88,6 +88,8 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.ok(sessionAt > 0 && sessionAt < apiKeyAt);
   assert.ok(src.indexOf("releaseEmailHold(env, sessionUser)") > sessionAt);
   const scheduled = src.slice(src.indexOf("async scheduled"));
+  assert.match(scheduled, /pruneUsageCounters/);
+  assert.ok(scheduled.indexOf("pruneUsageCounters") < scheduled.indexOf("retryQueuedCleanups"));
   assert.ok(scheduled.indexOf("retryQueuedCleanups") < scheduled.indexOf("runQueuedRedactions"));
   assert.ok(scheduled.indexOf("runQueuedRedactions") < scheduled.indexOf("ANTHROPIC_API_KEY"));
   assert.match(src, /roundInputTokens/);
@@ -97,6 +99,8 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.ok(authFn.indexOf("if (!key)") < authFn.indexOf("accounts:delete"));
   assert.match(authFn, /sign-in is still here/);
   assert.doesNotMatch(authFn, /referer/i);
+  assert.match(src, /lookupBatchAllowance/);
+  assert.ok(src.indexOf("lookupBatchAllowance") < src.indexOf("const lookBill = await reserveCall"));
   const bill = src.indexOf("const lookBill = await reserveCall");
   const call = src.indexOf("lookupOne(env, it,", bill);
   assert.ok(bill > 0 && call > bill);

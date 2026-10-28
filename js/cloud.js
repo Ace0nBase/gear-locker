@@ -503,12 +503,15 @@ async function runLookups(ids,quiet){
   if(!ids.length)return;
   ids.forEach(id=>lookingUp.add(id));render();
   let ok=0,fail="";
+  const lookupStop=/turned off|confirm your email|daily lookup limit|this month's lookups/i;
   for(let k=0;k<ids.length;k+=4){
     const chunk=ids.slice(k,k+4);
-    try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){const msg=lookupFailMessage(r.error||"No result");it.lookupError=msg.slice(0,160);fail=fail||msg}}})}
-    catch(e){fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);if(it&&!it.deleted)it.lookupError=fail.slice(0,160)});if(/turned off|confirm your email|daily lookup limit|this month's lookups/i.test(String(e&&e.message||""))){ids.slice(k).forEach(id=>lookingUp.delete(id));render();break}}
-    chunk.forEach(id=>lookingUp.delete(id));render();await persist();
+    let stop=false;
+    try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){const msg=lookupFailMessage(r.error||"No result");it.lookupError=msg.slice(0,160);fail=fail||msg}if(lookupStop.test(String(r.error||"")))stop=true}})}
+    catch(e){fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);if(it&&!it.deleted)it.lookupError=fail.slice(0,160)});if(lookupStop.test(String(e&&e.message||""))){ids.slice(k).forEach(id=>lookingUp.delete(id));render();break}}
+    chunk.forEach(id=>lookingUp.delete(id));if(stop)ids.slice(k+chunk.length).forEach(id=>lookingUp.delete(id));render();await persist();
     if(viewing&&!$("detail").hidden&&chunk.includes(viewing.id))openDetail(all.find(i=>i.id===viewing.id),true);
+    if(stop)break;
   }
   if(!$("form").hidden&&editing){const busy=lookingUp.has(editing.id);$("mktBtn").disabled=busy;$("mktBtn").textContent=busy?"Looking up…":(GearLogic.saleRestricted(editing)?"Look up weight":"Market check")}
   if(fail)toast(fail,6000);else if(!quiet||ids.length>1)toast(`Looked up ${ok} item${ok===1?"":"s"}`);
@@ -517,10 +520,7 @@ var _saveCurrent=saveCurrent;
 saveCurrent=async function(extra){
   const before=editing?{...editing}:null;
   const rec=await _saveCurrent(extra);if(!rec)return rec;
-  const restricted=GearLogic.saleRestricted(rec);
-  const changed=!before||before.name!==rec.name||before.brand!==rec.brand||before.category!==rec.category||before.arm!==rec.arm||(!restricted&&before.condition!==rec.condition);
-  const needs=GearLogic.saveNeedsLookup(rec);
-  if(window.LOOKUP_URL&&cloudUser&&!extra&&!GearLogic.magShelfPending(rec)&&(changed||needs)&&!GearLogic.importSkipsLookup(rec))runLookups([rec.id],true).catch(()=>{});
+  if(window.LOOKUP_URL&&cloudUser&&!extra&&GearLogic.saveShouldLookup(before,rec))runLookups([rec.id],true).catch(()=>{});
   return rec;
 };
 if(window.LOOKUP_URL){

@@ -210,6 +210,34 @@ export function monthQuotaKey(uid, date) {
   return `m:${uid}:${y}-${m}`;
 }
 
+function utcDateOnly(date) {
+  const d = date instanceof Date && !isNaN(date.getTime()) ? date : new Date(date || Date.now());
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
+function previousUtcMonth(date) {
+  const d = utcDateOnly(date);
+  const month = d.getUTCMonth();
+  const year = month === 0 ? d.getUTCFullYear() - 1 : d.getUTCFullYear();
+  const prev = month === 0 ? 12 : month;
+  return `${year}-${String(prev).padStart(2, "0")}`;
+}
+
+// Daily and alert counters older than 7 UTC days, and monthly counters older than the previous UTC month, can go.
+// The spend total, the seeded flag, and holds are not counters.
+export function quotaCounterExpired(key, now) {
+  const k = String(key || "");
+  if (!k || k === "spend:free" || k === "seeded:spend" || k.startsWith("hold:")) return false;
+  const day = k.match(/^[qa]:[^:]+:(\d{4}-\d{2}-\d{2})$/);
+  if (day) {
+    const cutoff = utcDay(new Date(utcDateOnly(now).getTime() - 7 * 86400000));
+    return day[1] < cutoff;
+  }
+  const month = k.match(/^m:[^:]+:(\d{4}-\d{2})$/);
+  if (month) return month[1] < previousUtcMonth(now);
+  return false;
+}
+
 export const DEFAULT_PLAN_LIMITS = { free: 10, pro: 100, armory: 500 };
 export const DEFAULT_REVIEW_DAILY_LIMIT = 8;
 export const DEFAULT_FREE_SPEND_CAP_USD = 25;
@@ -333,6 +361,22 @@ export function usageDecision(opts) {
   const month = chargeDecision(opts.monthUsed, opts.monthAdd, opts.monthLimit);
   if (!month.ok) return { ok: false, status: 429, error: MONTHLY_FULL, plan, review, daily, month };
   return { ok: true, status: 200, error: "", plan, review, daily, month };
+}
+
+// A batch is trimmed to the lookups still left today and this month. The rest are refused, not charged.
+export function lookupBatchAllowance(opts) {
+  opts = opts || {};
+  const count = Math.max(0, Math.round(+opts.count || 0));
+  const dailyLimit = Math.max(0, +opts.dailyLimit || 0);
+  const monthLimit = Math.max(0, +opts.monthLimit || 0);
+  const dailyLeft = Math.max(0, dailyLimit - Math.max(0, +opts.dailyUsed || 0));
+  const monthLeft = opts.skipMonth ? count : Math.max(0, monthLimit - Math.max(0, +opts.monthUsed || 0));
+  const allowed = Math.max(0, Math.min(count, dailyLeft, monthLeft));
+  if (allowed >= count) return { allowed, error: "" };
+  const error = !opts.skipMonth && monthLeft <= dailyLeft
+    ? MONTHLY_FULL
+    : `Daily lookup limit reached (${dailyLimit} per day). Try again tomorrow.`;
+  return { allowed, error };
 }
 
 export const USER_COLLECTIONS = ["items", "ammo", "sessions", "dope", "maint", "wish", "loans", "freqs", "pace", "meta"];
@@ -1678,6 +1722,11 @@ export function stampManualPrices(item, before, touch) {
   if (valueTyped) out.valueSource = "manual";
   else if (flags.value && !(+out.value > 0)) { out.value = 0; delete out.valueSource; }
   else if (!flags.value && !(+out.value > 0) && out.valueSource === "manual") delete out.valueSource;
+  if (flags.value && !positivePrice(out.value) && normalizedArm(out.arm) === "no") {
+    delete out.usedLow;
+    delete out.usedHigh;
+    delete out.priceNote;
+  }
   const prior = before && before.priceSource;
   if ((prior === "market" || prior === "auto") && out.priceSource === "manual") clearAutoPriceTrail(out);
   if (before && !flags.retail && userEnteredPrice(before) && positivePrice(before.retailNew)) {
@@ -1706,6 +1755,10 @@ function weightMissing(item) {
 
 function positivePrice(value) {
   return value != null && value !== "" && isFinite(+value) && +value > 0;
+}
+
+function normalizedArm(value) {
+  return value == null || value === "" || value === "no" ? "no" : value;
 }
 
 // A price saved before the manual marker still counts. Market and auto are the only prices a lookup may replace.
@@ -1747,6 +1800,27 @@ export function saveNeedsLookup(item) {
   if (plan.weight) return true;
   if (!plan.price) return false;
   return item.priceSource !== "market" && item.priceSource !== "auto";
+}
+
+export function saveChangedForLookup(before, rec) {
+  if (!before || !rec) return true;
+  const restricted = saleRestricted(rec);
+  return before.name !== rec.name || before.brand !== rec.brand || before.category !== rec.category
+    || normalizedArm(before.arm) !== normalizedArm(rec.arm)
+    || (!restricted && before.condition !== rec.condition);
+}
+
+export function clearedPriceField(before, rec) {
+  if (!before || !rec) return false;
+  return (positivePrice(before.value) && !positivePrice(rec.value))
+    || (positivePrice(before.retailNew) && !positivePrice(rec.retailNew));
+}
+
+// A blank arm is the same as Not on the record. Clearing a price does not start a lookup.
+export function saveShouldLookup(before, rec) {
+  if (!rec || rec.deleted || magShelfPending(rec) || importSkipsLookup(rec)) return false;
+  if (clearedPriceField(before, rec)) return false;
+  return saveChangedForLookup(before, rec) || saveNeedsLookup(rec);
 }
 
 export function bulkLookupIds(items) {
@@ -2053,9 +2127,9 @@ export function radioTxLabel(freq) {
 const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
-  parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
+  parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, alertQuotaKey, monthQuotaKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
   DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_SPEND_RATES,
-  planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision,
+  planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupBatchAllowance,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, LOOKUPS_PAUSED,
   reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
@@ -2067,7 +2141,7 @@ const GearLogic = {
   ROUND_INPUT_TOKEN_CAP, roundInputTokens, flooredSearchRoundMicro,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted, importRestricted, importSkipsLookup,
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
-  gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, bulkLookupIds, singleLookupIds, applyMarketPrices,
+  gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, saveShouldLookup, bulkLookupIds, singleLookupIds, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
   LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, MAGAZINES_CATEGORY, LEGACY_MAGAZINES_CATEGORY, BELTS_CATEGORY, LEGACY_BELTS_CATEGORY, ARMOR_CATEGORY, GEAR_CATEGORIES, CATEGORY_HINTS, PRICE_BACKSTOP,
   migrateCategoryName, migrateRecordCategories, explicitCategoryChoice, magShelfPending, answerMagShelf, beltRigPending, answerBeltRig,

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  decideAccess, isReviewEmail, monthQuotaKey, planMonthlyLimit, reviewDailyLimit, spendCapMicro,
+  decideAccess, isReviewEmail, monthQuotaKey, quotaCounterExpired, planMonthlyLimit, reviewDailyLimit, spendCapMicro, lookupBatchAllowance,
   estimateSpendMicro, usageFromResponse, freeSpendBlocked, usageDecision,
   deleteRevenueCatCustomer, accountDeletePlan, accountPlan, USER_COLLECTIONS,
   signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
@@ -48,6 +48,31 @@ test("review emails, month keys, and plan limits stay configurable", () => {
   assert.equal(reviewDailyLimit({ REVIEW_DAILY_LIMIT: "3" }), 3);
   assert.equal(spendCapMicro({}), 25e6);
   assert.equal(spendCapMicro({ FREE_SPEND_CAP_USD: "10" }), 10e6);
+});
+
+test("a lookup batch uses a leftover of 10 and refuses the rest", () => {
+  const batch = 4;
+  const left = { 7: 3, 8: 2, 9: 1, 10: 0 };
+  for (const used of [7, 8, 9, 10]) {
+    const out = lookupBatchAllowance({ count: batch, dailyUsed: 0, dailyLimit: 40, monthUsed: used, monthLimit: 10 });
+    assert.equal(out.allowed, left[used], "free month " + used);
+    assert.match(out.error, /this month's lookups/, "free month " + used);
+  }
+  const pro = lookupBatchAllowance({ count: batch, dailyUsed: 0, dailyLimit: 40, monthUsed: 98, monthLimit: 100 });
+  assert.equal(pro.allowed, 2);
+  assert.match(pro.error, /this month's lookups/);
+  const armory = lookupBatchAllowance({ count: batch, dailyUsed: 0, dailyLimit: 40, monthUsed: 499, monthLimit: 500 });
+  assert.equal(armory.allowed, 1);
+  assert.match(armory.error, /this month's lookups/);
+  const daily = lookupBatchAllowance({ count: batch, dailyUsed: 38, dailyLimit: 40, monthUsed: 0, monthLimit: 10 });
+  assert.equal(daily.allowed, 2);
+  assert.match(daily.error, /Daily lookup limit reached \(40 per day\)/);
+  const open = lookupBatchAllowance({ count: batch, dailyUsed: 0, dailyLimit: 40, monthUsed: 0, monthLimit: 10 });
+  assert.equal(open.allowed, 4);
+  assert.equal(open.error, "");
+  const review = lookupBatchAllowance({ count: batch, dailyUsed: 0, dailyLimit: 8, monthUsed: 10, monthLimit: 10, skipMonth: true });
+  assert.equal(review.allowed, 4);
+  assert.equal(review.error, "");
 });
 
 test("spend estimates come from tokens and searches", () => {
@@ -227,6 +252,7 @@ function fakeSql() {
       if (q.startsWith("SELECT v")) return done(rows.has(args[0]) ? [{ v: rows.get(args[0]) }] : []);
       if (q.startsWith("SELECT 1")) return done(rows.has(args[0]) ? [{ n: 1 }] : []);
       if (q.startsWith("SELECT k")) {
+        if (args[0] == null) return done([...rows.keys()].map(k => ({ k })));
         const prefix = String(args[0]).replace(/\*$/, "");
         return done([...rows.keys()].filter(k => k.startsWith(prefix)).map(k => ({ k })));
       }
@@ -348,6 +374,40 @@ test("a failed delete survives reload and the retry does not list shares on the 
   assert.equal(leftover.queriedShares, false);
   assert.equal(leftover.state.shares, 0);
   assert.equal(leftover.state.auth, false);
+});
+
+test("old daily and monthly lookup counters are pruned and spend stays", () => {
+  const now = new Date("2026-10-28T04:00:00Z");
+  assert.equal(quotaCounterExpired("q:user:2026-10-20", now), true);
+  assert.equal(quotaCounterExpired("a:user:2026-10-20", now), true);
+  assert.equal(quotaCounterExpired("q:user:2026-10-21", now), false);
+  assert.equal(quotaCounterExpired("a:user:2026-10-28", now), false);
+  assert.equal(quotaCounterExpired("m:user:2026-08", now), true);
+  assert.equal(quotaCounterExpired("m:user:2026-09", now), false);
+  assert.equal(quotaCounterExpired("m:user:2026-10", now), false);
+  assert.equal(quotaCounterExpired("spend:free", now), false);
+  assert.equal(quotaCounterExpired("seeded:spend", now), false);
+  assert.equal(quotaCounterExpired("hold:look-1", now), false);
+  const year = new Date("2026-01-03T00:00:00Z");
+  assert.equal(quotaCounterExpired("q:user:2025-12-26", year), true);
+  assert.equal(quotaCounterExpired("q:user:2025-12-27", year), false);
+  assert.equal(quotaCounterExpired("m:user:2025-11", year), true);
+  assert.equal(quotaCounterExpired("m:user:2025-12", year), false);
+  assert.equal(quotaCounterExpired("m:user:2026-01", year), false);
+
+  const sql = fakeSql();
+  const ledger = ledgerWith(sql);
+  const keep = ["spend:free", "seeded:spend", "hold:look-1", "q:user:2026-10-21", "a:user:2026-10-21", "m:user:2026-09", "m:user:2026-10"];
+  const drop = ["q:user:2026-10-20", "a:other:2026-10-01", "m:user:2026-08", "m:other:2025-12"];
+  for (const key of [...keep, ...drop]) sql.rows.set(key, key.startsWith("spend") ? 25000000 : 3);
+  sql.rows.set("seeded:spend", 1);
+  const out = ledger.prune({ now: now.toISOString() });
+  assert.equal(out.removed, drop.length);
+  for (const key of keep) assert.equal(sql.rows.has(key), true, key);
+  for (const key of drop) assert.equal(sql.rows.has(key), false, key);
+  assert.equal(sql.rows.get("spend:free"), 25000000);
+  assert.equal(sql.rows.get("seeded:spend"), 1);
+  assert.equal(sql.rows.get("hold:look-1"), 3);
 });
 
 test("a mocked $3.05 lookup records $3.05", () => {
