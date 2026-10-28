@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { saleRestricted, lookupAnswerRestricted, pickModelAnswer, settleLookup, settleDeal, countedValue, csvExportField, keepManualPrice, gunMarketUrl, stripGunMarketText, publicWeightNote, applyMarketPrices, stampManualPrices, mergeByServerTime, serverRow } from "../js/logic.js";
+import { saleRestricted, lookupAnswerRestricted, pickModelAnswer, settleLookup, settleDeal, countedValue, csvExportField, keepManualPrice, gunMarketUrl, stripGunMarketText, publicWeightNote, applyMarketPrices, lookupPlan, bulkLookupIds, singleLookupIds, stampManualPrices, mergeByServerTime, serverRow } from "../js/logic.js";
 
 test("firearm, suppressor, ammunition, and lower-receiver shelves are weight-only", () => {
   const blocked = [
@@ -322,8 +322,9 @@ test("a typed price on ordinary gear is not replaced by a market lookup", () => 
   }, lookup, "2026-10-27");
   assert.equal(typedRetail.retailNew, 180);
   assert.equal(typedRetail.priceSource, "manual");
-  assert.equal(typedRetail.value, 28);
-  assert.equal(typedRetail.usedLow, 20);
+  assert.equal(typedRetail.value, 126);
+  assert.equal(typedRetail.usedLow, undefined);
+  assert.equal(typedRetail.priceNote, undefined);
 
   const typedValue = applyMarketPrices({
     category: "Pouches", name: "Parcel coat", retailNew: 0, value: 90, valueSource: "manual",
@@ -347,6 +348,61 @@ test("a typed price on ordinary gear is not replaced by a market lookup", () => 
   assert.equal(empty.value, 28);
   assert.equal(empty.priceSource, "market");
   assert.equal(empty.priceDate, "2026-10-27");
+});
+
+test("bulk and single lookups fill empty and auto prices and skip a hand-entered price", () => {
+  const quote = {
+    retailNew: 99, usedLow: 40, usedHigh: 70, value: 60, priceNote: "Shelf",
+    sources: [{ label: "Shelf", url: "https://example.com/shelf" }],
+  };
+  const manual = { id: "manual", category: "Pouches", name: "Typed coat", retailNew: 180, value: 126, priceSource: "manual", weight: 12 };
+  const auto = { id: "auto", category: "Pouches", name: "Market pouch", retailNew: 40, value: 28, priceSource: "market", weight: 8, priceDate: "2026-10-01" };
+  const empty = { id: "empty", category: "Belts", name: "New belt", weight: 20 };
+  const manualWeigh = { id: "manual-weigh", category: "Pouches", name: "Typed coat", retailNew: 180, value: 126, priceSource: "manual", weight: null };
+  const autoWeigh = { id: "auto-weigh", category: "Pouches", name: "Market pouch", retailNew: 40, value: 28, priceSource: "market", weight: "" };
+  const gun = { id: "gun", category: "Firearms", name: "Rifle", retailNew: 500, priceSource: "market", weight: null };
+  const mag = { id: "mag", category: "Magazines", name: "PMAG", retailNew: 18, priceSource: "market", weight: 4 };
+  const held = { id: "held", category: "Ammo Storage & Loaders", name: "Can", migratedFromMagShelf: true, weight: null };
+  const rows = [manual, auto, empty, manualWeigh, autoWeigh, gun, mag, held];
+
+  assert.deepEqual(bulkLookupIds(rows), ["empty", "manual-weigh", "auto-weigh", "gun"]);
+  assert.deepEqual(singleLookupIds(rows), ["auto", "empty", "manual-weigh", "auto-weigh", "gun"]);
+  assert.equal(lookupPlan(manual).price, false);
+  assert.equal(lookupPlan(auto).price, true);
+  assert.equal(lookupPlan(empty).price, true);
+  assert.equal(lookupPlan(gun).price, false);
+  assert.equal(lookupPlan(mag).price, false);
+  assert.equal(lookupPlan(held).price, false);
+
+  for (const mode of ["bulk", "single"]) {
+    const ids = mode === "bulk" ? bulkLookupIds(rows) : singleLookupIds(rows);
+    for (const item of rows) {
+      const picked = ids.includes(item.id);
+      const applied = applyMarketPrices(item, quote, "2026-10-28");
+      if (item.priceSource === "manual") {
+        assert.equal(applied.retailNew, item.retailNew, mode + " " + item.id);
+        assert.equal(applied.value, item.value, mode + " " + item.id);
+        assert.equal(applied.priceSource, "manual", mode + " " + item.id);
+        assert.equal(applied.priceNote, undefined, mode + " " + item.id);
+        assert.equal(lookupPlan(item).price, false, mode + " " + item.id);
+        assert.equal(picked, lookupPlan(item).weight, mode + " " + item.id);
+      } else if (saleRestricted(item) || item.migratedFromMagShelf) {
+        assert.equal(applied.retailNew, item.retailNew, mode + " " + item.id);
+        assert.equal(applied.priceSource, item.priceSource, mode + " " + item.id);
+        assert.equal(picked, lookupPlan(item).weight, mode + " " + item.id);
+      } else if (!item.priceSource) {
+        assert.equal(picked, true, mode + " " + item.id);
+        assert.equal(applied.retailNew, 99, mode + " " + item.id);
+        assert.equal(applied.value, 60, mode + " " + item.id);
+        assert.equal(applied.priceSource, "market", mode + " " + item.id);
+      } else if (item.priceSource === "market") {
+        assert.equal(applied.retailNew, 99, mode + " " + item.id);
+        assert.equal(applied.value, 60, mode + " " + item.id);
+        assert.equal(applied.priceSource, "market", mode + " " + item.id);
+        assert.equal(picked, mode === "single" || lookupPlan(item).weight, mode + " " + item.id);
+      }
+    }
+  }
 });
 
 test("an edited retail and insured value survive the snapshot, a reload, and the next lookups", () => {

@@ -401,7 +401,7 @@ if(!window.LOOKUP_URL){$("mktBtn").onclick=async()=>{
 };
 $("bulkMktBtn").onclick=async()=>{
   const t=now();let n=0;
-  all=all.map(i=>{if(i.deleted||GearLogic.saleRestricted(i)||i.marketCheck==="requested"||i.priceSource==="market")return i;n++;return{...i,marketCheck:"requested",marketCheckAt:t,updatedAt:t}});
+  all=all.map(i=>{if(i.marketCheck==="requested"||!GearLogic.lookupPlan(i).price||i.priceSource==="market")return i;n++;return{...i,marketCheck:"requested",marketCheckAt:t,updatedAt:t}});
   if(!n){toast("Everything is already market-checked or queued");return}
   render();await persist();toast(`Queued ${n} item${n===1?"":"s"} for a market check`);
 };}

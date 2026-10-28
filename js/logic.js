@@ -939,10 +939,37 @@ export function stampManualPrices(item, before, touch) {
   });
 }
 
-// A market lookup fills empty and auto-filled numbers. A retail or insured value the user typed stays.
+function weightMissing(item) {
+  return !item || item.weight == null || item.weight === "";
+}
+
+// A hand-entered price is not a price lookup. Empty and auto prices are.
+// A restricted shelf never gets an auto price. A missing weight can still be looked up.
+export function lookupPlan(item) {
+  const blocked = !item || item.deleted || magShelfPending(item) || saleRestricted(item) || item.priceSource === "manual";
+  const weight = !!(item && !item.deleted && !magShelfPending(item) && weightMissing(item));
+  return { price: !blocked, weight };
+}
+
+export function bulkLookupIds(items) {
+  return (Array.isArray(items) ? items : []).filter(item => {
+    const plan = lookupPlan(item);
+    if (plan.price && item.priceSource !== "market") return true;
+    return plan.weight;
+  }).map(item => item && item.id).filter(Boolean);
+}
+
+export function singleLookupIds(items) {
+  return (Array.isArray(items) ? items : []).filter(item => {
+    const plan = lookupPlan(item);
+    return plan.price || plan.weight;
+  }).map(item => item && item.id).filter(Boolean);
+}
+
+// A market lookup fills empty and auto prices. A price the user entered stays, including its value and used range.
 export function applyMarketPrices(item, result, day) {
   const out = { ...(item && typeof item === "object" ? item : {}) };
-  if (magShelfPending(out) || saleRestricted(out)) return out;
+  if (magShelfPending(out) || saleRestricted(out) || out.priceSource === "manual") return out;
   const res = result && typeof result === "object" ? result : {};
   const n = v => (v == null || v === "" || !isFinite(+v)) ? null : Math.round(+v);
   const retailManual = out.priceSource === "manual" && +out.retailNew > 0;
@@ -1215,7 +1242,7 @@ const GearLogic = {
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
-  gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, applyMarketPrices,
+  gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, lookupPlan, bulkLookupIds, singleLookupIds, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
   LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, MAGAZINES_CATEGORY, LEGACY_MAGAZINES_CATEGORY, BELTS_CATEGORY, LEGACY_BELTS_CATEGORY, ARMOR_CATEGORY, GEAR_CATEGORIES, CATEGORY_HINTS, PRICE_BACKSTOP,
   migrateCategoryName, migrateRecordCategories, explicitCategoryChoice, magShelfPending, answerMagShelf, beltRigPending, answerBeltRig,

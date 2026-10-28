@@ -346,7 +346,7 @@ function applyLookup(id,res){
 }
 async function runLookups(ids,quiet){
   if(!window.LOOKUP_URL||!cloudUser)return;
-  ids=[...new Set(ids)].filter(id=>!lookingUp.has(id)&&all.some(i=>i.id===id&&!i.deleted&&!GearLogic.magShelfPending(i)));
+  ids=[...new Set(ids)].filter(id=>!lookingUp.has(id)&&GearLogic.singleLookupIds([all.find(i=>i.id===id&&!i.deleted)]).length);
   if(!ids.length)return;
   ids.forEach(id=>lookingUp.add(id));render();
   let ok=0,fail="";
@@ -372,7 +372,7 @@ saveCurrent=async function(extra){
 };
 if(window.LOOKUP_URL){
   $("mktBtn").onclick=async()=>{if(!$("form").reportValidity())return;const rec=await saveCurrent({});if(!rec)return;closeForm();formFrom=null;lookingUp.add(rec.id);openDetail(all.find(i=>i.id===rec.id),true);lookingUp.delete(rec.id);runLookups([rec.id])};
-  $("bulkMktBtn").onclick=()=>{const ids=live().filter(i=>{if(GearLogic.magShelfPending(i))return false;const restricted=GearLogic.saleRestricted(i);if(restricted)return i.weight==null||i.weight==="";return i.priceSource!=="market"||i.weight==null||i.weight===""}).map(i=>i.id);if(!ids.length){toast("Everything already has prices and weights");return}toast(`Looking up ${ids.length} item${ids.length>1?"s":""}…`);runLookups(ids)};
+  $("bulkMktBtn").onclick=()=>{const ids=GearLogic.bulkLookupIds(live());if(!ids.length){toast("Everything already has prices and weights");return}toast(`Looking up ${ids.length} item${ids.length>1?"s":""}…`);runLookups(ids)};
   $("bulkMktBtn").textContent="Look up all";
   const _wish=ACT.wish;
   ACT.wish=async(act,b)=>{
