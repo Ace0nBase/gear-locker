@@ -157,10 +157,15 @@ test("a tombstone blocks later writes and the named person can clear their email
   await assertSucceeds(updateDoc(doc(borrower, "lends/loan1"), {
     borrowerEmail: "", borrowerEmailLower: "", updatedAt: serverTimestamp(),
   }));
-  await assertFails(setDoc(doc(owner, "deletedUsers/owner"), { uid: "owner", at: "2026-10-27T00:00:00.000Z" }));
   await assertFails(setDoc(doc(owner, "deletedUsers/owner"), tomb("owner", "2026-10-27T00:00:00.000Z", "2026-11-27T00:00:00.000Z")));
   await assertFails(setDoc(doc(owner, "deletedUsers/owner"), tomb("owner", "2026-10-27T00:00:00.000Z", Timestamp.fromDate(new Date(Date.now() + 24 * 60 * 60 * 1000)))));
+  await assertFails(setDoc(doc(owner, "deletedUsers/owner"), tomb("owner", "2026-10-27T00:00:00.000Z", Timestamp.fromDate(new Date(Date.now() + 60 * 24 * 60 * 60 * 1000)))));
   await assertSucceeds(setDoc(doc(owner, "deletedUsers/owner"), tomb("owner", "2026-10-27T00:00:00.000Z")));
+  const legacy = as("legacy", "legacy@example.com", true);
+  await assertSucceeds(setDoc(doc(legacy, "deletedUsers/legacy"), { uid: "legacy", at: "2026-10-27T00:00:00.000Z" }));
+  const legacyDoc = await getDoc(doc(legacy, "deletedUsers/legacy"));
+  assert.equal(legacyDoc.exists(), true);
+  assert.equal(legacyDoc.data().expireAt, undefined);
   await assertFails(setDoc(doc(owner, "users/owner/items/i2"), { name: "Belt" }));
   await assertFails(setDoc(doc(owner, "shares/share2"), share("owner")));
   await assertSucceeds(getDocs(query(collection(owner, "shares"), where("owner", "==", "owner"))));

@@ -119,7 +119,7 @@ test("plan lookup is a free stub and account deletion names the exact keys", () 
   const plan = accountDeletePlan("abc");
   assert.deepEqual(plan.collections, USER_COLLECTIONS);
   assert.deepEqual(plan.kvExact, ["w:abc"]);
-  assert.deepEqual(plan.kvPrefixes, ["q:abc:", "a:abc:", "m:abc:"]);
+  assert.deepEqual(plan.kvPrefixes, ["q:abc:", "a:abc:", "t:abc:", "ds:abc:", "m:abc:", "rf:abc:"]);
   assert.equal(plan.lendField, "lender");
   assert.ok(plan.kvPrefixes.every(p => p.endsWith(":")));
   assert.deepEqual(USER_COLLECTIONS, ["items", "ammo", "sessions", "dope", "maint", "wish", "loans", "freqs", "pace", "meta"]);
@@ -305,10 +305,11 @@ test("20 parallel lookups near the cap let through only what fits", async () => 
   assert.match(racedPair.find(r => r.charged === 1).refusedError, /this month's lookups/);
   assert.equal(raced.read({ keys: ["m:u:month", "q:u:day"] }).values["m:u:month"], 10);
   assert.equal(raced.read({ keys: ["q:u:day"] }).values["q:u:day"], 10);
-  const refunded = raced.reconcile({ id: "race0", actual: 0, countRefund: 1, dailyKey: "q:u:day", monthKey: "m:u:month" });
+  const refunded = raced.reconcile({ id: "race0", actual: 0, countRefund: 1, dailyKey: "q:u:day", monthKey: "m:u:month", refundKey: "rf:u:month", refundCap: 5 });
   assert.equal(refunded.refunded, 1);
-  assert.equal(refunded.daily, 9);
+  assert.equal(refunded.daily, 10);
   assert.equal(refunded.month, 9);
+  assert.equal(raced.read({ keys: ["q:u:day"] }).values["q:u:day"], 10);
   const refundAgain = raced.reconcile({ id: "race0", actual: 0, countRefund: 5, dailyKey: "q:u:day", monthKey: "m:u:month" });
   assert.equal(refundAgain.duplicate, true);
   assert.equal(raced.read({ keys: ["m:u:month"] }).values["m:u:month"], 9);
@@ -406,7 +407,13 @@ test("a failed delete survives reload and the retry does not list shares on the 
 test("old daily and monthly lookup counters are pruned and spend stays", () => {
   const now = new Date("2026-10-28T04:00:00Z");
   assert.equal(quotaCounterExpired("q:user:2026-10-20", now), true);
+  assert.equal(quotaCounterExpired("t:user:2026-10-20", now), true);
+  assert.equal(quotaCounterExpired("ds:user:2026-10-20", now), true);
   assert.equal(quotaCounterExpired("a:user:2026-10-20", now), true);
+  assert.equal(quotaCounterExpired("t:user:2026-10-21", now), false);
+  assert.equal(quotaCounterExpired("ds:user:2026-10-21", now), false);
+  assert.equal(quotaCounterExpired("rf:user:2026-08", now), true);
+  assert.equal(quotaCounterExpired("rf:user:2026-10", now), false);
   assert.equal(quotaCounterExpired("q:user:2026-10-21", now), false);
   assert.equal(quotaCounterExpired("a:user:2026-10-28", now), false);
   assert.equal(quotaCounterExpired("m:user:2026-08", now), true);
@@ -424,8 +431,8 @@ test("old daily and monthly lookup counters are pruned and spend stays", () => {
 
   const sql = fakeSql();
   const ledger = ledgerWith(sql);
-  const keep = ["spend:free", "seeded:spend", "hold:look-1", "q:user:2026-10-21", "a:user:2026-10-21", "m:user:2026-09", "m:user:2026-10"];
-  const drop = ["q:user:2026-10-20", "a:other:2026-10-01", "m:user:2026-08", "m:other:2025-12"];
+  const keep = ["spend:free", "seeded:spend", "hold:look-1", "q:user:2026-10-21", "t:user:2026-10-21", "ds:user:2026-10-21", "a:user:2026-10-21", "m:user:2026-09", "m:user:2026-10", "rf:user:2026-10"];
+  const drop = ["q:user:2026-10-20", "t:user:2026-10-20", "ds:user:2026-10-20", "a:other:2026-10-01", "m:user:2026-08", "rf:user:2026-08", "m:other:2025-12"];
   for (const key of [...keep, ...drop]) sql.rows.set(key, key.startsWith("spend") ? 25000000 : 3);
   sql.rows.set("seeded:spend", 1);
   const out = ledger.prune({ now: now.toISOString() });

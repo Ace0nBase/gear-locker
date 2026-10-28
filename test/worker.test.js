@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import worker, { UsageLedger } from "../api/worker.js";
-import { monthQuotaKey, quotaKey } from "../js/logic.js";
+import { attemptQuotaKey, dailySpendKey, estimateSpendMicro, monthQuotaKey, monthRefundKey, ratesForModel } from "../js/logic.js";
 
 const src = fs.readFileSync(new URL("../api/worker.js", import.meta.url), "utf8");
 
@@ -176,6 +176,13 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
       anthropic += 1;
       const body = JSON.parse(opts.body);
       const blob = JSON.stringify(body.messages || []);
+      if (blob.includes("Junk")) return new Response(JSON.stringify({ error: { message: "model blew up" }, usage: { input_tokens: 1000, output_tokens: 1000 } }), { status: 500, headers: { "content-type": "application/json" } });
+      if (blob.includes("Fallback Item")) {
+        const usage = String(body.model).includes("sonnet") ? { input_tokens: 2000, output_tokens: 2000 } : { input_tokens: 1000, output_tokens: 1000 };
+        if (!String(body.model).includes("sonnet")) return new Response(JSON.stringify({ error: { message: "bad model" }, usage }), { status: 400, headers: { "content-type": "application/json" } });
+        const answer = JSON.stringify({ retailNew: 20, usedLow: 10, usedHigh: 15, value: 12, weightOz: 8, priceNote: "Amazon $20", weightNote: "maker spec", sources: [] });
+        return new Response(JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: answer }], usage }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       if (blob.includes("Fail Item")) return new Response(JSON.stringify({ error: { message: "model blew up" } }), { status: 500, headers: { "content-type": "application/json" } });
       const answer = JSON.stringify({ retailNew: 20, usedLow: 10, usedHigh: 15, value: 12, weightOz: 8, priceNote: "Amazon $20", weightNote: "maker spec", sources: [] });
       return new Response(JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: answer }], usage: { input_tokens: 10, output_tokens: 10 } }), { status: 200, headers: { "content-type": "application/json" } });
@@ -196,7 +203,7 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
   }), envFor(ledger));
   try {
     const now = new Date();
-    const dayKey = quotaKey(sub, now);
+    const dayKey = attemptQuotaKey(sub, now);
     const monthKey = monthQuotaKey(sub, now);
     const sql = fakeSql();
     const ledger = new UsageLedger({ storage: { sql } }, {});
@@ -217,7 +224,7 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     assert.equal(body.results.find(r => r.id === "d").ok, false);
     assert.match(body.results.find(r => r.id === "d").error, /this month's lookups/);
     assert.equal(sql.rows.get(monthKey), 9);
-    assert.equal(sql.rows.get(dayKey), 2);
+    assert.equal(sql.rows.get(dayKey), 3);
     assert.equal(anthropic, 3);
 
     const raceSql = fakeSql();
@@ -240,6 +247,70 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     assert.deepEqual(parsed.sort(), [1, 4]);
     assert.equal(raceSql.rows.get(monthKey), 10);
     assert.equal(raceSql.rows.get(dayKey), 5);
+
+    const junkSql = fakeSql();
+    const junk = new UsageLedger({ storage: { sql: junkSql } }, {});
+    junkSql.rows.set("seeded:spend", 1);
+    junkSql.rows.set("spend:free", 0);
+    const junkEnv = { ...envFor(junk), PLAN_LIMIT_FREE: "1000", FREE_SPEND_CAP_USD: "100000" };
+    const beforeCalls = anthropic;
+    let ran = 0;
+    let blocked = 0;
+    for (let n = 0; n < 25; n++) {
+      const items = [0, 1, 2, 3].map(i => ({ id: "j" + n + "-" + i, name: "Junk " + n + "-" + i, category: "Pouches" }));
+      const one = await worker.fetch(new Request("https://gear-locker-api.example/lookup", {
+        method: "POST",
+        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+        body: JSON.stringify({ items }),
+      }), junkEnv);
+      const out = await one.json();
+      if (one.status === 429) {
+        blocked++;
+        assert.match(out.error, /Daily lookup limit/);
+      } else {
+        assert.equal(one.status, 502, JSON.stringify(out));
+        ran++;
+      }
+    }
+    const unit = estimateSpendMicro({ input_tokens: 1000, output_tokens: 1000 });
+    assert.equal(ran, 10);
+    assert.equal(blocked, 15);
+    assert.equal(anthropic - beforeCalls, 40);
+    assert.equal(junkSql.rows.get(dayKey), 40);
+    assert.equal(junkSql.rows.get(monthKey), 35);
+    assert.equal(junkSql.rows.get(monthRefundKey(sub, now)), 5);
+    assert.equal(junkSql.rows.get("spend:free"), 40 * unit);
+    assert.ok(junkSql.rows.get("spend:free") < 25e6);
+    assert.equal(junkSql.rows.get(dailySpendKey(sub, now)), 40 * unit);
+
+    const fbSql = fakeSql();
+    const fbLedger = new UsageLedger({ storage: { sql: fbSql } }, {});
+    fbSql.rows.set("seeded:spend", 1);
+    fbSql.rows.set("spend:free", 0);
+    const fbBefore = anthropic;
+    const fbRes = await post(fbLedger, [{ id: "fb", name: "Fallback Item", category: "Pouches" }]);
+    const fbBody = await fbRes.json();
+    assert.equal(fbRes.status, 200, JSON.stringify(fbBody));
+    assert.equal(fbBody.results.filter(r => r.ok).length, 1);
+    assert.equal(anthropic - fbBefore, 2);
+    const rateEnv = { FALLBACK_MODEL: "claude-sonnet-5-5", FALLBACK_INPUT_PER_MILLION: "3", FALLBACK_OUTPUT_PER_MILLION: "15", FALLBACK_SEARCH_EACH: "0.01" };
+    const both = estimateSpendMicro({ input_tokens: 1000, output_tokens: 1000 }) + estimateSpendMicro({ input_tokens: 2000, output_tokens: 2000 }, ratesForModel(rateEnv, "claude-sonnet-5-5"));
+    assert.equal(fbSql.rows.get(dailySpendKey(sub, now)), both);
+    assert.equal(fbSql.rows.get("spend:free"), both);
+    assert.equal(fbSql.rows.get(dayKey), 1);
+
+    const cappedSql = fakeSql();
+    const capped = new UsageLedger({ storage: { sql: cappedSql } }, {});
+    cappedSql.rows.set("seeded:spend", 1);
+    cappedSql.rows.set("spend:free", 0);
+    cappedSql.rows.set(dailySpendKey(sub, now), 500000);
+    const capBefore = anthropic;
+    const capRes = await post(capped, [{ id: "cap", name: "Pouch Cap", category: "Pouches" }]);
+    const capBody = await capRes.json();
+    assert.equal(capRes.status, 429, JSON.stringify(capBody));
+    assert.match(capBody.error, /spending limit/);
+    assert.equal(anthropic, capBefore);
+    assert.equal(cappedSql.rows.get("spend:free"), 0);
   } finally {
     globalThis.fetch = orig;
   }

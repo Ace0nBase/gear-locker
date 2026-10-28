@@ -210,6 +210,15 @@ export function quotaKey(uid, date) {
   return `q:${uid}:${utcDay(date)}`;
 }
 
+// Attempts are counted even when the lookup fails. This is the daily limit.
+export function attemptQuotaKey(uid, date) {
+  return `t:${uid}:${utcDay(date)}`;
+}
+
+export function dailySpendKey(uid, date) {
+  return `ds:${uid}:${utcDay(date)}`;
+}
+
 export function alertQuotaKey(uid, date) {
   return `a:${uid}:${utcDay(date)}`;
 }
@@ -219,6 +228,10 @@ export function monthQuotaKey(uid, date) {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
   return `m:${uid}:${y}-${m}`;
+}
+
+export function monthRefundKey(uid, date) {
+  return monthQuotaKey(uid, date).replace(/^m:/, "rf:");
 }
 
 function utcDateOnly(date) {
@@ -234,17 +247,18 @@ function previousUtcMonth(date) {
   return `${year}-${String(prev).padStart(2, "0")}`;
 }
 
-// Daily and alert counters older than 7 UTC days, and monthly counters older than the previous UTC month, can go.
+// Daily, alert, attempt, and per-account spend counters older than 7 UTC days,
+// and monthly counters (including the refund cap) older than the previous UTC month, can go.
 // The spend total, the seeded flag, and holds are not counters.
 export function quotaCounterExpired(key, now) {
   const k = String(key || "");
   if (!k || k === "spend:free" || k === "seeded:spend" || k.startsWith("hold:")) return false;
-  const day = k.match(/^[qa]:[^:]+:(\d{4}-\d{2}-\d{2})$/);
+  const day = k.match(/^(?:q|a|t|ds):[^:]+:(\d{4}-\d{2}-\d{2})$/);
   if (day) {
     const cutoff = utcDay(new Date(utcDateOnly(now).getTime() - 7 * 86400000));
     return day[1] < cutoff;
   }
-  const month = k.match(/^m:[^:]+:(\d{4}-\d{2})$/);
+  const month = k.match(/^(?:m|rf):[^:]+:(\d{4}-\d{2})$/);
   if (month) return month[1] < previousUtcMonth(now);
   return false;
 }
@@ -252,6 +266,9 @@ export function quotaCounterExpired(key, now) {
 export const DEFAULT_PLAN_LIMITS = { free: 10, pro: 100, armory: 500 };
 export const DEFAULT_REVIEW_DAILY_LIMIT = 8;
 export const DEFAULT_FREE_SPEND_CAP_USD = 25;
+export const DEFAULT_FREE_DAILY_SPEND_CAP_USD = 0.5;
+export const MONTHLY_REFUND_CAP = 5;
+export const DAILY_SPEND_FULL = "Today's lookup spending limit is reached. Try again tomorrow.";
 export const DEFAULT_SPEND_RATES = { inputPerMillion: 1, outputPerMillion: 5, searchEach: 0.01 };
 export const DEFAULT_FALLBACK_RATES = { inputPerMillion: 3, outputPerMillion: 15, searchEach: 0.01 };
 
@@ -273,6 +290,10 @@ export function reviewDailyLimit(env) {
 
 export function spendCapMicro(env) {
   return Math.round(configuredNumber(env && env.FREE_SPEND_CAP_USD, DEFAULT_FREE_SPEND_CAP_USD) * 1e6);
+}
+
+export function freeDailySpendCapMicro(env) {
+  return Math.round(configuredNumber(env && env.FREE_DAILY_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD) * 1e6);
 }
 
 export function spendRates(env) {
@@ -414,7 +435,7 @@ export function accountDeletePlan(uid) {
     collections: USER_COLLECTIONS.slice(),
     lendField: "lender",
     kvExact: [`w:${id}`],
-    kvPrefixes: [`q:${id}:`, `a:${id}:`, `m:${id}:`],
+    kvPrefixes: [`q:${id}:`, `a:${id}:`, `t:${id}:`, `ds:${id}:`, `m:${id}:`, `rf:${id}:`],
   };
 }
 
@@ -590,6 +611,12 @@ export function applyReserve(state, req) {
     }
   }
   const skipSpend = !!req.skipSpend;
+  if (!skipSpend && req.dailySpendCap != null && req.dailySpendCap !== "" && (dailyAdd || monthAdd)) {
+    const spentToday = Math.max(0, Math.round(+state.dailySpend || 0));
+    if (spentToday >= Math.max(0, Math.round(+req.dailySpendCap || 0))) {
+      return { ok: false, status: 429, error: DAILY_SPEND_FULL, reserved: 0, charged: 0, state: same };
+    }
+  }
   if (!skipSpend && !reserveFits(spend, reserve, req.cap)) {
     return { ok: false, status: 403, error: LOOKUPS_PAUSED, reserved: 0, charged: 0, state: same };
   }
@@ -628,16 +655,23 @@ export function applyReconcile(state, req) {
   req = req || {};
   const reserved = Math.max(0, Math.round(+req.reserved || 0));
   const actual = Math.max(0, Math.round(+req.actual || 0));
-  const refund = Math.max(0, Math.round(+req.countRefund || 0));
+  const asked = Math.max(0, Math.round(+req.countRefund || 0));
+  const cap = req.refundCap == null || req.refundCap === "" ? asked : Math.max(0, Math.round(+req.refundCap));
+  const used = Math.max(0, Math.round(+state.refunds || 0));
+  const month = Math.max(0, Math.round(+state.month || 0));
+  const room = Math.max(0, cap - used);
+  const refund = req.skipMonth ? 0 : Math.min(asked, room, month);
   return {
     ok: true,
     billed: actual,
     refunded: refund,
     state: {
       spend: reconcileSpendMicro(state.spend, reserved, actual),
-      daily: Math.max(0, Math.round(+state.daily || 0) - refund),
-      month: Math.max(0, Math.round(+state.month || 0) - (req.skipMonth ? 0 : refund)),
+      daily: Math.max(0, Math.round(+state.daily || 0)),
+      month: month - refund,
       alert: Math.max(0, Math.round(+state.alert || 0)),
+      refunds: used + refund,
+      dailySpend: Math.max(0, Math.round(+state.dailySpend || 0)) + actual,
     },
   };
 }
@@ -2189,9 +2223,9 @@ export function radioTxLabel(freq) {
 const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
-  parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, alertQuotaKey, monthQuotaKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
-  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_SPEND_RATES,
-  planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupPriced, lookupBatchAllowance,
+  parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
+  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
+  planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupPriced, lookupBatchAllowance,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, DELETED_USER_TTL_MS, deletedUserExpireAt, LOOKUPS_PAUSED,
   reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,

@@ -263,9 +263,11 @@ async function deleteMyAccount(password,signal){
   const straight=GearLogic.deleteRetryRoute(!!(tombSnap&&tombSnap.exists))[0]==="server";
   let removedAny=false;
   if(!straight)try{
+    const tomb=fsdb.collection("deletedUsers").doc(u.uid);
+    if(!tombSnap||!tombSnap.exists)await tomb.set({uid:u.uid,at:now(),expireAt:firebase.firestore.Timestamp.fromDate(GearLogic.deletedUserExpireAt(Date.now()))});
+    removedAny=true;
     for(const c of GearLogic.USER_COLLECTIONS){
       const snap=await userRef().collection(c).get();
-      if(snap.docs.length)removedAny=true;
       await deleteDocRefs(snap.docs.map(d=>d.ref));
     }
     const shareSnap=await fsdb.collection("shares").where("owner","==",u.uid).get();
@@ -275,15 +277,9 @@ async function deleteMyAccount(password,signal){
       const id=String(sid||"");
       if(id&&!seen.has(id))shareRefs.push(fsdb.collection("shares").doc(id));
     });
-    if(shareRefs.length)removedAny=true;
     await deleteDocRefs(shareRefs);
     const lends=await fsdb.collection("lends").where(GearLogic.accountDeletePlan(u.uid).lendField,"==",u.uid).get();
-    if(lends.docs.length)removedAny=true;
     await deleteDocRefs(lends.docs.map(d=>d.ref));
-    const tomb=fsdb.collection("deletedUsers").doc(u.uid);
-    const tombSnap=await tomb.get();
-    if(!tombSnap.exists)await tomb.set({uid:u.uid,at:now(),expireAt:firebase.firestore.Timestamp.fromDate(GearLogic.deletedUserExpireAt(Date.now()))});
-    removedAny=true;
   }catch(e){
     if(!removedAny)accountDeleting=false;
     else showDeleteFailure(gearMsg);
@@ -505,7 +501,7 @@ async function runLookups(ids,quiet){
   if(!ids.length)return;
   ids.forEach(id=>lookingUp.add(id));render();
   let ok=0,fail="";
-  const lookupStop=/turned off|confirm your email|daily lookup limit|this month's lookups/i;
+  const lookupStop=/turned off|confirm your email|daily lookup limit|this month's lookups|spending limit/i;
   for(let k=0;k<ids.length;k+=4){
     const chunk=ids.slice(k,k+4);
     let stop=false;

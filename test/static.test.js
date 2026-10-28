@@ -235,6 +235,8 @@ test("local test mode blocks the Google popup script and the page does not allow
   const delStart = delFn.indexOf("async function deleteMyAccount");
   const delStop = delFn.indexOf("async function startCloud");
   const delBody = delFn.slice(delStart, delStop);
+  assert.ok(delBody.indexOf("deleteRetryRoute") < delBody.indexOf("deletedUserExpireAt"));
+  assert.ok(delBody.indexOf("deletedUserExpireAt") < delBody.indexOf('where("owner","=="'));
   assert.ok(delBody.indexOf("deleteRetryRoute") < delBody.indexOf('where("owner","=="'));
   assert.ok(delBody.indexOf("deleteRetryRoute") < delBody.indexOf('"/account/delete"'));
   assert.doesNotMatch(delBody, /collectionGroup\("loans"\)/);
@@ -283,6 +285,9 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("index.html"), /aria-label="Settings"/);
   assert.match(read("README.md"), /BETA_ONLY/);
   assert.match(read("README.md"), /FREE_SPEND_CAP_USD/);
+  assert.match(read("README.md"), /FREE_DAILY_SPEND_CAP_USD/);
+  assert.match(read("api/worker.js"), /FREE_DAILY_SPEND_CAP_USD:\s*"0\.50"/);
+  assert.match(read("js/core.js"), /spending limit/);
   assert.match(read("README.md"), /REVIEW_EMAILS/);
   assert.match(read("README.md"), /FIREBASE_SERVER_API_KEY/);
   assert.doesNotMatch(read("README.md"), /FIREBASE_API_KEY/);
