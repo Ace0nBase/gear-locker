@@ -200,7 +200,7 @@ test("restricted shelves keep What I paid and drop market value columns", () => 
   assert.equal(byName["Ferrowind Can"].paid, 650);
   assert.equal(byName["Ferrowind Can"].category, "Suppressors");
   assert.equal(plan.items.find(i => i.armType === "Lower receiver" || i.category === "Lower receiver").paid, 149.99);
-  const mag = plan.items.find(i => i.category === "Magazines & Belts");
+  const mag = plan.items.find(i => i.category === "Magazines");
   const trig = plan.items.find(i => i.category === "Triggers & Parts");
   const lower = plan.items.find(i => i.category === "Lower receiver");
   const rifle = plan.items.find(i => i.category === "Firearms");
@@ -215,6 +215,7 @@ test("restricted shelves keep What I paid and drop market value columns", () => 
   assert.equal(photoIdHardBlocked(lower), true);
   assert.equal(photoIdHardBlocked(rifle), true);
   assert.equal(photoIdHardBlocked(can), true);
+  assert.equal(photoIdSuggestion("Magazines"), "");
   assert.equal(photoIdSuggestion("Magazines & Belts"), "");
   assert.equal(photoIdSuggestion("Triggers & Parts"), "");
   assert.equal(photoIdSuggestion("Firearms"), "");
@@ -611,10 +612,56 @@ test("type values map as whole firearm types and the fixture summary is 11 firea
   assert.equal(byType("Tool").target, "needs");
   assert.equal(byType("Box").target, "needs");
   assert.equal(byType("Buck").target, "needs");
-  assert.equal(byType("PMAG").category, "Magazines & Belts");
+  assert.equal(byType("PMAG").category, "Magazines");
   assert.equal(byType("Tin").category, "Ammo Storage & Loaders");
   assert.equal(mac.rows.find(row => row.name.includes("Holster Co")).target, "needs");
   assert.equal(plans.flatMap(plan => plan.rows).some(row => row.target === "armory" && /scope|sling|holster|safe|cleaning|shell|opener|panel|light/i.test(row.name + row.category)), false);
+});
+
+test("belt and armor types use the renamed shelves, and old names migrate", () => {
+  const csv = [
+    "Item,Type,Price",
+    "Inner,Belt,40",
+    "Outer,Battle belt,80",
+    "Rig,Chest rig,120",
+    "Plate,Plate carrier,200",
+    "Old mag,Magazines & Belts,14",
+    "Old belt,Belts & Rigs,90",
+    "Old can,Mags & Ammo Storage,18",
+    "Linked,Linked ammo,30",
+    "Belted,Belted ammo,30",
+    "Mag,Magazine,12",
+  ].join("\n");
+  const plan = planImport(readCsvText(csv).tables, { importId: "01RENAME", now: "2026-10-27T00:00:00.000Z" });
+  const row = name => plan.rows.find(item => item.name === name);
+  const saved = name => plan.items.find(item => item.name === name);
+  assert.equal(row("Inner").category, "Belts");
+  assert.equal(row("Inner").target, "gear");
+  assert.equal(saved("Inner").importPricedAllowlist, true);
+  assert.equal(saleRestricted(saved("Inner")), false);
+  assert.equal(row("Outer").category, "Belts");
+  assert.equal(saved("Outer").importPricedAllowlist, true);
+  assert.equal(row("Rig").category, "Armor & Carriers");
+  assert.equal(row("Plate").category, "Armor & Carriers");
+  assert.equal(saved("Rig").importPricedAllowlist, true);
+  assert.equal(saved("Plate").importPricedAllowlist, true);
+  assert.equal(row("Old mag").category, "Magazines");
+  assert.equal(saleRestricted(saved("Old mag")), true);
+  assert.equal(saved("Old mag").importPricedAllowlist, undefined);
+  assert.equal(saved("Old mag").paid, 14);
+  assert.equal(importSkipsLookup(saved("Old mag")), true);
+  assert.equal(row("Old belt").category, "Belts");
+  assert.equal(saved("Old belt").importPricedAllowlist, true);
+  assert.equal(row("Old can").category, "Ammo Storage & Loaders");
+  assert.equal(saved("Old can").migratedFromMagShelf, true);
+  assert.equal(row("Mag").category, "Magazines");
+  assert.equal(saleRestricted(saved("Mag")), true);
+  assert.equal(saved("Mag").importPricedAllowlist, undefined);
+  assert.equal(row("Linked").target, "needs");
+  assert.equal(row("Linked").category, "");
+  assert.equal(row("Belted").target, "needs");
+  assert.equal(row("Belted").category, "");
+  assert.equal(plan.rows.some(item => /belted|linked/i.test(item.category || "")), false);
 });
 
 test("a legacy Mags & Ammo Storage import waits for the shelf answer", () => {

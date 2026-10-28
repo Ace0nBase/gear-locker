@@ -77,7 +77,7 @@ function el(tag, opts, children) {
 
 function categories() {
   const base = (typeof CATS !== "undefined" ? CATS : []).slice();
-  ["Magazines & Belts", "Triggers & Parts", "Ammo Storage & Loaders", "Ammunition", "Reloading", "Lower receiver"].forEach(name => {
+  ["Magazines", "Triggers & Parts", "Ammo Storage & Loaders", "Ammunition", "Reloading", "Lower receiver"].forEach(name => {
     if (!base.includes(name)) base.push(name);
   });
   return base;

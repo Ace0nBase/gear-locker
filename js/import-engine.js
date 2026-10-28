@@ -1,7 +1,7 @@
 // On-device spreadsheet import. No network, no disk, no price lookups.
 // Column matching uses the header text only.
 
-import { GEAR_CATEGORIES, importRestricted, saleRestricted } from "./logic.js";
+import { GEAR_CATEGORIES, importRestricted, migrateCategoryName, saleRestricted } from "./logic.js";
 
 export const LIMITS = {
   fileBytes: 15 * 1024 * 1024,
@@ -552,7 +552,9 @@ const LIGHT = { target: "gear", arm: "WL", category: "Lights & Lasers" };
 const HOLSTER = { target: "gear", arm: "", category: "Holsters & Slings" };
 const CASE = { target: "gear", arm: "", category: "Cases & Bags" };
 const MISC = { target: "gear", arm: "", category: "Misc" };
-const MAG = { target: "gear", arm: "", category: "Magazines & Belts" };
+const MAG = { target: "gear", arm: "", category: migrateCategoryName("Magazines & Belts") };
+const BELT = { target: "gear", arm: "", category: migrateCategoryName("Belts & Rigs") };
+const ARMOR = { target: "gear", arm: "", category: "Armor & Carriers" };
 const PART = { target: "gear", arm: "", category: "Triggers & Parts" };
 const CLEAN = { target: "gear", arm: "", category: "Cleaning & Maintenance" };
 const AMMO_ROUTE = { target: "ammo", arm: "", category: "Ammunition" };
@@ -562,6 +564,7 @@ const ACCESSORY_TERMS = {
   laser: LASER, lasers: LASER, nvg: LASER, nvgs: LASER, thermal: LASER,
   light: LIGHT, lights: LIGHT, flashlight: LIGHT, flashlights: LIGHT, wml: LIGHT,
   sling: HOLSTER, slings: HOLSTER, holster: HOLSTER, holsters: HOLSTER,
+  belt: BELT, belts: BELT,
   safe: CASE, safes: CASE, case: CASE, cases: CASE,
   bipod: MISC, bipods: MISC,
   magazine: MAG, magazines: MAG, mag: MAG, mags: MAG,
@@ -576,6 +579,7 @@ const GEAR_PHRASES = {
   "night vision": LASER,
   "weapon light": LIGHT, "weapon lights": LIGHT,
   "cleaning kit": CLEAN, "cleaning kits": CLEAN,
+  "battle belt": BELT, "chest rig": ARMOR, "plate carrier": ARMOR,
 };
 const SOURCE_GEAR_PHRASES = {
   myarmory: GEAR_PHRASES,
@@ -613,7 +617,7 @@ function classifyType(typeText, categories, source) {
   if (!key) return null;
   const list = categories || [];
   if (key === "mags ammo storage" || key === "mags and ammo storage") {
-    return { target: "gear", arm: "", category: storageCategory(list), storage: true, migratedFromMagShelf: true };
+    return { target: "gear", arm: "", category: migrateCategoryName("Mags & Ammo Storage"), storage: true, migratedFromMagShelf: true };
   }
   if (STORAGE_TYPES.has(key)) return pricedShelf({ target: "gear", arm: "", category: storageCategory(list), storage: true });
   const named = routeNamedCategory(key);
@@ -640,7 +644,9 @@ function routeNamedCategory(name) {
   if (key === "lower receiver") return { target: "armory", arm: "FA", category: "Lower receiver", armType: "Lower receiver" };
   if (key === "ammunition" || key === "ammo") return { target: "ammo", arm: "", category: "Ammunition" };
   if (key === "reloading") return { target: "gear", arm: "", category: "Reloading" };
-  const exact = DEFAULT_CATEGORIES.find(c => normType(c) === key);
+  const migrated = migrateCategoryName(name);
+  const want = normType(migrated);
+  const exact = DEFAULT_CATEGORIES.find(c => normType(c) === key || (want && normType(c) === want));
   if (exact) return { target: "gear", arm: "", category: exact };
   return null;
 }

@@ -32,7 +32,7 @@ var categoryAnswers={};
 var categoryAnswersReady=typeof window==="undefined"||!window.FIREBASE_CONFIG;
 var live=()=>all.filter(i=>!i.deleted);
 function catsInUse(items){const extra=[];(items||[]).forEach(i=>{const c=i&&i.category;if(c&&!CATS.includes(c)&&!extra.includes(c))extra.push(c)});return CATS.concat(extra)}
-var EXTRA_CATS=["Magazines & Belts","Triggers & Parts","Lower receiver","Ammo Storage & Loaders"];
+var EXTRA_CATS=["Magazines","Triggers & Parts","Lower receiver","Ammo Storage & Loaders"];
 function ensureCategoryOption(name){
   const sel=$("fCat");if(!sel||!name)return;
   if([...sel.options].some(o=>o.value===name||o.textContent===name))return;
