@@ -261,6 +261,14 @@ function render(){
 function saleDraft(){
   return {name:$("fName").value,brand:$("fBrand").value,category:$("fCat").value,caliber:$("fCal")?.value||"",arm:$("fArm")?.value||""};
 }
+function restrictedRetailShown(item){
+  if(!item||item.priceSource==="market"||item.priceSource==="auto")return false;
+  return item.priceSource==="manual"||+item.retailNew>0;
+}
+function restrictedValueShown(item){
+  if(!item||item.priceSource==="market"||item.priceSource==="auto")return !!(item&&item.valueSource==="manual");
+  return item.valueSource==="manual"||+item.value>0;
+}
 function syncSaleFields(){
   const restricted=GearLogic.saleRestricted(saleDraft());
   const retail=$("fRetail").closest(".f");if(retail)retail.hidden=false;
@@ -268,8 +276,10 @@ function syncSaleFields(){
   $("fVal").placeholder=restricted?"What you insure it for":"Auto from retail";
   if($("mktBtn")&&!lookingUp.has(editing?.id))$("mktBtn").textContent=restricted?"Look up weight":"Market check";
   if(restricted&&!retailDirty&&!valueDirty){
-    if(!(editing&&editing.priceSource==="manual"))$("fRetail").value="";
-    if(!(editing&&editing.valueSource==="manual"))$("fVal").value="";
+    if(!restrictedRetailShown(editing))$("fRetail").value="";
+    else if(editing&&$("fRetail").value==="")$("fRetail").value=editing.retailNew||"";
+    if(!restrictedValueShown(editing))$("fVal").value="";
+    else if(editing&&$("fVal").value==="")$("fVal").value=editing.value||"";
   }else if(!restricted&&!retailDirty&&!valueDirty&&editing){
     if($("fRetail").value===""&&editing.retailNew)$("fRetail").value=editing.retailNew;
     if($("fVal").value===""&&editing.value)$("fVal").value=editing.value;
@@ -318,13 +328,11 @@ function openForm(item){
   formFrom=item&&viewing&&!$("detail").hidden?item.id:null;
   $("detail").hidden=true;
   const blocked=!!(item&&GearLogic.saleRestricted(item));
-  const manualRetail=blocked&&item.priceSource==="manual";
-  const manualValue=blocked&&item.valueSource==="manual";
   editing=item||null;delArmed=false;retailDirty=false;valueDirty=false;
   $("formTitle").textContent=item?"Edit item":"Add item";
-  $("fName").value=item?.name||"";$("fBrand").value=item?.brand||"";$("fCat").value=item?.category||(filter!=="All"?filter:"Pouches");
+  $("fName").value=item?.name||"";$("fBrand").value=item?.brand||"";$("fCat").value=item? (GearLogic.migrateCategoryName(item.category)||item.category||"") : (filter!=="All"?filter:"Pouches");
   $("fQty").value=item?.qty??1;$("fColor").value=item?.color||"";$("fCond").value=item?.condition||"Good";
-  $("fRetail").value=blocked?(manualRetail?item.retailNew||"":""):(item?.retailNew||"");$("fVal").value=blocked?(manualValue?item.value||"":""):(item?.value||"");$("fLoc").value=item?.location||"";$("fNotes").value=item?.notes||"";
+  $("fRetail").value=!item?"":(blocked&&!restrictedRetailShown(item)?"":(item.retailNew||""));$("fVal").value=!item?"":(blocked&&!restrictedValueShown(item)?"":(item.value||""));$("fLoc").value=item?.location||"";$("fNotes").value=item?.notes||"";
   $("delBtn").hidden=!item;$("delBtn").className="btn ghost";$("delBtn").textContent="Delete";
   if(window.LOOKUP_URL){const busy=!!item&&lookingUp.has(item.id);$("mktBtn").disabled=busy;$("mktBtn").textContent=busy?"Looking up…":"Market check"}else{$("mktBtn").disabled=item?.marketCheck==="requested";$("mktBtn").textContent=item?.marketCheck==="requested"?"Check queued":"Market check"}
   $("fMount").innerHTML=mountOpts(item?.id);$("fMount").value=item?.mountedOn||"";
@@ -401,7 +409,7 @@ if(!window.LOOKUP_URL){$("mktBtn").onclick=async()=>{
 };
 $("bulkMktBtn").onclick=async()=>{
   const t=now();let n=0;
-  all=all.map(i=>{if(i.deleted||GearLogic.saleRestricted(i)||i.marketCheck==="requested"||i.priceSource==="market")return i;n++;return{...i,marketCheck:"requested",marketCheckAt:t,updatedAt:t}});
+  all=all.map(i=>{if(i.marketCheck==="requested"||!GearLogic.lookupPlan(i).price||i.priceSource==="market"||i.priceSource==="auto")return i;n++;return{...i,marketCheck:"requested",marketCheckAt:t,updatedAt:t}});
   if(!n){toast("Everything is already market-checked or queued");return}
   render();await persist();toast(`Queued ${n} item${n===1?"":"s"} for a market check`);
 };}

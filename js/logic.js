@@ -362,6 +362,9 @@ const CATEGORY_RENAMES = new Map([
   [LEGACY_STORAGE_KEY, STORAGE_CATEGORY],
   [LEGACY_MAGAZINES_KEY, MAGAZINES_CATEGORY],
   [LEGACY_BELTS_KEY, BELTS_CATEGORY],
+  [categoryKey("Lower Receivers"), "Firearms"],
+  [categoryKey("Lower Receiver"), "Firearms"],
+  [categoryKey("Ammunition"), "Ammo"],
 ]);
 
 export function migrateCategoryName(category) {
@@ -643,7 +646,7 @@ export function saleRestricted(item) {
   return false;
 }
 
-export const GEAR_CATEGORIES = ["Firearms","Suppressors","Magazines","Triggers & Parts","Armor & Carriers","Belts","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Ammo Storage & Loaders","Cleaning & Maintenance","Misc"];
+export const GEAR_CATEGORIES = ["Firearms","Suppressors","Ammo","Magazines","Triggers & Parts","Armor & Carriers","Belts","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Ammo Storage & Loaders","Cleaning & Maintenance","Misc"];
 
 // Shown under the category picker. Magazines are magazines only. Belts are belts. Rigs and carriers are armor.
 export const CATEGORY_HINTS = {
@@ -891,10 +894,11 @@ export function keepManualPrice(item, touch) {
   const value = Math.max(0, Math.round(+out.value || 0));
   const retailDirty = !!flags.retail;
   const valueDirty = !!flags.value;
-  const keepRetail = retail > 0 && (retailDirty || !!flags.retailWasManual);
+  const hadUnmarked = flags.unmarked != null ? !!flags.unmarked : unmarkedPrice(out);
+  const keepRetail = retail > 0 && (retailDirty || !!flags.retailWasManual || out.priceSource === "manual" || hadUnmarked);
   if (keepRetail) {
     out.retailNew = retail;
-    out.priceSource = "manual";
+    if (retailDirty || flags.retailWasManual || out.priceSource === "manual") out.priceSource = "manual";
   } else {
     out.retailNew = 0;
     delete out.priceSource;
@@ -902,9 +906,10 @@ export function keepManualPrice(item, touch) {
   }
   const factor = CONDITION_FACTOR[out.condition] ?? 0.6;
   const derived = keepRetail && retailDirty && !valueDirty && value > 0 && value === Math.round(retail * factor);
-  if (value > 0 && (valueDirty || !!flags.valueWasManual || derived)) {
+  const keepValue = value > 0 && (valueDirty || !!flags.valueWasManual || derived || out.valueSource === "manual" || hadUnmarked);
+  if (keepValue) {
     out.value = value;
-    out.valueSource = "manual";
+    if (valueDirty || flags.valueWasManual || derived || out.valueSource === "manual") out.valueSource = "manual";
   } else {
     out.value = 0;
     delete out.valueSource;
@@ -930,19 +935,94 @@ export function stampManualPrices(item, before, touch) {
   }
   if (valueTyped) out.valueSource = "manual";
   else if (!flags.value && !(+out.value > 0) && out.valueSource === "manual") delete out.valueSource;
+  const prior = before && before.priceSource;
+  if ((prior === "market" || prior === "auto") && out.priceSource === "manual") clearAutoPriceTrail(out);
+  if (before && !flags.retail && userEnteredPrice(before) && positivePrice(before.retailNew)) {
+    out.retailNew = before.retailNew;
+    if (before.priceSource === "manual") out.priceSource = "manual";
+    else if (out.priceSource !== "manual") delete out.priceSource;
+  }
+  if (before && !flags.value && userEnteredPrice(before) && positivePrice(before.value)) {
+    out.value = before.value;
+    if (before.valueSource === "manual") out.valueSource = "manual";
+    else if (out.valueSource !== "manual") delete out.valueSource;
+  }
   if (!saleRestricted(out)) return out;
   return keepManualPrice(out, {
     retail: !!flags.retail,
     value: !!flags.value,
     retailWasManual: retailWasManual || retailTyped,
     valueWasManual: valueWasManual || valueTyped,
+    unmarked: !!(before && unmarkedPrice(before)),
   });
 }
 
-// A market lookup fills empty and auto-filled numbers. A retail or insured value the user typed stays.
+function weightMissing(item) {
+  return !item || item.weight == null || item.weight === "";
+}
+
+function positivePrice(value) {
+  return value != null && value !== "" && isFinite(+value) && +value > 0;
+}
+
+// A price saved before the manual marker still counts. Market and auto are the only prices a lookup may replace.
+function unmarkedPrice(item) {
+  if (!item || item.priceSource === "manual" || item.priceSource === "market" || item.priceSource === "auto") return false;
+  return positivePrice(item.retailNew) || positivePrice(item.value) || positivePrice(item.usedLow) || positivePrice(item.usedHigh);
+}
+
+export function userEnteredPrice(item) {
+  if (!item || typeof item !== "object") return false;
+  return item.priceSource === "manual" || unmarkedPrice(item);
+}
+
+function clearAutoPriceTrail(out) {
+  delete out.usedLow;
+  delete out.usedHigh;
+  delete out.priceNote;
+  delete out.priceDate;
+  delete out.marketSources;
+  if (Object.prototype.hasOwnProperty.call(out, "link")) out.link = "";
+}
+
+// A hand-entered price is not a price lookup, including a price with no marker.
+// Only market and auto prices may be refreshed. Empty prices may be filled.
+// A restricted shelf never gets an auto price. A missing weight can still be looked up.
+export function lookupPlan(item) {
+  const blocked = !item || item.deleted || magShelfPending(item) || saleRestricted(item) || userEnteredPrice(item);
+  const weight = !!(item && !item.deleted && !magShelfPending(item) && weightMissing(item));
+  return { price: !blocked, weight };
+}
+
+// A notes-only save looks up a missing weight or an empty price. It does not refresh a price the user entered.
+export function saveNeedsLookup(item) {
+  if (!item || item.deleted || magShelfPending(item)) return false;
+  const plan = lookupPlan(item);
+  if (saleRestricted(item)) return plan.weight;
+  if (plan.weight) return true;
+  if (!plan.price) return false;
+  return item.priceSource !== "market" && item.priceSource !== "auto";
+}
+
+export function bulkLookupIds(items) {
+  return (Array.isArray(items) ? items : []).filter(item => {
+    const plan = lookupPlan(item);
+    if (plan.price && item.priceSource !== "market" && item.priceSource !== "auto") return true;
+    return plan.weight;
+  }).map(item => item && item.id).filter(Boolean);
+}
+
+export function singleLookupIds(items) {
+  return (Array.isArray(items) ? items : []).filter(item => {
+    const plan = lookupPlan(item);
+    return plan.price || plan.weight;
+  }).map(item => item && item.id).filter(Boolean);
+}
+
+// A market lookup fills empty and auto prices. A price the user entered stays, including its value and used range.
 export function applyMarketPrices(item, result, day) {
   const out = { ...(item && typeof item === "object" ? item : {}) };
-  if (magShelfPending(out) || saleRestricted(out)) return out;
+  if (magShelfPending(out) || saleRestricted(out) || userEnteredPrice(out)) return out;
   const res = result && typeof result === "object" ? result : {};
   const n = v => (v == null || v === "" || !isFinite(+v)) ? null : Math.round(+v);
   const retailManual = out.priceSource === "manual" && +out.retailNew > 0;
@@ -1215,7 +1295,7 @@ const GearLogic = {
   parseAllowlist, decideAccess, chargeDecision, quotaKey, alertQuotaKey, selectDueWatches, pinLengthOk, newPasswordOk,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
-  gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, applyMarketPrices,
+  gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, userEnteredPrice, lookupPlan, saveNeedsLookup, bulkLookupIds, singleLookupIds, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
   LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, MAGAZINES_CATEGORY, LEGACY_MAGAZINES_CATEGORY, BELTS_CATEGORY, LEGACY_BELTS_CATEGORY, ARMOR_CATEGORY, GEAR_CATEGORIES, CATEGORY_HINTS, PRICE_BACKSTOP,
   migrateCategoryName, migrateRecordCategories, explicitCategoryChoice, magShelfPending, answerMagShelf, beltRigPending, answerBeltRig,
