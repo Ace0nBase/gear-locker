@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { deflateRawSync } from "node:zlib";
-import { applyMarketPrices, settleDeal, importRestricted, importSkipsLookup, photoIdHardBlocked, photoIdSuggestion, saleRestricted, magShelfPending, csvCell, csvExportField } from "../js/logic.js";
+import { applyMarketPrices, settleDeal, importRestricted, importSkipsLookup, photoIdHardBlocked, photoIdSuggestion, saleRestricted, magShelfPending, csvCell, csvExportField, lookupPlan, saveNeedsLookup, bulkLookupIds, singleLookupIds, migrateCategoryName } from "../js/logic.js";
 import {
   readImportFile, readCsvText, planImport, undoImportState, changedAfterImport, mapColumns,
   normalizeHeader, maskSerial, parseDate, excelSerialToIso, columnDateOrder, headerHash,
@@ -526,6 +526,12 @@ test("unknown types stay uncategorized and sheets follow relationship ids", asyn
   assert.match(sheets.tables[2].grid[0].join(" "), /NOTES-ROW/);
   const core = fs.readFileSync(new URL("../js/core.js", import.meta.url), "utf8");
   assert.match(core, /ensureCategoryOption/);
+  const form = core.slice(core.indexOf("function openForm"), core.indexOf("function openForm") + 700);
+  assert.match(form, /migrateCategoryName\(item\.category\)/);
+  assert.match(form, /ensureCategoryOption\(cat\)/);
+  assert.equal(migrateCategoryName("Ammunition"), "Ammo");
+  assert.equal(migrateCategoryName("Lower Receivers"), "Firearms");
+  assert.equal(migrateCategoryName("Lower Receiver"), "Firearms");
   assert.match(core, /Magazines & Belts/);
   assert.match(core, /Triggers & Parts/);
   assert.match(core, /Lower receiver/);
@@ -701,10 +707,57 @@ test("an import note uses the local date", () => {
     items: [pouch], importId: "01NOTE", now: iso, rowDecisions: { 0: { 0: "merge" } },
   });
   assert.equal(plan.merges.length, 1);
-  assert.match(plan.merges[0].patch.notes, new RegExp(`Imported ${local}:`));
-  assert.match(plan.merges[0].patch.notes, /From the old list/);
+  assert.match(plan.merges[0].patch.notes, new RegExp(`Imported ${local}: From the old list`));
+  assert.equal(plan.merges[0].patch.notes.includes("Notes:"), false);
   const engine = fs.readFileSync(new URL("../js/import-engine.js", import.meta.url), "utf8");
   assert.equal(engine.includes("now.slice(0, 10)"), false);
+});
+
+test("needs and held imports are skipped by the lookup helpers", () => {
+  const quote = { retailNew: 99, value: 80, usedLow: 10, usedHigh: 20, priceNote: "Shelf", sources: [{ url: "https://example.com/shelf", label: "Shelf" }] };
+  const needs = { id: "needs", importId: "01N", needsCategory: true, category: "", name: "Glass", paid: 5, paidSource: "manual", weight: null };
+  const held = { id: "held", importId: "01H", category: "Ammo Storage & Loaders", migratedFromMagShelf: true, name: "Can", paid: 18, paidSource: "manual", weight: null, retailNew: 22, priceSource: "market" };
+  const open = { id: "open", importId: "01P", category: "Pouches", importPricedAllowlist: true, name: "Pouch", weight: null };
+  const manual = { id: "manual", category: "Pouches", name: "Typed", retailNew: 40, value: 28, priceSource: "manual", weight: 8 };
+  const unmarked = { id: "old", category: "Pouches", name: "Old", retailNew: 40, value: 30, weight: 8, usedLow: 20 };
+  for (const item of [needs, held]) {
+    assert.equal(importSkipsLookup(item), true, item.id);
+    assert.equal(lookupPlan(item).price, false, item.id);
+    assert.equal(lookupPlan(item).weight, false, item.id);
+    assert.equal(saveNeedsLookup(item), false, item.id);
+    assert.equal(bulkLookupIds([item]).includes(item.id), false, item.id);
+    assert.equal(singleLookupIds([item]).includes(item.id), false, item.id);
+  }
+  assert.equal(lookupPlan(open).price, true);
+  assert.equal(lookupPlan(open).weight, true);
+  assert.equal(saveNeedsLookup(open), true);
+  assert.equal(bulkLookupIds([open, needs, held]).includes("open"), true);
+  assert.equal(bulkLookupIds([open, needs, held]).includes("needs"), false);
+  assert.equal(bulkLookupIds([open, needs, held]).includes("held"), false);
+  assert.equal(lookupPlan(manual).price, false);
+  assert.equal(lookupPlan(unmarked).price, false);
+  const keptManual = applyMarketPrices(manual, quote, "2026-10-28");
+  assert.equal(keptManual.retailNew, 40);
+  assert.equal(keptManual.value, 28);
+  assert.equal(keptManual.priceSource, "manual");
+  assert.equal(keptManual.priceNote, undefined);
+  const keptUnmarked = applyMarketPrices(unmarked, quote, "2026-10-28");
+  assert.equal(keptUnmarked.retailNew, 40);
+  assert.equal(keptUnmarked.value, 30);
+  assert.equal(keptUnmarked.usedLow, 20);
+  const keptNeeds = applyMarketPrices(needs, quote, "2026-10-28");
+  assert.equal(keptNeeds.paid, 5);
+  assert.equal(keptNeeds.paidSource, "manual");
+  assert.equal(keptNeeds.retailNew, undefined);
+  assert.equal(keptNeeds.marketSources, undefined);
+  const restricted = { id: "gun", importId: "01G", category: "Firearms", arm: "FA", name: "Rifle", paid: 100, paidSource: "manual", retailNew: 50, value: 40 };
+  const keptGun = applyMarketPrices(restricted, quote, "2026-10-28");
+  assert.equal(keptGun.paid, 100);
+  assert.equal(keptGun.paidSource, "manual");
+  assert.equal(keptGun.retailNew, 50);
+  assert.equal(keptGun.value, 40);
+  assert.equal(keptGun.marketSources, undefined);
+  assert.equal(keptGun.priceNote, undefined);
 });
 
 test("a legacy Mags & Ammo Storage import waits for the shelf answer", () => {
@@ -793,8 +846,14 @@ test("a gun type in the type column asks before a priced bulk category", () => {
   assert.equal(typeColumnIsGun("Lower receiver"), true);
   assert.equal(typeColumnIsGun("Pouches"), false);
   assert.equal(typeColumnIsGun("Red dot"), false);
-  assert.equal(typeColumnIsGun("AR-15"), false);
   assert.equal(typeColumnIsGun(""), false);
+  for (const gun of ["AR-15", "AK-47", "Glock 19 w/ light", "Semi-auto rifle", "PCC", "Short barreled rifle", "Pistol (semi-auto)"]) {
+    assert.equal(typeColumnIsGun(gun), true, gun);
+    const routed = planImport(readCsvText(`Item,Type,Price\nPiece,${gun},25\n`).tables, { importId: "01WARN", now: "2026-10-27T00:00:00.000Z" });
+    const row = routed.rows[0];
+    assert.equal(row.category === "Firearms" && row.target === "armory", false, gun);
+    assert.equal(routed.items.some(item => item.category === "Firearms" && item.name === "Piece"), false, gun);
+  }
   for (const gear of ["Rifle case", "Pistol holster", "Gun safe", "Rifle sling", "Rifle scope", "Upper receiver", "Lower parts kit"]) {
     assert.equal(typeColumnIsGun(gear), false, gear);
   }

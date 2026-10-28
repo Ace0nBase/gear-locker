@@ -393,7 +393,7 @@ async function qaStorageCheckRun(){
   else toast("Storage check failed. Another account or a signed-out check was not blocked ("+otherCode+" / "+signedOutCode+").",6000);
 }
 }
-var APP_VERSION="41";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+var APP_VERSION="42";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 var swReloadPending=false;
 function showUpdateToast(){
   const el=$("toast");if(!el)return;

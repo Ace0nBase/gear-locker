@@ -1731,15 +1731,17 @@ function clearAutoPriceTrail(out) {
 // A hand-entered price is not a price lookup, including a price with no marker.
 // Only market and auto prices may be refreshed. Empty prices may be filled.
 // A restricted shelf never gets an auto price. A missing weight can still be looked up.
+// An imported row that still needs a category, or one held for a shelf answer, is not looked up.
 export function lookupPlan(item) {
-  const blocked = !item || item.deleted || magShelfPending(item) || saleRestricted(item) || userEnteredPrice(item);
-  const weight = !!(item && !item.deleted && !magShelfPending(item) && weightMissing(item));
+  const skipImport = importSkipsLookup(item);
+  const blocked = !item || item.deleted || magShelfPending(item) || saleRestricted(item) || userEnteredPrice(item) || skipImport;
+  const weight = !!(item && !item.deleted && !magShelfPending(item) && !skipImport && weightMissing(item));
   return { price: !blocked, weight };
 }
 
 // A notes-only save looks up a missing weight or an empty price. It does not refresh a price the user entered.
 export function saveNeedsLookup(item) {
-  if (!item || item.deleted || magShelfPending(item)) return false;
+  if (!item || item.deleted || magShelfPending(item) || importSkipsLookup(item)) return false;
   const plan = lookupPlan(item);
   if (saleRestricted(item)) return plan.weight;
   if (plan.weight) return true;
@@ -1749,6 +1751,7 @@ export function saveNeedsLookup(item) {
 
 export function bulkLookupIds(items) {
   return (Array.isArray(items) ? items : []).filter(item => {
+    if (!item || importSkipsLookup(item)) return false;
     const plan = lookupPlan(item);
     if (plan.price && item.priceSource !== "market" && item.priceSource !== "auto") return true;
     return plan.weight;

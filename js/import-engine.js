@@ -826,8 +826,12 @@ function readFields(row, columns, opts) {
     const cleaned = cleanText(raw, col.field === "notes");
     if (cleaned.truncated) truncated = true;
     const text = cleaned.text;
-    if (col.field === "notes" || col.field === "manufactureDate") {
-      notes.push(col.field === "manufactureDate" ? `Manufacture date: ${text}` : (col.dup > 1 || col.header ? `${col.header}: ${text}` : text));
+    if (col.field === "manufactureDate") {
+      notes.push(`Manufacture date: ${text}`);
+      return;
+    }
+    if (col.field === "notes") {
+      notes.push(text);
       return;
     }
     if (col.field === "load") {
@@ -927,6 +931,19 @@ function filedAsFirearm(route) {
   return !!(route && (route.target === "armory" || route.arm === "FA" || route.arm === "SU"));
 }
 
+// Warning only. These whole type values are not filed as firearms and are not stripped of a price.
+const GUN_WARNING_EXACT = new Set([
+  "ar 15", "ak 47", "glock 19", "semi auto rifle", "pcc",
+  "short barreled rifle", "pistol semi auto",
+]);
+
+function wholeGunWarning(typeText) {
+  const key = normType(typeText);
+  if (!key) return false;
+  if (GUN_WARNING_EXACT.has(key)) return true;
+  return filedAsFirearm(classifyType(typeText, null, "generic"));
+}
+
 function comboPieces(typeText) {
   return String(typeText || "")
     .split(/\s*(?:\bw\/|\/|\+|&|,|;|\bwith\b|\band\b)\s*/i)
@@ -939,9 +956,9 @@ function comboPieces(typeText) {
 export function typeColumnIsGun(typeText) {
   const raw = String(typeText || "").trim();
   if (!raw) return false;
-  if (filedAsFirearm(classifyType(raw, null, "generic"))) return true;
+  if (wholeGunWarning(raw)) return true;
   if (!comboMarked(raw)) return false;
-  return comboPieces(raw).some(part => filedAsFirearm(classifyType(part, null, "generic")));
+  return comboPieces(raw).some(part => wholeGunWarning(part));
 }
 
 export function planImport(tables, opts = {}) {
