@@ -1648,6 +1648,7 @@ export function stampManualPrices(item, before, touch) {
     delete out.priceDate;
   }
   if (valueTyped) out.valueSource = "manual";
+  else if (flags.value && !(+out.value > 0)) { out.value = 0; delete out.valueSource; }
   else if (!flags.value && !(+out.value > 0) && out.valueSource === "manual") delete out.valueSource;
   const prior = before && before.priceSource;
   if ((prior === "market" || prior === "auto") && out.priceSource === "manual") clearAutoPriceTrail(out);

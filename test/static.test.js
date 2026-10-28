@@ -48,12 +48,12 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device and the service worker is version 44", () => {
+test("sign-out clears this device and the service worker is version 46", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v44/);
+  assert.match(sw, /war-box-v46/);
   assert.match(read("js/cloud.js"), /APP_VERSION="41"/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
@@ -102,6 +102,9 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/cloud.js"), /bulkLookupIds\(live\(\)\)/);
   assert.match(read("js/cloud.js"), /singleLookupIds/);
   assert.match(read("js/core.js"), /lookupPlan\(i\)\.price/);
+  assert.match(read("js/core.js"), /\$\("fVal"\)\.oninput=\(\)=>\{valueDirty=true\}/);
+  assert.doesNotMatch(read("js/core.js"), /valueDirty=\$\("fVal"\)\.value!==""/);
+  assert.match(read("js/core.js"), /saleRestricted\(saleDraft\(\)\)\)return/);
   assert.match(read("js/social.js"), /stripGunMarketText\(best\.note\)/);
   assert.match(read("js/cloud.js"), /stripGunMarketSources/);
   assert.match(read("js/core.js"), /retail\.hidden=false/);

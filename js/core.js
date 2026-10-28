@@ -294,13 +294,14 @@ function syncCatHint(){
 }
 function autoValue(){
   if(valueDirty)return;
-  if(!retailDirty&&editing&&editing.value&&editing.retailNew&&Math.round(editing.retailNew*(FACTOR[editing.condition]??0.6))!==Math.round(editing.value))return;
+  if(GearLogic.saleRestricted(saleDraft()))return;
+  if(editing&&+editing.value>0)return;
   const r=parseFloat($("fRetail").value);
   if(r>0)$("fVal").value=Math.round(r*(FACTOR[$("fCond").value]??0.6));
 }
 $("fRetail").oninput=()=>{retailDirty=true;autoValue()};$("fCond").onchange=()=>{autoValue();syncSaleFields()};
 ["fName","fBrand","fCat","fCal","fArm"].forEach(id=>{const el=$(id);if(!el)return;el.addEventListener("input",syncSaleFields);el.addEventListener("change",syncSaleFields)});
-$("fVal").oninput=()=>{valueDirty=$("fVal").value!==""};
+$("fVal").oninput=()=>{valueDirty=true};
 function marketSourceText(item){
   if(GearLogic.saleRestricted(item)||GearLogic.magShelfPending(item))return "";
   const rows=GearLogic.stripGunMarketSources(item&&item.marketSources);
