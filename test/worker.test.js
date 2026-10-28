@@ -32,10 +32,16 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.match(src, /Do not look up a price/);
   assert.doesNotMatch(src, /function ammoLookup|AmmoSeek/);
   const dealAt = src.indexOf("async function dealCheck");
-  const guardAt = src.indexOf("if (saleRestricted(w))", dealAt);
+  const guardAt = src.indexOf("if (priceRouteBlocked(w))", dealAt);
   const fetchAt = src.indexOf("https://api.anthropic.com", dealAt);
   assert.ok(dealAt > 0 && guardAt > dealAt && guardAt < fetchAt);
-  assert.match(src, /!saleRestricted\(w\)/);
+  assert.match(src, /!priceRouteBlocked\(w\)/);
+  assert.match(src, /category === "Magazines"/);
+  assert.match(src, /category === "Magazines & Belts"/);
+  const lookupAt = src.indexOf("async function lookupOne");
+  const blockAt = src.indexOf("priceRouteBlocked(clean)", lookupAt);
+  const claudeAt = src.indexOf("callClaude", lookupAt);
+  assert.ok(lookupAt > 0 && blockAt > lookupAt && blockAt < claudeAt);
   assert.match(src, /publicWeightNote\(parsed\.weightNote\)/);
   assert.match(src, /pickModelAnswer\(/);
   assert.match(src, /settleLookup\(clean, parsed\)/);

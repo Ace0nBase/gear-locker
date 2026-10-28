@@ -183,7 +183,7 @@ async function identify(env, img, hint) {
   const priced = pricedPhotoCategories(CATS);
   const ask = `This photo shows one piece of tactical, outdoor, shooting or medical gear that the owner wants to add to their inventory app.${hint ? ` They called it: "${hint}".` : ""}
 Identify it. Look for logos, labels, tags, stitching patterns and distinctive design to name the maker and model if you can; if you can't tell the maker, say what kind of item it is.
-If the photo is a firearm, suppressor, lower receiver, magazine, ammunition belt, trigger part, or auto-fire device, set category to "". Do not mention a price or a place to buy it.
+If the photo is a firearm, suppressor, lower receiver, magazine, ammunition belt, trigger part, or auto-fire device, set category to "". A plate carrier or chest rig uses Armor & Carriers. A battle belt, duty belt, or rigger's belt uses Belts. Do not mention a price or a place to buy it.
 Reply with ONLY this JSON object:
 {"name": "short item name, e.g. 'Double M4 mag pouch' or 'IFAK pouch'", "brand": "maker and model if identifiable with reasonable confidence, else empty string", "category": one of ${JSON.stringify(priced)} or "", "color": "color or camo pattern", "confidence": "high|medium|low", "summary": "one short sentence on what it looks like and what gave it away"}`;
   const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -219,8 +219,13 @@ Use web search (at most 2 searches). Check TacSwap listings, eBay Buy It Now lis
 When done, reply with ONLY this JSON object:
 {"price": number|null, "where": "site or seller, e.g. 'TacSwap' or 'Amazon'", "url": "https link to the listing", "condition": "new|used|like new", "note": "one short sentence, e.g. 'Used, good condition, ships free'"}`;
 }
+function priceRouteBlocked(it) {
+  const category = String((it && it.category) || "");
+  if (category === "Magazines" || category === "Magazines & Belts") return true;
+  return saleRestricted(it || {});
+}
 async function dealCheck(env, w) {
-  if (saleRestricted(w)) return { price: null, where: "", url: "", condition: "", note: "", date: localDay(new Date()), hit: false };
+  if (priceRouteBlocked(w)) return { price: null, where: "", url: "", condition: "", note: "", date: localDay(new Date()), hit: false };
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
   const messages = [{ role: "user", content: dealPrompt(w) }];
   let data, all = [];
@@ -293,14 +298,14 @@ async function runDueWatches(env, budget) {
     if (await readCount(env, alertQuotaKey(u.uid, now)) >= alertLimit) continue;
     eligible.push(u);
   }
-  eligible.forEach(u => { u.list = (u.list || []).filter(w => w && !saleRestricted(w)); });
+  eligible.forEach(u => { u.list = (u.list || []).filter(w => w && !priceRouteBlocked(w)); });
   const picked = selectDueWatches(eligible.filter(u => u.list.length), { now, budget, minGapMs: gapMs });
   const dirty = new Map();
   let done = 0;
   for (const p of picked) {
     const u = eligible.find(x => x.uid === p.uid);
     const w = u && u.rec.list.find(x => x.id === p.watch.id);
-    if (!w || saleRestricted(w)) continue;
+    if (!w || priceRouteBlocked(w)) continue;
     if (!(await chargeScheduledAlert(env, u.uid)).ok) continue;
     const wasHit = !!(w.best && w.best.hit);
     try {
@@ -410,7 +415,8 @@ async function lookupOne(env, it) {
     weightOnly: it.weightOnly === true || it.weightOnly === "true",
   };
   if (!clean.name) return { id: clean.id, ok: false, error: "missing name" };
-  if (clean.kind === "wish" && saleRestricted(clean)) return { id: clean.id, ok: false, error: "Price search skips this item." };
+  if (priceRouteBlocked(clean)) clean.weightOnly = true;
+  if (clean.kind === "wish" && priceRouteBlocked(clean)) return { id: clean.id, ok: false, error: "Price search skips this item." };
   let data;
   try { data = await callClaude(env, env.MODEL || "claude-haiku-5-5", clean); }
   catch (e) {
@@ -421,7 +427,7 @@ async function lookupOne(env, it) {
   const settled = settleLookup(clean, parsed);
   if (!settled.apply) throw new Error("couldn't read the lookup answer, try again");
   const { apply, ...fields } = settled;
-  if (saleRestricted(clean) || clean.weightOnly) {
+  if (priceRouteBlocked(clean) || clean.weightOnly) {
     return { id: clean.id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: fields.weightOz, priceNote: "", weightNote: publicWeightNote(parsed.weightNote), sources: [] };
   }
   return { id: clean.id, ok: true, ...fields };
@@ -473,7 +479,7 @@ export default {
         const max = +(env.MAX_WATCHES || 10);
         const inList = Array.isArray(body.watches) ? body.watches : [];
         const old = new Map(rec.list.map(w => [w.id, w]));
-        const next = inList.slice(0, max).filter(w => w && w.id && w.name && +w.target > 0 && !saleRestricted(w)).map(w => {
+        const next = inList.slice(0, max).filter(w => w && w.id && w.name && +w.target > 0 && !priceRouteBlocked(w)).map(w => {
           const o = old.get(String(w.id)) || {};
           const same = o.name === String(w.name) && o.brand === String(w.brand || "");
           return { id: String(w.id).slice(0, 80), name: String(w.name).slice(0, 120), brand: String(w.brand || "").slice(0, 120), category: String(w.category || "").slice(0, 60),
@@ -487,7 +493,7 @@ export default {
       if (url.pathname === "/watch/check") {
         const w = rec.list.find(x => x.id === String(body.id || ""));
         if (!w) return json({ error: "Set an alert price on this item first" }, 400, h);
-        if (saleRestricted(w)) {
+        if (priceRouteBlocked(w)) {
           w.best = { price: null, where: "", url: "", condition: "", note: "", date: localDay(new Date()), hit: false };
           w.lastErr = "";
           await saveRec();

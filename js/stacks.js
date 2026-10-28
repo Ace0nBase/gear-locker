@@ -1,20 +1,16 @@
 /* ---------- v12: stricter kit matching, one magazine slot, split / merge stacks ---------- */
 // one "Magazines" slot for rifle and pistol mags
-S.mags=["Magazines (rifle & pistol)",["Ammo Storage & Loaders","Magazines & Belts"],["pmag","magazine","mags","mag ","lancer","gen m3","glock mag","p320 mag","pistol mag","rifle mag","ar mag","ak mag","stanag","magpul","etsgroup","ets "],"Enough loaded mags for the day: rifle, pistol or both.",["pouch","loader","holster","case","carrier","coupler"]];
+S.mags=["Magazines (rifle & pistol)",["Magazines","Magazines & Belts","Ammo Storage & Loaders","Mags & Ammo Storage"],["pmag","magazine","mags","mag ","lancer","gen m3","glock mag","p320 mag","pistol mag","rifle mag","ar mag","ak mag","stanag","magpul","etsgroup","ets "],"Enough loaded mags for the day: rifle, pistol or both.",["pouch","loader","holster","case","carrier","coupler"]];
 delete S.pistolmags;
 KITS.forEach(k=>{k.req=[...new Set(k.req.map(s=>s==="pistolmags"?"mags":s))];k.opt=[...new Set(k.opt.map(s=>s==="pistolmags"?"mags":s))].filter(s=>!k.req.includes(s))});
 Object.keys(kits).forEach(id=>{const p=kits[id]?.picks;if(p&&p.pistolmags){if(!p.mags)p.mags=p.pistolmags;delete p.pistolmags}});
 // gear only fills a slot in its own category (no more suppressors as magazines)
 var NEVER_SLOT=new Set(["Firearms","Suppressors"]);
 score=function(kit,slotId,i){
-  const def=S[slotId];if(!def)return 0;const [, cats, kws, , ex]=def;const t=itemText(i);
-  if(NEVER_SLOT.has(i.category))return 0;
-  if(!cats.includes(i.category))return 0;
-  if(ex.some(k=>t.includes(k)))return 0;
-  if(!kws.some(k=>hasKw(t,k)))return 0;
-  let sc=7+colorFit(kit,i,slotId)*2;
-  if(i.condition==="New"||i.condition==="Good")sc+=1;if(i.condition==="Needs-repair")sc-=3;
-  return Math.max(sc,0.5);
+  if(i&&NEVER_SLOT.has(GearLogic.migrateCategoryName(i.category)))return 0;
+  const base=GearLogic.starterSlotScore(S[slotId],i);
+  if(!base)return 0;
+  return Math.max(base+colorFit(kit,i,slotId)*2,0.5);
 };
 
 /* split a stack: move some of a quantity somewhere else */

@@ -78,7 +78,37 @@ export function serverStampIso(v) {
   return "";
 }
 
+function legacyCategoryId(category) {
+  const key = categoryKey(category);
+  return key === LEGACY_BELTS_KEY || key === LEGACY_MAGAZINES_KEY || key === LEGACY_STORAGE_KEY;
+}
+
+// An explicit Move stamps movedAt. A later save that still carries an old category id does not undo it.
+export function keepMovedCategory(winner, local, remote) {
+  if (!winner || !legacyCategoryId(winner.category)) return winner;
+  const moved = [local, remote].filter(row => row && row.movedAt && !legacyCategoryId(row.category))
+    .sort((a, b) => String(a.movedAt).localeCompare(String(b.movedAt)));
+  const best = moved[moved.length - 1];
+  if (!best) return winner;
+  if (winner.category === best.category && winner.movedAt === best.movedAt) return winner;
+  return { ...winner, category: best.category, movedAt: best.movedAt };
+}
+
+export function mergeCategoryAnswers(local, remote) {
+  const out = { ...(local && typeof local === "object" ? local : {}) };
+  Object.entries(remote && typeof remote === "object" ? remote : {}).forEach(([id, answer]) => {
+    if (!id || !answer || typeof answer !== "object") return;
+    const prev = out[id];
+    if (!prev || String(answer.at || "") >= String(prev.at || "")) out[id] = answer;
+  });
+  return out;
+}
+
 export function mergeByServerTime(local, remote, inflight) {
+  return keepMovedCategory(mergeByServerTimeWinner(local, remote, inflight), local, remote);
+}
+
+function mergeByServerTimeWinner(local, remote, inflight) {
   inflight = inflight || {};
   if (!remote) return local;
   if (!local) return remote;
@@ -303,30 +333,135 @@ function categoryKey(value) {
 
 export const LEGACY_STORAGE_CATEGORY = "Mags & Ammo Storage";
 export const STORAGE_CATEGORY = "Ammo Storage & Loaders";
+export const MAGAZINES_CATEGORY = "Magazines";
+export const LEGACY_MAGAZINES_CATEGORY = "Magazines & Belts";
+export const BELTS_CATEGORY = "Belts";
+export const LEGACY_BELTS_CATEGORY = "Belts & Rigs";
+export const ARMOR_CATEGORY = "Armor & Carriers";
 const LEGACY_STORAGE_KEY = categoryKey(LEGACY_STORAGE_CATEGORY);
 const STORAGE_KEY = categoryKey(STORAGE_CATEGORY);
+const LEGACY_MAGAZINES_KEY = categoryKey(LEGACY_MAGAZINES_CATEGORY);
+const MAGAZINES_KEY = categoryKey(MAGAZINES_CATEGORY);
+const LEGACY_BELTS_KEY = categoryKey(LEGACY_BELTS_CATEGORY);
+const BELTS_KEY = categoryKey(BELTS_CATEGORY);
+// A saved move applies to the old id and to the shelf that id renames to. A later explicit category is left alone.
+const ANSWER_SHELVES = {
+  belt: [LEGACY_BELTS_KEY, BELTS_KEY],
+  magazines: [LEGACY_MAGAZINES_KEY, MAGAZINES_KEY],
+  storage: [LEGACY_STORAGE_KEY, STORAGE_KEY],
+};
+// Magazines is weight-only. The previous shelf id stays in the block list as an alias.
 const WEIGHT_ONLY_CATEGORY_KEYS = new Set([
-  categoryKey("Magazines & Belts"),
+  MAGAZINES_KEY,
+  LEGACY_MAGAZINES_KEY,
   categoryKey("Triggers & Parts"),
 ]);
 
-// The old shelf name becomes Ammo Storage & Loaders. Matching is the whole category, not a word inside it.
+// Whole-category renames. A word inside a different shelf does not match, and the item name is never read.
+const CATEGORY_RENAMES = new Map([
+  [LEGACY_STORAGE_KEY, STORAGE_CATEGORY],
+  [LEGACY_MAGAZINES_KEY, MAGAZINES_CATEGORY],
+  [LEGACY_BELTS_KEY, BELTS_CATEGORY],
+]);
+
 export function migrateCategoryName(category) {
   if (category == null) return category;
   const raw = String(category);
-  if (raw && categoryKey(raw) === LEGACY_STORAGE_KEY) return STORAGE_CATEGORY;
-  return raw;
+  if (!raw) return raw;
+  return CATEGORY_RENAMES.get(categoryKey(raw)) || raw;
 }
 
-export function migrateRecordCategories(records, stamp) {
+function categoryAnswer(book, row) {
+  if (!book || !row || !row.id) return null;
+  const answer = book[row.id];
+  return answer && typeof answer === "object" ? answer : null;
+}
+
+function answeredMove(answer, prompt) {
+  return !!(answer && answer.prompt === prompt && answer.action === "move" && answer.category);
+}
+
+// An explicit category save replaces the stored move, so the old destination cannot snap the row back.
+// The returned movedAt is written on the row. A same-category save leaves the answer alone.
+export function explicitCategoryChoice(answer, previousCategory, nextCategory, stamp) {
+  if (!answer || typeof answer !== "object" || !answer.prompt) return null;
+  if (String(previousCategory || "") === String(nextCategory || "")) return null;
+  const at = stamp || "";
+  return {
+    answer: { prompt: answer.prompt, action: "move", category: nextCategory || "", at },
+    movedAt: at,
+  };
+}
+
+// Account answers win before the old id is renamed. A row already parked on Belts, Magazines, or Ammo Storage is put back.
+// A category that is neither the old id nor that default shelf is an explicit choice and stays put.
+function savedMoveCategory(from, answer) {
+  if (!answer || !answeredMove(answer, answer.prompt)) return "";
+  const shelves = ANSWER_SHELVES[answer.prompt];
+  if (!shelves || !shelves.includes(from)) return "";
+  return answer.category;
+}
+
+export function migrateRecordCategories(records, stamp, answers) {
   let changed = false;
   const list = Array.isArray(records) ? records : [];
+  const book = answers && typeof answers === "object" ? answers : null;
   const next = list.map(row => {
     if (!row || typeof row !== "object") return row;
-    const category = migrateCategoryName(row.category);
-    if (category === row.category) return row;
+    const from = categoryKey(row.category);
+    const answer = categoryAnswer(book, row);
+    const movedTo = savedMoveCategory(from, answer);
+    let category = movedTo || migrateCategoryName(row.category);
+    const beltAnswered = !!(answer && answer.prompt === "belt");
+    const magAnswered = !!(answer && answer.prompt === "magazines");
+    const storageAnswered = !!(answer && answer.prompt === "storage");
+    let copy = row;
+    let dirty = category !== row.category;
+    if (dirty) copy = { ...row, category, updatedAt: stamp || row.updatedAt || "" };
+    if (from === LEGACY_STORAGE_KEY && !storageAnswered && !copy.migratedFromMagShelf) {
+      copy = { ...copy, migratedFromMagShelf: true, updatedAt: stamp || copy.updatedAt || "" };
+      dirty = true;
+    }
+    if (from === LEGACY_BELTS_KEY && !beltAnswered && !copy.migratedFromBeltRig) {
+      copy = { ...copy, migratedFromBeltRig: true, updatedAt: stamp || copy.updatedAt || "" };
+      dirty = true;
+    }
+    if (from === LEGACY_MAGAZINES_KEY && !magAnswered && !copy.migratedFromMagazinesBelts) {
+      copy = { ...copy, migratedFromMagazinesBelts: true, updatedAt: stamp || copy.updatedAt || "" };
+      dirty = true;
+    }
+    if (storageAnswered && copy.migratedFromMagShelf) {
+      copy = { ...copy };
+      delete copy.migratedFromMagShelf;
+      copy.updatedAt = stamp || copy.updatedAt || "";
+      dirty = true;
+    }
+    if (beltAnswered && copy.migratedFromBeltRig) {
+      copy = { ...copy };
+      delete copy.migratedFromBeltRig;
+      copy.updatedAt = stamp || copy.updatedAt || "";
+      dirty = true;
+    }
+    if (magAnswered && copy.migratedFromMagazinesBelts) {
+      copy = { ...copy };
+      delete copy.migratedFromMagazinesBelts;
+      copy.updatedAt = stamp || copy.updatedAt || "";
+      dirty = true;
+    }
+    if (answeredMove(answer, "belt") || answeredMove(answer, "magazines") || answeredMove(answer, "storage")) {
+      if (copy.category === answer.category && !copy.movedAt) {
+        copy = { ...copy, movedAt: answer.at || stamp || copy.updatedAt || "" };
+        dirty = true;
+      }
+    }
+    if (magazineCategory(copy) && magazineAutoDirty(copy)) {
+      copy = clearMagazineAutoPrices({ ...copy, category: migrateCategoryName(copy.category) });
+      copy.updatedAt = stamp || copy.updatedAt || "";
+      dirty = true;
+    }
+    if (!dirty) return row;
     changed = true;
-    return { ...row, category, migratedFromMagShelf: true, updatedAt: stamp || row.updatedAt || "" };
+    return copy;
   });
   return { records: changed ? next : list, changed };
 }
@@ -351,7 +486,7 @@ export function answerMagShelf(records, action, id, stamp) {
       return copy;
     }
     const moved = keepManualPrice(
-      { ...row, category: "Magazines & Belts" },
+      { ...row, category: MAGAZINES_CATEGORY },
       { retailWasManual: row.priceSource === "manual", valueWasManual: row.valueSource === "manual" },
     );
     delete moved.migratedFromMagShelf;
@@ -361,8 +496,135 @@ export function answerMagShelf(records, action, id, stamp) {
   return { records: changed ? next : list, changed };
 }
 
+// True only for a row the Belts & Rigs rename marked. The item name is never read.
+export function beltRigPending(item) {
+  return !!(item && item.migratedFromBeltRig === true);
+}
+
+// Move sends that one row to Armor & Carriers. Dismiss leaves every pending row on Belts, with its price and links.
+// There is no move-all: a battle belt and a chest rig share this shelf until the owner picks.
+export function answerBeltRig(records, action, id, stamp) {
+  const list = Array.isArray(records) ? records : [];
+  let changed = false;
+  const next = list.map(row => {
+    if (!beltRigPending(row)) return row;
+    const move = action === "move" && row.id === id;
+    if (action !== "dismiss" && !move) return row;
+    changed = true;
+    const copy = { ...row, updatedAt: stamp || row.updatedAt || "" };
+    delete copy.migratedFromBeltRig;
+    if (move) {
+      copy.category = ARMOR_CATEGORY;
+      copy.movedAt = stamp || copy.updatedAt || "";
+    }
+    return copy;
+  });
+  return { records: changed ? next : list, changed };
+}
+
+// True only for a row the Magazines & Belts rename marked. The item name is never read.
+export function magazinesBeltPending(item) {
+  return !!(item && item.migratedFromMagazinesBelts === true);
+}
+
+// Move sends that one row to Belts, Pouches, or Ammo Storage & Loaders. Dismiss leaves every pending row on Magazines.
+// There is no move-all and no name check: a magazine and a pouch share this shelf until the owner picks.
+export function answerMagazinesBelt(records, action, id, stamp) {
+  const list = Array.isArray(records) ? records : [];
+  const dest = action === "move-belts" ? BELTS_CATEGORY : action === "move-storage" ? STORAGE_CATEGORY : action === "move-pouches" ? "Pouches" : "";
+  let changed = false;
+  const next = list.map(row => {
+    if (!magazinesBeltPending(row)) return row;
+    const move = !!dest && row.id === id;
+    if (action !== "dismiss" && !move) return row;
+    changed = true;
+    const copy = { ...row, updatedAt: stamp || row.updatedAt || "" };
+    delete copy.migratedFromMagazinesBelts;
+    if (move) {
+      copy.category = dest;
+      copy.movedAt = stamp || copy.updatedAt || "";
+    }
+    return copy;
+  });
+  return { records: changed ? next : list, changed };
+}
+
+export function magazineCategory(item) {
+  const raw = categoryKey(item && item.category);
+  const migrated = categoryKey(migrateCategoryName(item && item.category));
+  return raw === MAGAZINES_KEY || raw === LEGACY_MAGAZINES_KEY || migrated === MAGAZINES_KEY;
+}
+
+function magazineAutoDirty(row) {
+  if (!row || typeof row !== "object") return false;
+  if (row.priceSource !== "manual" && (+row.retailNew > 0 || row.priceSource || row.priceDate || row.priceNote || row.usedLow != null || row.usedHigh != null)) return true;
+  if (row.valueSource !== "manual" && +row.value > 0) return true;
+  if (row.priceSource !== "manual" && row.estPrice != null && row.estPrice !== "" && +row.estPrice > 0) return true;
+  if (row.link) return true;
+  if (Array.isArray(row.marketSources) && row.marketSources.length) return true;
+  if (row.deal) return true;
+  if (row.target != null && row.target !== "" && +row.target > 0) return true;
+  if (row.marketCheck || row.marketCheckAt || row.dealSeen) return true;
+  return false;
+}
+
+// Drop market value, market data, store links, deal, and watch state. Keep a typed price and what I paid.
+export function clearMagazineAutoPrices(row) {
+  if (!row || typeof row !== "object" || !magazineCategory(row)) return row;
+  const retailManual = row.priceSource === "manual";
+  const valueManual = row.valueSource === "manual";
+  const out = keepManualPrice({ ...row }, { retailWasManual: retailManual, valueWasManual: valueManual });
+  delete out.deal;
+  delete out.target;
+  delete out.marketCheck;
+  delete out.marketCheckAt;
+  delete out.dealSeen;
+  if (!retailManual) delete out.estPrice;
+  if (out.link) out.link = "";
+  out.marketSources = [];
+  return out;
+}
+
+// A slot list may name the current shelf, the old id, or both. Gear that already moved to the new id still matches.
+export function slotAllowsCategory(allowed, category) {
+  const list = Array.isArray(allowed) ? allowed : [];
+  const raw = String(category == null ? "" : category);
+  if (!raw) return false;
+  if (list.includes(raw)) return true;
+  const migrated = migrateCategoryName(raw) || raw;
+  if (list.includes(migrated)) return true;
+  return list.some(entry => {
+    const next = migrateCategoryName(entry);
+    return next === raw || next === migrated;
+  });
+}
+
+export function starterSlotScore(slot, item) {
+  if (!slot || !item) return 0;
+  const cats = slot.categories || slot[1] || [];
+  const kws = slot.keywords || slot[2] || [];
+  const ex = slot.exclude || slot[4] || [];
+  const text = ` ${[item.name, item.brand, item.notes].join(" ")} `.toLowerCase();
+  const category = migrateCategoryName(item.category);
+  if (category === "Firearms" || category === "Suppressors" || item.category === "Firearms" || item.category === "Suppressors") return 0;
+  if (!slotAllowsCategory(cats, item.category)) return 0;
+  if (ex.some(k => text.includes(String(k).toLowerCase()))) return 0;
+  const hit = kws.some(k => {
+    const word = String(k).trim().toLowerCase();
+    if (!word) return false;
+    const re = new RegExp("(^|[^a-z0-9])" + word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    return re.test(text);
+  });
+  if (!hit) return 0;
+  let sc = 7;
+  if (item.condition === "New" || item.condition === "Good") sc += 1;
+  if (item.condition === "Needs-repair") sc -= 3;
+  return Math.max(sc, 0.5);
+}
+
 // Automatic prices stop at the firearm, suppressor, ammunition, lower-receiver,
-// magazine-and-belt, and trigger-part shelves, and at a firearm or suppressor record.
+// magazine, and trigger-part shelves, and at a firearm or suppressor record.
+// The old Magazines & Belts id is an alias for Magazines. Belts and armor stay priced.
 // Ammo storage and loaders stay priced. The item name is not checked.
 export function saleRestricted(item) {
   if (!item || typeof item !== "object") return false;
@@ -370,17 +632,25 @@ export function saleRestricted(item) {
   if (kind === "ammo") return true;
   const arm = String(item.arm || "").trim().toUpperCase();
   if (arm === "FA" || arm === "SU") return true;
+  const rawKey = categoryKey(item.category);
   const c = categoryKey(migrateCategoryName(item.category));
   if (!c) return false;
   if (c === STORAGE_KEY) return false;
-  if (WEIGHT_ONLY_CATEGORY_KEYS.has(c)) return true;
+  if (WEIGHT_ONLY_CATEGORY_KEYS.has(c) || WEIGHT_ONLY_CATEGORY_KEYS.has(rawKey)) return true;
   if (/\b(firearms?|handguns?|rifles?|shotguns?|suppressors?|silencers?|nfa)\b/.test(c)) return true;
   if (/\b(ammunitions?|ammo|cartridges?|reloading)\b/.test(c)) return true;
   if (/\b(lowers?|frames?|receivers?)\b/.test(c)) return true;
   return false;
 }
 
-export const GEAR_CATEGORIES = ["Firearms","Suppressors","Magazines & Belts","Triggers & Parts","Armor & Carriers","Belts & Rigs","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Ammo Storage & Loaders","Cleaning & Maintenance","Misc"];
+export const GEAR_CATEGORIES = ["Firearms","Suppressors","Magazines","Triggers & Parts","Armor & Carriers","Belts","Pouches","Holsters & Slings","Helmet & Head","NVG & Optics","Lights & Lasers","Comms & Radios","Medical","Packs & Bags","Cases & Bags","Clothing & Boots","Knives & Tools","Ammo Storage & Loaders","Cleaning & Maintenance","Misc"];
+
+// Shown under the category picker. Magazines are magazines only. Belts are belts. Rigs and carriers are armor.
+export const CATEGORY_HINTS = {
+  Magazines: "Magazines only, such as a PMAG or a Glock mag. Weight lookup only. No prices or stores.",
+  Belts: "Battle belts, duty belts, and rigger's belts. A chest rig or plate carrier belongs in Armor & Carriers.",
+  "Armor & Carriers": "Plate carriers, chest rigs, and armor plates.",
+};
 
 // Categories Photo ID may fill in. Restricted shelves are left blank so they are not offered as priced.
 export function pricedPhotoCategories(categories) {
@@ -672,7 +942,7 @@ export function stampManualPrices(item, before, touch) {
 // A market lookup fills empty and auto-filled numbers. A retail or insured value the user typed stays.
 export function applyMarketPrices(item, result, day) {
   const out = { ...(item && typeof item === "object" ? item : {}) };
-  if (magShelfPending(out)) return out;
+  if (magShelfPending(out) || saleRestricted(out)) return out;
   const res = result && typeof result === "object" ? result : {};
   const n = v => (v == null || v === "" || !isFinite(+v)) ? null : Math.round(+v);
   const retailManual = out.priceSource === "manual" && +out.retailNew > 0;
@@ -947,8 +1217,10 @@ const GearLogic = {
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
   gunMarketUrl, stripGunMarketSources, stripGunMarketText, pickModelAnswer, settleLookup, settleDeal, keepManualPrice, stampManualPrices, applyMarketPrices,
   keepSignedIn, firestoreMemoryOnly, SIGN_OUT_WAIT_MS, settleOrTimeout, signOutConfirmNeeded, armorySubject, armoryLookupBlocked, photoIdBlocked,
-  LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, GEAR_CATEGORIES, PRICE_BACKSTOP,
-  migrateCategoryName, migrateRecordCategories, magShelfPending, answerMagShelf, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, photoIdBlockReason,
+  LEGACY_STORAGE_CATEGORY, STORAGE_CATEGORY, MAGAZINES_CATEGORY, LEGACY_MAGAZINES_CATEGORY, BELTS_CATEGORY, LEGACY_BELTS_CATEGORY, ARMOR_CATEGORY, GEAR_CATEGORIES, CATEGORY_HINTS, PRICE_BACKSTOP,
+  migrateCategoryName, migrateRecordCategories, explicitCategoryChoice, magShelfPending, answerMagShelf, beltRigPending, answerBeltRig,
+  magazinesBeltPending, answerMagazinesBelt, magazineCategory, clearMagazineAutoPrices, slotAllowsCategory, starterSlotScore,
+  keepMovedCategory, mergeCategoryAnswers, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, photoIdBlockReason,
   timerShotAccepted, radioService, radioTxLabel, mergeFieldConflict,
 };
 globalThis.GearLogic = GearLogic;

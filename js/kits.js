@@ -26,7 +26,7 @@ function gunType(i){const t=itemNameText(i)+" "+String(i.armType||"").toLowerCas
 var COMPACT=/\b(43x?|48|26|27|42|365|p365|hellcat|shield|pocket|lcp|p3at|\.380|380|nano|g43|g26|cc\b|subcompact|micro|502|naa)\b/;
 function classify(i){
   if(i._kinds)return i._kinds;
-  const out=new Set();const c=i.category||"";const nm=itemNameText(i);const nt=` ${i.notes||""} `.toLowerCase();const arm=armOf(i);
+  const out=new Set();const c=GearLogic.migrateCategoryName(i.category)||"";const nm=itemNameText(i);const nt=` ${i.notes||""} `.toLowerCase();const arm=armOf(i);
   const done=()=>{Object.defineProperty(i,"_kinds",{value:out,enumerable:false,configurable:true});return out};
   if(c==="Firearms"||arm==="FA"){out.add(gunType(i)==="pistol"?"gun_pistol":"gun_long");return done()}
   if(c==="Suppressors"||arm==="SU"){out.add("suppressor");return done()}
@@ -47,17 +47,17 @@ function classify(i){
     else if(RX.wlight.test(nm)&&!/headlamp|head lamp/.test(nm)){out.add("wlight");out.add(RX.pistolLight.test(nm)?"light_pistol":"light_rifle")}
   }
   if(c==="Helmet & Head"&&RX.helmet.test(nm)&&!/cover|mount|bag|shroud|pad/.test(nm))out.add("helmet");
-  if(c==="Armor & Carriers"||c==="Belts & Rigs"){
+  if(c==="Armor & Carriers"||c==="Belts"||GearLogic.slotAllowsCategory(["Armor & Carriers","Belts"],i.category)){
     if(RX.chest.test(nm)&&!/belt\b/.test(nm))out.add("carrier_chest");
-    else if(c==="Armor & Carriers"&&RX.plates.test(nm)&&!/carrier|rig|bag/.test(nm))out.add("plates");
-    else if(c==="Armor & Carriers"&&RX.plateCarrier.test(nm))out.add("carrier_plate");
+    else if((c==="Armor & Carriers"||c==="Belts")&&RX.plates.test(nm)&&!/carrier|rig|bag/.test(nm))out.add("plates");
+    else if((c==="Armor & Carriers"||c==="Belts")&&RX.plateCarrier.test(nm))out.add("carrier_plate");
   }
-  const magCat=c==="Ammo Storage & Loaders"||c==="Magazines & Belts";
-  if((c==="Pouches"||magCat||c==="Belts & Rigs"||c==="Armor & Carriers")&&(RX.pouch.test(nm)&&(RX.magword.test(nm)||/kywi|taco|placard|shingle/.test(nm)))&&!/dump|admin|radio|med|ifak|utility|gp\b/.test(nm))
+  const magCat=c==="Ammo Storage & Loaders"||c==="Magazines";
+  if((c==="Pouches"||magCat||c==="Belts"||c==="Armor & Carriers")&&(RX.pouch.test(nm)&&(RX.magword.test(nm)||/kywi|taco|placard|shingle/.test(nm)))&&!/dump|admin|radio|med|ifak|utility|gp\b/.test(nm))
     out.add(RX.pistolword.test(nm)?"magpouch_pistol":"magpouch_rifle");
   else if(magCat&&RX.magword.test(nm)&&!/loader|coupler|holster|can\b|box\b/.test(nm))out.add(RX.pistolword.test(nm)?"mag_pistol":"mag_rifle");
   // everything else: the slot library, gated by category
-  GENERIC_KINDS.forEach(k=>{const d=S[k];if(!d)return;const [,cats,kws,,ex]=d;if(!cats.includes(c))return;const t=nm+" "+(k==="ifak"||k==="traumabag"?nt:"");if(ex.some(x=>t.includes(x)))return;if(kws.some(x=>hasKw(t,x)))out.add(k)});
+  GENERIC_KINDS.forEach(k=>{const d=S[k];if(!d)return;const [,cats,kws,,ex]=d;if(!GearLogic.slotAllowsCategory(cats,i.category))return;const t=nm+" "+(k==="ifak"||k==="traumabag"?nt:"");if(ex.some(x=>t.includes(x)))return;if(kws.some(x=>hasKw(t,x)))out.add(k)});
   if(out.has("traumabag"))out.delete("ifak");
   if(out.has("magpouch_rifle")||out.has("magpouch_pistol")){out.delete("ifak")}
   return done();
@@ -72,9 +72,9 @@ S.sidearm=S.sidearm||["Sidearm",["Firearms"],[],"The pistol for this job.",[]];
 var SLOT={
   primary:["Primary weapon",["gun_long"],"The rifle or shotgun for this job."],
   sidearm:["Sidearm",["gun_pistol"],"The pistol for this job."],
-  carrier:["Plate carrier / chest rig",["carrier_plate","carrier_chest"],"Something to run mags and med up front."],
+  carrier:["Plate carrier / chest rig",["carrier_plate","carrier_chest"],"A plate carrier or chest rig from Armor & Carriers."],
   plates:["Armor plates",["plates"],"Rifle-rated plates sized for your carrier."],
-  belt:["Battle belt",["belt"],"A belt for holster, pistol mags and TQ."],
+  belt:["Battle belt",["belt"],"A battle belt, duty belt, or rigger's belt."],
   riflemag:["Rifle mag pouches",["magpouch_rifle"],"Pouches for your rifle mags."],
   pistolmag:["Pistol mag pouches",["magpouch_pistol"],"One or two pistol mag pouches."],
   mags:["Magazines",["mag_rifle","mag_pistol"],"Loaded mags for the guns you're bringing."],
