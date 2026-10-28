@@ -5,7 +5,7 @@
 // The class extends DurableObject so the real binding exposes these methods over RPC.
 
 import { DurableObject } from "cloudflare:workers";
-import { applyReserve, applyReconcile, quotaCounterExpired, USAGE_HOLD_STALE_MS, POOL_SEED_KEY } from "../js/logic.js";
+import { applyReserve, applyReconcile, quotaCounterExpired, USAGE_HOLD_STALE_MS, POOL_SEED_KEY, poolLifetimeExpired } from "../js/logic.js";
 
 const SPEND = "spend:free";
 const SEEDED = "seeded:spend";
@@ -229,7 +229,7 @@ export class UsageLedger extends DurableObject {
     const rows = this._rows("SELECT k FROM kv");
     let removed = 0;
     for (const row of rows) {
-      if (row.k === SPEND && !seeded) continue;
+      if (row.k === SPEND && !seeded && !poolLifetimeExpired(now)) continue;
       if (String(row.k).startsWith("rel:") || String(row.k).startsWith("done:")) {
         const ts = this._get(row.k);
         if (ts && ts < now.getTime() - TOMBSTONE_MS) {
