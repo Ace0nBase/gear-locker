@@ -5,7 +5,7 @@ import {
   estimateSpendMicro, usageFromResponse, freeSpendBlocked, usageDecision,
   deleteRevenueCatCustomer, accountDeletePlan, accountPlan, USER_COLLECTIONS,
   signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
-  clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, lookupItemHoldMicro, priciestRates, spendRates, applyReserve, applyReconcile, DAILY_SPEND_FULL,
+  clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, lookupItemHoldMicro, lookupTypicalMicro, priciestRates, spendRates, applyReserve, applyReconcile, DAILY_SPEND_FULL,
   SEARCH_RESULT_TOKENS, roundFits, roundInputTokens, loanTargetsFromLends, loanRedactTargets, loansToMirror,
   deleteRetryRoute, runDeleteAttempt, SERVER_DELETE_STEPS, LOOKUPS_PAUSED,
   ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
@@ -162,6 +162,9 @@ test("a free spend hold is the worst case from the output cap and the search cou
   assert.ok(usage.input_tokens > spec.promptTokens * spec.rounds * spec.calls);
   assert.ok(lookupReserveMicro({}) < 1e6);
   assert.ok(lookupReserveMicro({}) * 8 < 25e6);
+  assert.equal(Math.floor(25e6 / lookupItemHoldMicro({})), 36);
+  assert.ok(lookupTypicalMicro({}) < 50_000);
+  assert.ok(lookupTypicalMicro({}) * 10 < 750_000);
   assert.ok(lookupReserveMicro({ FALLBACK_MODEL: "" }) < lookupReserveMicro({}));
   assert.equal(lookupReserveMicro({}), lookupItemHoldMicro({}));
   assert.ok(priciestRates({}).outputPerMillion > spendRates({}).outputPerMillion);
@@ -729,14 +732,21 @@ test("the first round of every AI op fits its hold, and the input cap applies af
   }, spendRates({}));
   assert.ok(searchRound <= lookupReserveMicro({}));
   const trimmed = applyReserve({ spend: 0, daily: 0, month: 0, alert: 0, dailySpend: 0 }, {
-    partial: true, reserve: 400, reserveEach: 100, cap: 1e12, dailyAdd: 4, dailyLimit: 40, monthAdd: 4, monthLimit: 100, dailySpendCap: 250,
+    partial: true, reserve: 4000, reserveEach: 1000, dailyEach: 100, cap: 1e12, dailyAdd: 4, dailyLimit: 40, monthAdd: 4, monthLimit: 100, dailySpendCap: 250,
   });
   assert.equal(trimmed.ok, true);
   assert.equal(trimmed.charged, 2);
-  assert.equal(trimmed.reserved, 200);
+  assert.equal(trimmed.reserved, 2000);
+  assert.equal(trimmed.dailyHeld, 200);
   assert.equal(trimmed.state.dailySpend, 200);
-  assert.match(trimmed.refusedError, /spending limit/);
-  const settled = applyReconcile({ spend: 200, dailySpend: 200, month: 2, refunds: 0 }, { reserved: 200, actual: 50, dailyHold: 200 });
+  assert.match(trimmed.refusedError, /Today's lookup spending limit is reached/);
+  const openBatch = applyReserve({ spend: 0, daily: 0, month: 0, alert: 0, dailySpend: 0 }, {
+    partial: true, reserve: lookupItemHoldMicro({}) * 4, reserveEach: lookupItemHoldMicro({}), dailyEach: lookupTypicalMicro({}), cap: 25e6,
+    dailyAdd: 4, dailyLimit: 40, monthAdd: 4, monthLimit: 10, dailySpendCap: 750000,
+  });
+  assert.equal(openBatch.charged, 4);
+  assert.equal(openBatch.refusedError, "");
+  const settled = applyReconcile({ spend: 2000, dailySpend: 200, month: 2, refunds: 0 }, { reserved: 2000, actual: 50, dailyHold: 200 });
   assert.equal(settled.state.spend, 50);
   assert.equal(settled.state.dailySpend, 50);
   assert.equal(DAILY_SPEND_FULL.length > 0, true);

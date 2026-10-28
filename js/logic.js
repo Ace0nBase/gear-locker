@@ -580,6 +580,16 @@ export function lookupItemHoldMicro(env, inputTokens) {
   return total;
 }
 
+// Median primary lookup: a short prompt, a short answer, and two web searches. A few cents.
+// The shared pool still reserves lookupItemHoldMicro. Only the per-account daily cap uses this.
+export function lookupTypicalMicro(env) {
+  return estimateSpendMicro({
+    input_tokens: 4000,
+    output_tokens: 500,
+    web_search_requests: 2,
+  }, spendRates(env));
+}
+
 // A searching op other than lookup reserves at least one round at the input cap.
 // A lookup reserves lookupItemHoldMicro. SPEND_RESERVE_USD can only raise that lookup hold.
 export function callHoldMicro(env, op, inputTokens) {
@@ -634,25 +644,28 @@ export function applyReserve(state, req) {
       if (dailyAdd) quotaFit = Math.min(quotaFit, dailyLeft);
       if (!req.skipMonth && monthAdd) quotaFit = Math.min(quotaFit, monthLeft);
       quotaFit = Math.max(0, quotaFit);
-      const each = Math.max(0, Math.round(+req.reserveEach || 0));
+      const poolEach = Math.max(0, Math.round(+req.reserveEach || 0));
+      const dailyEach = Math.max(0, Math.round(+req.dailyEach || 0));
       let spendFit = requested;
-      if (spendCapOn && each > 0) spendFit = Math.max(0, Math.floor((dailySpendCap - spentToday) / each));
+      if (spendCapOn && dailyEach > 0) spendFit = Math.max(0, Math.floor((dailySpendCap - spentToday) / dailyEach));
       const fit = Math.max(0, Math.min(quotaFit, spendFit));
       if (fit <= 0) {
-        const error = spendCapOn && each > 0 && spendFit <= 0 && quotaFit > 0
+        const error = spendCapOn && dailyEach > 0 && spendFit <= 0 && quotaFit > 0
           ? DAILY_SPEND_FULL
           : quotaFullMessage(req, monthLeft, dailyLeft);
         return { ok: false, status: 429, error, reserved: 0, charged: 0, state: same };
       }
       if (fit < requested) {
         refusedError = spendFit < quotaFit ? DAILY_SPEND_FULL : quotaFullMessage(req, monthLeft, dailyLeft);
-        reserve = each ? each * fit : Math.ceil(reserve * fit / requested);
+        reserve = poolEach ? poolEach * fit : Math.ceil(reserve * fit / requested);
         if (dailyAdd) dailyAdd = Math.min(dailyAdd, fit);
         if (monthAdd) monthAdd = Math.min(monthAdd, fit);
       }
     }
   }
-  if (spendCapOn && !req.partial && (dailyAdd || monthAdd) && spentToday + reserve > dailySpendCap) {
+  const dailyEach = Math.max(0, Math.round(+req.dailyEach || 0));
+  const chargedPreview = req.skipMonth ? dailyAdd : Math.max(dailyAdd, monthAdd);
+  if (spendCapOn && !req.partial && dailyEach > 0 && spentToday + dailyEach * chargedPreview > dailySpendCap) {
     return { ok: false, status: 429, error: DAILY_SPEND_FULL, reserved: 0, charged: 0, state: same };
   }
   if (!skipSpend && !reserveFits(spend, reserve, req.cap)) {
@@ -676,15 +689,17 @@ export function applyReserve(state, req) {
     alertNext = alertDecision.next;
   }
   const held = skipSpend ? 0 : reserve;
-  const dailySpendNext = spendCapOn ? spentToday + held : spentToday;
+  const charged = req.skipMonth ? dailyAdd : Math.max(dailyAdd, monthAdd);
+  const dailyHeld = spendCapOn && dailyEach > 0 ? dailyEach * charged : 0;
   return {
     ok: true,
     status: 200,
     error: "",
     reserved: held,
-    charged: req.skipMonth ? dailyAdd : Math.max(dailyAdd, monthAdd),
+    charged,
+    dailyHeld,
     refusedError,
-    state: { spend: spend + held, daily: dailyAdd ? dailyDecision.next : daily, month: monthNext, alert: alertNext, dailySpend: dailySpendNext },
+    state: { spend: spend + held, daily: dailyAdd ? dailyDecision.next : daily, month: monthNext, alert: alertNext, dailySpend: spentToday + dailyHeld },
   };
 }
 
@@ -2295,7 +2310,7 @@ const GearLogic = {
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupPriced, lookupBatchAllowance,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, DELETED_USER_TTL_MS, deletedUserExpireAt, tombstoneDue, LOOKUPS_PAUSED,
-  reserveFits, lookupItemHoldMicro, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
+  reserveFits, lookupItemHoldMicro, lookupTypicalMicro, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
   ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
   CLEANUP_MAX_ATTEMPTS, CLEANUP_MAX_AGE_MS, CLEANUP_RECORD_MAX_BYTES, orderRedactions,
   LEND_EMAIL_CAP, lendMailDocId, lendAddress, lendRetarget, REDACT_PAGE_SIZE, REDACT_OPS_BUDGET, REDACT_MAX_AGE_MS, REDACT_RECORD_MAX_BYTES,

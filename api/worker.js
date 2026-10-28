@@ -16,7 +16,7 @@
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced, MONTHLY_REFUND_CAP } from "../js/logic.js";
+import { decideAccess, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced, lookupTypicalMicro, MONTHLY_REFUND_CAP } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
 import { serviceAccountLogLine, sweepTombstones } from "./firestore-admin.js";
@@ -355,10 +355,11 @@ async function reserveCall(env, user, op, count, extra) {
       monthKey,
       dailySpendKey: spendDayKey,
       dailySpendCap: skipSpend ? null : freeDailySpendCapMicro(env),
+      dailyEach: Math.max(0, Math.round(+extra.dailyEach || 0)),
       alertKey: alertQuotaKey(uid, day),
       seedSpend: await spendSeed(env),
     });
-    return { ...reserved, dailyKey, monthKey, refundKey, dailySpendKey: spendDayKey, skipSpend, skipMonth: review };
+    return { ...reserved, dailyKey, monthKey, refundKey, dailySpendKey: spendDayKey, skipSpend, skipMonth: review, dailyHeld: reserved.dailyHeld || 0 };
   } catch {
     return { ok: false, status: 503, error: LOOKUPS_PAUSED, reserved: 0, charged: 0 };
   }
@@ -910,7 +911,7 @@ export default {
     const budgets = accepted.map(it => callHoldMicro(env, "lookup", estimateInputTokens(JSON.stringify([{ role: "user", content: prompt(it) }]))));
     const reserveMicro = budgets.reduce((sum, n) => sum + n, 0);
     const reserveEach = budgets.reduce((max, n) => Math.max(max, n), 0);
-    const lookBill = await reserveCall(env, user, "lookup", accepted.length, { reserveMicro, reserveEach, partial: true, now });
+    const lookBill = await reserveCall(env, user, "lookup", accepted.length, { reserveMicro, reserveEach, dailyEach: lookupTypicalMicro(env), partial: true, now });
     if (!lookBill.ok) return json({ error: lookBill.error, results: accepted.map(it => ({ id: String((it && it.id) || ""), ok: false, error: lookBill.error })).concat(refused) }, lookBill.status, h);
     const charged = Math.max(0, Math.round(+lookBill.charged || 0));
     const run = accepted.slice(0, charged);
@@ -929,7 +930,7 @@ export default {
     await finishCall(env, lookBill.id, lookBill.reserved, actual, spendExtra(lookBill, {
       countRefund: run.length - packed.filter(lookupPriced).length,
       refundCap: MONTHLY_REFUND_CAP,
-      dailyHold: lookBill.reserved,
+      dailyHold: lookBill.dailyHeld,
     }));
     const firstErr = results.find(r => !r.ok)?.error;
     if (results.every(r => !r.ok)) return json({ error: firstErr || "Lookup failed", results }, 502, h);

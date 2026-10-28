@@ -501,12 +501,13 @@ async function runLookups(ids,quiet){
   if(!ids.length)return;
   ids.forEach(id=>lookingUp.add(id));render();
   let ok=0,fail="";
-  const lookupStop=/turned off|confirm your email|daily lookup limit|this month's lookups|spending limit/i;
+  const lookupStop=/turned off|confirm your email|daily lookup limit|this month's lookups/i;
+  const spendStop=/Today's lookup spending limit is reached/i;
   for(let k=0;k<ids.length;k+=4){
     const chunk=ids.slice(k,k+4);
     let stop=false;
     try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){const msg=lookupFailMessage(r.error||"No result");markLookupError(it,msg);fail=fail||msg}if(lookupStop.test(String(r.error||"")))stop=true}})}
-    catch(e){fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);markLookupError(it,fail)});if(lookupStop.test(String(e&&e.message||""))){ids.slice(k).forEach(id=>lookingUp.delete(id));render();await persist();refreshLookupDetail(ids.slice(k));break}}
+    catch(e){fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);markLookupError(it,fail)});if(lookupStop.test(String(e&&e.message||""))||spendStop.test(String(e&&e.message||""))){ids.slice(k).forEach(id=>lookingUp.delete(id));render();await persist();refreshLookupDetail(ids.slice(k));break}}
     chunk.forEach(id=>lookingUp.delete(id));if(stop)ids.slice(k+chunk.length).forEach(id=>lookingUp.delete(id));render();await persist();
     refreshLookupDetail(chunk);
     if(stop)break;

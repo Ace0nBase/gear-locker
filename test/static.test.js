@@ -289,6 +289,15 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("README.md"), /FREE_DAILY_SPEND_CAP_USD/);
   assert.match(read("api/worker.js"), /FREE_DAILY_SPEND_CAP_USD:\s*"0\.75"/);
   assert.match(read("js/core.js"), /spending limit/);
+  assert.match(read("js/logic.js"), /Today's lookup spending limit is reached/);
+  const runLookups = read("js/cloud.js");
+  const runStart = runLookups.indexOf("async function runLookups");
+  const runBody = runLookups.slice(runStart, runLookups.indexOf("var _saveCurrent"));
+  const forEach = runBody.slice(runBody.indexOf("res.forEach"), runBody.indexOf("catch(e)"));
+  const catchBody = runBody.slice(runBody.indexOf("catch(e)"));
+  assert.match(runBody, /Today's lookup spending limit is reached/);
+  assert.doesNotMatch(forEach, /spendStop/);
+  assert.match(catchBody, /spendStop/);
   assert.match(read("README.md"), /REVIEW_EMAILS/);
   assert.match(read("README.md"), /FIREBASE_SERVER_API_KEY/);
   assert.doesNotMatch(read("README.md"), /FIREBASE_API_KEY/);

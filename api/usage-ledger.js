@@ -64,7 +64,7 @@ export class UsageLedger extends DurableObject {
     const id = String(req.id || "");
     // A zero hold still marks the call, so a quota refund can run once and a repeat reconcile cannot.
     if (id) this._put("hold:" + id, out.reserved);
-    return { ok: true, status: 200, error: "", reserved: out.reserved, id, charged: out.charged, refusedError: out.refusedError || "" };
+    return { ok: true, status: 200, error: "", reserved: out.reserved, id, charged: out.charged, dailyHeld: out.dailyHeld || 0, refusedError: out.refusedError || "" };
   }
 
   reconcile(req) {
