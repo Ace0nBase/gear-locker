@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { deflateRawSync } from "node:zlib";
-import { applyMarketPrices, settleDeal, importRestricted, importSkipsLookup, photoIdHardBlocked, photoIdSuggestion, saleRestricted, magShelfPending, csvCell } from "../js/logic.js";
+import { applyMarketPrices, settleDeal, importRestricted, importSkipsLookup, photoIdHardBlocked, photoIdSuggestion, saleRestricted, magShelfPending, csvCell, csvExportField } from "../js/logic.js";
 import {
   readImportFile, readCsvText, planImport, undoImportState, changedAfterImport, mapColumns,
   normalizeHeader, maskSerial, parseDate, excelSerialToIso, columnDateOrder, headerHash,
@@ -1045,6 +1045,96 @@ test("re-importing this app's export is a duplicate", () => {
   assert.equal(plan.rows.every(row => row.skipped), true);
   assert.equal(plan.items.length, 0);
   assert.equal(plan.rows.find(row => row.name === "=CMD").name, "=CMD");
+});
+
+test("a round trip of this app's export keeps category and prices", () => {
+  const saved = [
+    { name: "Rifle case", brand: "Pelican", category: "Cases & Bags", qty: 1, color: "Tan", condition: "Good", retailNew: 80, value: 64, paid: 70, weight: 12, location: "Shelf", notes: "Hard case", priceSource: "market", priceDate: "2026-10-01" },
+    { name: "Glock pouch", brand: "Ferrowind", category: "Pouches", qty: 2, color: "", condition: "Good", retailNew: 40, value: 32, paid: 39.5, weight: "", location: "Bin", notes: "", priceSource: "", priceDate: "" },
+    { name: "Ranger", brand: "Tarnway", category: "Firearms", qty: 1, color: "", condition: "Good", retailNew: 1200, value: 900, paid: 899.5, weight: "", location: "Safe", notes: "", priceSource: "market", priceDate: "2026-10-02" },
+    { name: "PMAG", brand: "Magpul", category: "Magazines", qty: 3, color: "", condition: "Good", paid: 14, retailNew: 18, value: 12, priceSource: "market", location: "", notes: "" },
+    { name: "PMAG", brand: "Blue Alpha", category: "Magazines & Belts", qty: 1, color: "", condition: "Good", paid: 80, retailNew: 90, value: 70, priceSource: "manual", valueSource: "manual", location: "", notes: "" },
+    { name: "Chest rig", brand: "Spiritus", category: "Belts & Rigs", qty: 1, color: "", condition: "Good", paid: 200, location: "", notes: "" },
+    { name: "Can", brand: "Surplus", category: "Mags & Ammo Storage", qty: 1, color: "", condition: "Good", paid: 18, retailNew: 22, value: 20, priceSource: "market", location: "Shed", notes: "" },
+  ];
+  const headers = ["Category", "Qty", "Item", "Brand/Model", "Color", "Condition", "New retail", "Value each", "Paid each", "Weight (oz)", "Stored", "Notes", "Price source", "Price date"];
+  const keys = ["category", "qty", "name", "brand", "color", "condition", "retailNew", "value", "paid", "weight", "location", "notes", "priceSource", "priceDate"];
+  const csv = "\uFEFF" + [headers.map(csvCell).join(","), ...saved.map(item => keys.map(key => csvCell(csvExportField(item, key))).join(","))].join("\r\n");
+  const parsed = readCsvText(csv);
+  const cols = parsed.tables[0].columns;
+  assert.equal(cols.find(col => col.key === "category").field, "category");
+  assert.equal(cols.find(col => col.key === "new retail").field, "retailNew");
+  assert.equal(cols.find(col => col.key === "new retail").locked, false);
+  assert.equal(cols.find(col => col.key === "value each").field, "value");
+  assert.equal(cols.find(col => col.key === "price source").field, "priceSource");
+  assert.equal(cols.find(col => col.key === "paid each").field, "paid");
+  const generic = readCsvText("Category,Item\nRifle,Ranger\n").tables[0];
+  assert.equal(generic.columns.find(col => col.key === "category").field, "armType");
+  const plan = planImport(parsed.tables, { importId: "01ROUND", now: "2026-10-27T00:00:00.000Z" });
+  const item = (name, brand) => plan.items.find(row => row.name === name && row.brand === brand);
+  const review = (name, brand) => plan.rows.find(row => row.name === name && row.brand === brand);
+  const box = item("Rifle case", "Pelican");
+  assert.equal(box.category, "Cases & Bags");
+  assert.equal(box.arm || "", "");
+  assert.equal(box.armType || "", "");
+  assert.equal(box.retailNew, 80);
+  assert.equal(box.value, 64);
+  assert.equal(box.priceSource, "market");
+  assert.equal(box.priceDate, "2026-10-01");
+  assert.equal(box.paid, 70);
+  assert.equal(box.paidSource, "manual");
+  assert.equal(box.weight, 12);
+  assert.equal(box.location, "Shelf");
+  const pouch = item("Glock pouch", "Ferrowind");
+  assert.equal(pouch.category, "Pouches");
+  assert.equal(pouch.armType || "", "");
+  assert.equal(pouch.retailNew, 40);
+  assert.equal(pouch.value, 32);
+  assert.equal(pouch.priceSource, "manual");
+  assert.equal(pouch.valueSource, "manual");
+  assert.equal(pouch.paid, 39.5);
+  assert.equal(pouch.paidSource, "manual");
+  const gun = item("Ranger", "Tarnway");
+  assert.equal(gun.category, "Firearms");
+  assert.equal(gun.arm, "FA");
+  assert.equal(gun.paid, 899.5);
+  assert.equal(gun.paidSource, "manual");
+  assert.equal(gun.retailNew, undefined);
+  assert.equal(gun.value, undefined);
+  assert.equal(gun.priceSource, undefined);
+  const mag = item("PMAG", "Magpul");
+  assert.equal(mag.category, "Magazines");
+  assert.equal(mag.paid, 14);
+  assert.equal(mag.paidSource, "manual");
+  assert.equal(mag.retailNew, undefined);
+  assert.equal(mag.value, undefined);
+  const oldMag = review("PMAG", "Blue Alpha");
+  assert.equal(oldMag.target, "needs");
+  assert.equal(oldMag.category, "");
+  assert.equal(item("PMAG", "Blue Alpha"), undefined);
+  const rig = review("Chest rig", "Spiritus");
+  assert.equal(rig.target, "needs");
+  assert.equal(rig.category, "");
+  const can = item("Can", "Surplus");
+  assert.equal(can.category, "Ammo Storage & Loaders");
+  assert.equal(can.migratedFromMagShelf, true);
+  assert.equal(can.paid, 18);
+  assert.equal(can.paidSource, "manual");
+  assert.equal(can.retailNew, undefined);
+  assert.equal(can.value, undefined);
+  const forced = [
+    headers.map(csvCell).join(","),
+    ["Firearms", "1", "Ranger", "Tarnway", "", "Good", "1200", "900", "899.50", "", "Safe", "", "market", "2026-10-02"].map(csvCell).join(","),
+  ].join("\r\n");
+  const forcedPlan = planImport(readCsvText(forced).tables, { importId: "01FORCED", now: "2026-10-27T00:00:00.000Z" });
+  const forcedGun = forcedPlan.items[0];
+  assert.equal(forcedGun.category, "Firearms");
+  assert.equal(forcedGun.paid, 899.5);
+  assert.equal(forcedGun.paidSource, "manual");
+  assert.equal(forcedGun.retailNew, undefined);
+  assert.equal(forcedGun.value, undefined);
+  assert.equal(forcedGun.priceSource, undefined);
+  assert.equal(forcedGun.armType || "", "");
 });
 
 test("workbook relationships may use single quotes or a namespace prefix", async () => {

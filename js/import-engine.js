@@ -298,12 +298,41 @@ export function detectSource(keys) {
   return "generic";
 }
 
+const OWN_EXPORT_FIELDS = {
+  category: "category",
+  qty: "qty",
+  item: "name",
+  "brand model": "brand",
+  color: "color",
+  condition: "condition",
+  "new retail": "retailNew",
+  "value each": "value",
+  "paid each": "paid",
+  weight: "weight",
+  stored: "location",
+  notes: "notes",
+  "price source": "priceSource",
+  "price date": "priceDate",
+};
+
+function ownExportKeys(keys) {
+  const set = new Set(keys);
+  return set.has("brand model") && (set.has("paid each") || set.has("new retail") || set.has("price source"));
+}
+
 export function mapColumns(headerCells, opts = {}) {
   const sourceHint = opts.source || "";
   const prepared = uniqueHeaders(headerCells);
   const keys = prepared.map(h => h.key);
   const source = sourceHint || detectSource(keys);
+  const ownHeaders = ownExportKeys(keys);
   const scored = prepared.map((h, index) => {
+    if (ownHeaders && OWN_EXPORT_FIELDS[h.key]) {
+      return {
+        index, header: h.header, key: h.key, unit: h.unit,
+        field: OWN_EXPORT_FIELDS[h.key], score: 99, confidence: "hi", locked: false, suggest: "",
+      };
+    }
     const kind = priceKind(h.key);
     if (kind === "drop") {
       return { index, header: h.header, key: h.key, unit: h.unit, field: "ignore", score: 0, confidence: "lock", locked: true, suggest: "" };
@@ -736,7 +765,7 @@ function finishRoute(typed, fields) {
 }
 
 function routeOne(fields, fileTarget, categories, source) {
-  const raw = String(fields.armType || "").trim();
+  const raw = String(fields.category || fields.armType || "").trim();
   const typed = raw ? classifyType(raw, categories, source) : null;
   if (typed) return finishRoute(typed, fields);
   if (raw) return { target: "needs", arm: "", category: "", needsCategory: true, gearArmory: false };
@@ -748,8 +777,28 @@ function routeOne(fields, fileTarget, categories, source) {
 }
 
 function ownExport(columns) {
-  const keys = new Set((columns || []).map(col => col.key));
-  return keys.has("brand model") && (keys.has("paid each") || keys.has("new retail") || keys.has("price source"));
+  return ownExportKeys((columns || []).map(col => col.key));
+}
+
+// Our export's New retail and Value each. Price source stays as written.
+// An empty price source means the numbers were typed, so they are manual.
+// A restricted shelf keeps What I paid only.
+function applyExportPrices(doc, fields) {
+  if (fields.weight != null && fields.weight !== "") doc.weight = fields.weight;
+  const restricted = saleRestricted(doc) || importRestricted(doc) || doc.migratedFromMagShelf;
+  if (restricted) return;
+  if (fields.retailNew != null && fields.retailNew !== "") doc.retailNew = fields.retailNew;
+  if (fields.value != null && fields.value !== "") doc.value = fields.value;
+  const source = String(fields.priceSource || "").trim().toLowerCase();
+  if (source) doc.priceSource = source;
+  const priced = doc.retailNew != null || doc.value != null;
+  if (priced && !doc.priceSource) {
+    doc.priceSource = "manual";
+    if (doc.value != null) doc.valueSource = "manual";
+  } else if (doc.priceSource === "manual" && doc.value != null) {
+    doc.valueSource = "manual";
+  }
+  if (fields.priceDate && doc.priceSource === "market") doc.priceDate = String(fields.priceDate).slice(0, 40);
 }
 
 function nameBrandKey(name, brand) {
@@ -778,10 +827,10 @@ function readFields(row, columns, opts) {
       fields.loadParts.push(text);
       return;
     }
-    if (col.field === "paid") {
+    if (col.field === "paid" || col.field === "retailNew" || col.field === "value" || col.field === "weight") {
       const paid = parsePaid(text);
       if (paid == null) notes.push(`${col.header}: ${text}`);
-      else fields.paid = paid;
+      else fields[col.field] = paid;
       return;
     }
     if (col.field === "qty" || col.field === "rounds" || col.field === "roundCount" || col.field === "lowAlert") {
@@ -1121,6 +1170,7 @@ export function planImport(tables, opts = {}) {
       if (picked) doc.importCategoryPicked = true;
       else if (routed.pricedAllowlist) doc.importPricedAllowlist = true;
       if (routed.migratedFromMagShelf) doc.migratedFromMagShelf = true;
+      if (own) applyExportPrices(doc, fields);
       const tags = [];
       if (!doc.serial && routed.target === "armory") tags.push("no serial");
       if (decision === "add" && duplicate) tags.push("possible duplicate");
