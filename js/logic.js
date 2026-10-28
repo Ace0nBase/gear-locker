@@ -891,10 +891,11 @@ export function keepManualPrice(item, touch) {
   const value = Math.max(0, Math.round(+out.value || 0));
   const retailDirty = !!flags.retail;
   const valueDirty = !!flags.value;
-  const keepRetail = retail > 0 && (retailDirty || !!flags.retailWasManual);
+  const hadUnmarked = unmarkedPrice(out);
+  const keepRetail = retail > 0 && (retailDirty || !!flags.retailWasManual || out.priceSource === "manual" || hadUnmarked);
   if (keepRetail) {
     out.retailNew = retail;
-    out.priceSource = "manual";
+    if (retailDirty || flags.retailWasManual || out.priceSource === "manual") out.priceSource = "manual";
   } else {
     out.retailNew = 0;
     delete out.priceSource;
@@ -902,9 +903,10 @@ export function keepManualPrice(item, touch) {
   }
   const factor = CONDITION_FACTOR[out.condition] ?? 0.6;
   const derived = keepRetail && retailDirty && !valueDirty && value > 0 && value === Math.round(retail * factor);
-  if (value > 0 && (valueDirty || !!flags.valueWasManual || derived)) {
+  const keepValue = value > 0 && (valueDirty || !!flags.valueWasManual || derived || out.valueSource === "manual" || hadUnmarked);
+  if (keepValue) {
     out.value = value;
-    out.valueSource = "manual";
+    if (valueDirty || flags.valueWasManual || derived || out.valueSource === "manual") out.valueSource = "manual";
   } else {
     out.value = 0;
     delete out.valueSource;
@@ -923,7 +925,6 @@ export function stampManualPrices(item, before, touch) {
   const valueTyped = !!flags.value && +out.value > 0;
   const retailWasManual = !!(before && before.priceSource === "manual");
   const valueWasManual = !!(before && before.valueSource === "manual");
-  const wasManual = !!(before && before.priceSource === "manual");
   if (retailTyped) out.priceSource = "manual";
   else if (flags.retail && !(+out.retailNew > 0) && out.priceSource === "manual") {
     delete out.priceSource;
@@ -931,7 +932,18 @@ export function stampManualPrices(item, before, touch) {
   }
   if (valueTyped) out.valueSource = "manual";
   else if (!flags.value && !(+out.value > 0) && out.valueSource === "manual") delete out.valueSource;
-  if (out.priceSource === "manual" && !wasManual) clearAutoPriceTrail(out);
+  const prior = before && before.priceSource;
+  if ((prior === "market" || prior === "auto") && out.priceSource === "manual") clearAutoPriceTrail(out);
+  if (before && !flags.retail && userEnteredPrice(before) && positivePrice(before.retailNew)) {
+    out.retailNew = before.retailNew;
+    if (before.priceSource === "manual") out.priceSource = "manual";
+    else if (out.priceSource !== "manual") delete out.priceSource;
+  }
+  if (before && !flags.value && userEnteredPrice(before) && positivePrice(before.value)) {
+    out.value = before.value;
+    if (before.valueSource === "manual") out.valueSource = "manual";
+    else if (out.valueSource !== "manual") delete out.valueSource;
+  }
   if (!saleRestricted(out)) return out;
   return keepManualPrice(out, {
     retail: !!flags.retail,

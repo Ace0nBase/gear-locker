@@ -487,14 +487,63 @@ test("typing a price clears the auto used range and links", () => {
   assert.equal(again.retailNew, 95);
   assert.equal(again.priceSource, "manual");
   assert.equal(again.link, "https://example.com/mine");
-  const legacy = { category: "Pouches", name: "Old coat", retailNew: 40, value: 28, usedLow: 15, usedHigh: 25, link: "https://example.com/old", marketSources: [{ label: "Old", url: "https://example.com/old" }] };
-  const typed = stampManualPrices({ ...legacy, retailNew: 80 }, legacy, { retail: true, value: false });
-  assert.equal(typed.priceSource, "manual");
-  assert.equal(typed.retailNew, 80);
-  assert.equal(typed.usedLow, undefined);
-  assert.equal(typed.usedHigh, undefined);
-  assert.equal(typed.link, "");
-  assert.equal(typed.marketSources, undefined);
+  const autoBefore = { ...before, priceSource: "auto", priceNote: "Auto shelf" };
+  const fromAuto = stampManualPrices({ ...autoBefore, retailNew: 88 }, autoBefore, { retail: true, value: false });
+  assert.equal(fromAuto.priceSource, "manual");
+  assert.equal(fromAuto.usedLow, undefined);
+  assert.equal(fromAuto.link, "");
+  const priced = { category: "Pouches", name: "Old coat", retailNew: 90, value: 70, usedLow: 40, usedHigh: 60, link: "https://example.com/coat", marketSources: [{ label: "Old", url: "https://example.com/coat" }] };
+  const edited = stampManualPrices({ ...priced, retailNew: 95 }, priced, { retail: true, value: false });
+  assert.equal(edited.priceSource, "manual");
+  assert.equal(edited.retailNew, 95);
+  assert.equal(edited.value, 70);
+  assert.equal(edited.usedLow, 40);
+  assert.equal(edited.usedHigh, 60);
+  assert.equal(edited.link, "https://example.com/coat");
+  assert.equal(edited.marketSources, priced.marketSources);
+  const rangeOnly = { category: "Belts", name: "Old belt", usedLow: 20, usedHigh: 40, link: "https://example.com/belt" };
+  const ranged = stampManualPrices({ ...rangeOnly, retailNew: 50 }, rangeOnly, { retail: true, value: false });
+  assert.equal(ranged.priceSource, "manual");
+  assert.equal(ranged.retailNew, 50);
+  assert.equal(ranged.usedLow, 20);
+  assert.equal(ranged.usedHigh, 40);
+  assert.equal(ranged.link, "https://example.com/belt");
+});
+
+test("a notes save on a restricted shelf keeps an unmarked stored price", () => {
+  const quote = { retailNew: 50, value: 40, usedLow: 20, usedHigh: 30, priceNote: "Shelf" };
+  for (const item of [
+    { id: "rifle", category: "Firearms", arm: "FA", name: "Rifle", retailNew: 900, value: 800, paid: 850, weight: 30, notes: "" },
+    { id: "can", category: "Suppressors", arm: "SU", name: "Can", retailNew: 600, value: 500, paid: 550, weight: 12, notes: "" },
+  ]) {
+    const submitted = { ...item, notes: "cleaned", retailNew: 0, value: 0 };
+    const saved = stampManualPrices(submitted, item, { retail: false, value: false });
+    assert.equal(saved.retailNew, item.retailNew, item.id);
+    assert.equal(saved.value, item.value, item.id);
+    assert.equal(saved.paid, item.paid, item.id);
+    assert.equal(saved.weight, item.weight, item.id);
+    assert.equal(saved.notes, "cleaned", item.id);
+    assert.equal(saved.priceSource, undefined, item.id);
+    assert.equal(saved.valueSource, undefined, item.id);
+    assert.equal(lookupPlan(saved).price, false, item.id);
+    assert.equal(saveNeedsLookup(saved), false, item.id);
+    assert.deepEqual(singleLookupIds([saved]), [], item.id);
+    assert.deepEqual(bulkLookupIds([saved]), [], item.id);
+    const looked = applyMarketPrices(saved, quote, "2026-10-28");
+    assert.equal(looked.retailNew, item.retailNew, item.id);
+    assert.equal(looked.value, item.value, item.id);
+    assert.equal(looked.paid, item.paid, item.id);
+  }
+  const bare = { id: "bare", category: "Suppressors", name: "Tube", retailNew: 600, value: 500, paid: 550, weight: null };
+  const bareSaved = stampManualPrices({ ...bare, notes: "cleaned", retailNew: 0, value: 0 }, bare, { retail: false, value: false });
+  assert.equal(bareSaved.retailNew, 600);
+  assert.equal(bareSaved.value, 500);
+  assert.equal(lookupPlan(bareSaved).price, false);
+  assert.equal(lookupPlan(bareSaved).weight, true);
+  assert.equal(saveNeedsLookup(bareSaved), true);
+  const bareLooked = applyMarketPrices(bareSaved, quote, "2026-10-28");
+  assert.equal(bareLooked.retailNew, 600);
+  assert.equal(bareLooked.value, 500);
 });
 
 test("an edited retail and insured value survive the snapshot, a reload, and the next lookups", () => {
