@@ -506,7 +506,7 @@ async function runLookups(ids,quiet){
   for(let k=0;k<ids.length;k+=4){
     const chunk=ids.slice(k,k+4);
     try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){const msg=lookupFailMessage(r.error||"No result");it.lookupError=msg.slice(0,160);fail=fail||msg}}})}
-    catch(e){fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);if(it&&!it.deleted)it.lookupError=fail.slice(0,160)});if(/turned off|confirm your email|daily lookup limit/i.test(String(e&&e.message||""))){ids.slice(k).forEach(id=>lookingUp.delete(id));render();break}}
+    catch(e){fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);if(it&&!it.deleted)it.lookupError=fail.slice(0,160)});if(/turned off|confirm your email|daily lookup limit|this month's lookups/i.test(String(e&&e.message||""))){ids.slice(k).forEach(id=>lookingUp.delete(id));render();break}}
     chunk.forEach(id=>lookingUp.delete(id));render();await persist();
     if(viewing&&!$("detail").hidden&&chunk.includes(viewing.id))openDetail(all.find(i=>i.id===viewing.id),true);
   }

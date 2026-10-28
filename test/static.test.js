@@ -48,14 +48,16 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device, the app is version 42, and the service worker cache is version 46", () => {
+test("sign-out clears this device, the app is version 42, and the service worker cache is version 47", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v46/);
+  assert.match(sw, /war-box-v47/);
   assert.match(sw, /skip-waiting/);
   assert.match(read("js/cloud.js"), /APP_VERSION="42"/);
+  assert.match(read("js/cloud.js"), /textContent="v"\+APP_VERSION/);
+  assert.match(read("js/cloud.js"), /this month's lookups/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
   assert.match(manifest, /maskable-512\.png/);
