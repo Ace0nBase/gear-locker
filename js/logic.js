@@ -644,6 +644,14 @@ export function applyReconcile(state, req) {
 
 export const SERVER_DELETE_STEPS = ["firestore", "watch", "auth", "usage"];
 
+// Firestore TTL deletes deletedUsers/{uid} after this. The stored value has to be a timestamp.
+export const DELETED_USER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function deletedUserExpireAt(nowMs) {
+  const now = nowMs == null || nowMs === "" ? Date.now() : +nowMs;
+  return new Date((Number.isFinite(now) ? now : Date.now()) + DELETED_USER_TTL_MS);
+}
+
 export function deleteRetryRoute(hasTombstone) {
   return hasTombstone ? ["server"] : ["client-data", "tombstone", "server"];
 }
@@ -2185,7 +2193,7 @@ const GearLogic = {
   DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_SPEND_RATES,
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupPriced, lookupBatchAllowance,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
-  DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, LOOKUPS_PAUSED,
+  DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, DELETED_USER_TTL_MS, deletedUserExpireAt, LOOKUPS_PAUSED,
   reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
   ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
   CLEANUP_MAX_ATTEMPTS, CLEANUP_MAX_AGE_MS, CLEANUP_RECORD_MAX_BYTES, orderRedactions,

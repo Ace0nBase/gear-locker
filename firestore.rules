@@ -230,10 +230,13 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.auth.uid == uid
         && !exists(/databases/$(database)/documents/deletedUsers/$(uid))
-        && request.resource.data.keys().hasOnly(['uid','at'])
-        && request.resource.data.keys().hasAll(['uid','at'])
+        && request.resource.data.keys().hasOnly(['uid','at','expireAt'])
+        && request.resource.data.keys().hasAll(['uid','at','expireAt'])
         && request.resource.data.uid == uid
-        && request.resource.data.at is string;
+        && request.resource.data.at is string
+        && request.resource.data.expireAt is timestamp
+        && request.resource.data.expireAt > request.time + duration.value(29, 'd')
+        && request.resource.data.expireAt < request.time + duration.value(31, 'd');
       allow update, delete: if false;
     }
 

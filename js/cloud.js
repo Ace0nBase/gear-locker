@@ -282,7 +282,7 @@ async function deleteMyAccount(password,signal){
     await deleteDocRefs(lends.docs.map(d=>d.ref));
     const tomb=fsdb.collection("deletedUsers").doc(u.uid);
     const tombSnap=await tomb.get();
-    if(!tombSnap.exists)await tomb.set({uid:u.uid,at:now()});
+    if(!tombSnap.exists)await tomb.set({uid:u.uid,at:now(),expireAt:firebase.firestore.Timestamp.fromDate(GearLogic.deletedUserExpireAt(Date.now()))});
     removedAny=true;
   }catch(e){
     if(!removedAny)accountDeleting=false;

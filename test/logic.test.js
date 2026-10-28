@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  clearUserLocal, shareItemFields, decideAccess, chargeDecision, quotaKey, alertQuotaKey,
+  clearUserLocal, shareItemFields, decideAccess, chargeDecision, quotaKey, alertQuotaKey, deletedUserExpireAt, DELETED_USER_TTL_MS,
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
   saleRestricted, countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
@@ -101,6 +101,14 @@ test("selectDueWatches round-robins inside the hourly budget and skips fresh che
   const picked = selectDueWatches(users, { now, budget: 3, minGapMs: 20 * 3600e3 });
   assert.deepEqual(picked.map(p => p.uid + ":" + p.watch.id), ["b:b1", "a:a1", "b:b2"]);
   assert.equal(selectDueWatches(users, { now, budget: 6, minGapMs: 20 * 3600e3 }).some(p => p.watch.id === "a3"), false);
+});
+
+test("a deleted-account marker expires 30 days after it is written", () => {
+  const now = Date.parse("2026-10-28T00:00:00.000Z");
+  const expire = deletedUserExpireAt(now);
+  assert.equal(expire.getTime() - now, DELETED_USER_TTL_MS);
+  assert.equal(DELETED_USER_TTL_MS, 30 * 24 * 60 * 60 * 1000);
+  assert.equal(deletedUserExpireAt(now).toISOString(), "2026-11-27T00:00:00.000Z");
 });
 
 test("new PINs need 6 to 12 digits and new passwords need 12 characters", () => {

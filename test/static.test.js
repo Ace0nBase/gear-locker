@@ -270,6 +270,11 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/security.js"), /err\.textContent=""/);
   assert.match(read("firestore.rules"), /deletedUsers/);
   assert.match(read("firestore.rules"), /tombstoned\(\)/);
+  assert.match(read("firestore.rules"), /expireAt is timestamp/);
+  assert.match(read("js/cloud.js"), /deletedUserExpireAt/);
+  assert.match(read("firestore.indexes.json"), /"collectionGroup": "deletedUsers"/);
+  assert.match(read("firestore.indexes.json"), /"fieldPath": "expireAt"/);
+  assert.match(read("firestore.indexes.json"), /"ttl": true/);
   assert.match(read("README.md"), /SPEND_RESERVE_USD/);
   const stub = read("api/stub.js");
   const stubDel = stub.indexOf('pathname === "/account/delete"');
