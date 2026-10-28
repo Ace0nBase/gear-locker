@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  decideAccess, isReviewEmail, monthQuotaKey, quotaCounterExpired, planMonthlyLimit, reviewDailyLimit, spendCapMicro,
+  decideAccess, isReviewEmail, monthQuotaKey, quotaCounterExpired, planMonthlyLimit, reviewDailyLimit, spendCapMicro, lookupBatchAllowance,
   estimateSpendMicro, usageFromResponse, freeSpendBlocked, usageDecision,
   deleteRevenueCatCustomer, accountDeletePlan, accountPlan, USER_COLLECTIONS,
   signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
@@ -48,6 +48,31 @@ test("review emails, month keys, and plan limits stay configurable", () => {
   assert.equal(reviewDailyLimit({ REVIEW_DAILY_LIMIT: "3" }), 3);
   assert.equal(spendCapMicro({}), 25e6);
   assert.equal(spendCapMicro({ FREE_SPEND_CAP_USD: "10" }), 10e6);
+});
+
+test("a lookup batch uses a leftover of 10 and refuses the rest", () => {
+  const batch = 4;
+  const left = { 7: 3, 8: 2, 9: 1, 10: 0 };
+  for (const used of [7, 8, 9, 10]) {
+    const out = lookupBatchAllowance({ count: batch, dailyUsed: 0, dailyLimit: 40, monthUsed: used, monthLimit: 10 });
+    assert.equal(out.allowed, left[used], "free month " + used);
+    assert.match(out.error, /this month's lookups/, "free month " + used);
+  }
+  const pro = lookupBatchAllowance({ count: batch, dailyUsed: 0, dailyLimit: 40, monthUsed: 98, monthLimit: 100 });
+  assert.equal(pro.allowed, 2);
+  assert.match(pro.error, /this month's lookups/);
+  const armory = lookupBatchAllowance({ count: batch, dailyUsed: 0, dailyLimit: 40, monthUsed: 499, monthLimit: 500 });
+  assert.equal(armory.allowed, 1);
+  assert.match(armory.error, /this month's lookups/);
+  const daily = lookupBatchAllowance({ count: batch, dailyUsed: 38, dailyLimit: 40, monthUsed: 0, monthLimit: 10 });
+  assert.equal(daily.allowed, 2);
+  assert.match(daily.error, /Daily lookup limit reached \(40 per day\)/);
+  const open = lookupBatchAllowance({ count: batch, dailyUsed: 0, dailyLimit: 40, monthUsed: 0, monthLimit: 10 });
+  assert.equal(open.allowed, 4);
+  assert.equal(open.error, "");
+  const review = lookupBatchAllowance({ count: batch, dailyUsed: 0, dailyLimit: 8, monthUsed: 10, monthLimit: 10, skipMonth: true });
+  assert.equal(review.allowed, 4);
+  assert.equal(review.error, "");
 });
 
 test("spend estimates come from tokens and searches", () => {

@@ -99,6 +99,8 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.ok(authFn.indexOf("if (!key)") < authFn.indexOf("accounts:delete"));
   assert.match(authFn, /sign-in is still here/);
   assert.doesNotMatch(authFn, /referer/i);
+  assert.match(src, /lookupBatchAllowance/);
+  assert.ok(src.indexOf("lookupBatchAllowance") < src.indexOf("const lookBill = await reserveCall"));
   const bill = src.indexOf("const lookBill = await reserveCall");
   const call = src.indexOf("lookupOne(env, it,", bill);
   assert.ok(bill > 0 && call > bill);

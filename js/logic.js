@@ -363,6 +363,22 @@ export function usageDecision(opts) {
   return { ok: true, status: 200, error: "", plan, review, daily, month };
 }
 
+// A batch is trimmed to the lookups still left today and this month. The rest are refused, not charged.
+export function lookupBatchAllowance(opts) {
+  opts = opts || {};
+  const count = Math.max(0, Math.round(+opts.count || 0));
+  const dailyLimit = Math.max(0, +opts.dailyLimit || 0);
+  const monthLimit = Math.max(0, +opts.monthLimit || 0);
+  const dailyLeft = Math.max(0, dailyLimit - Math.max(0, +opts.dailyUsed || 0));
+  const monthLeft = opts.skipMonth ? count : Math.max(0, monthLimit - Math.max(0, +opts.monthUsed || 0));
+  const allowed = Math.max(0, Math.min(count, dailyLeft, monthLeft));
+  if (allowed >= count) return { allowed, error: "" };
+  const error = !opts.skipMonth && monthLeft <= dailyLeft
+    ? MONTHLY_FULL
+    : `Daily lookup limit reached (${dailyLimit} per day). Try again tomorrow.`;
+  return { allowed, error };
+}
+
 export const USER_COLLECTIONS = ["items", "ammo", "sessions", "dope", "maint", "wish", "loans", "freqs", "pace", "meta"];
 
 export function accountDeletePlan(uid) {
@@ -2113,7 +2129,7 @@ const GearLogic = {
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, alertQuotaKey, monthQuotaKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
   DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_SPEND_RATES,
-  planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision,
+  planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupBatchAllowance,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, LOOKUPS_PAUSED,
   reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
