@@ -158,9 +158,7 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.doesNotMatch(read("js/kits.js"), /Magazines & Belts|Belts & Rigs/);
   assert.match(read("js/stacks.js"), /\["Magazines","Magazines & Belts","Ammo Storage & Loaders","Mags & Ammo Storage"\]/);
   assert.doesNotMatch(read("js/stacks.js"), /Belts & Rigs/);
-  assert.doesNotMatch(read("README.md"), /linked-ammo/);
-  assert.doesNotMatch(read("README.md"), /ammunition belt/);
-  assert.doesNotMatch(read("README.md"), /belted ammo|linked ammo|ammo belt|belt-fed/i);
+  assert.doesNotMatch(read("README.md"), /\bbelted\b|\blinked\s+(ammo|ammunition|belt|rounds?)\b|\bamm(?:o|unition)[\s-]belts?\b|\bbelt[\s-]fed\b/i);
   assert.match(read("js/cloud.js"), /swReloadPending/);
   assert.match(read("js/cloud.js"), /showUpdateToast/);
   assert.match(read("js/cloud.js"), /textContent="Reload"/);
@@ -207,21 +205,33 @@ test("local test mode blocks the Google popup script and the page does not allow
 });
 
 test("user-facing copy and docs avoid belted and linked ammo phrases", () => {
+  const banned = /\bbelted\b|\blinked\s+(ammo|ammunition|belt|rounds?)\b|\bamm(?:o|unition)[\s-]belts?\b|\bbelt[\s-]fed\b/i;
   const withoutComments = src => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
   const literals = src => (withoutComments(src).match(/`(?:\\[\s\S]|[^`\\])*`|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'/g) || []).join("\n");
+  const withoutAiPrompts = (file, src) => {
+    if (file === "js/logic.js") return src.replace(/export const PRICE_BACKSTOP =[\s\S]*?;/, "");
+    if (file === "api/worker.js") return src
+      .replace(/function prompt\(it\) \{[\s\S]*?\n\}\nconst textOf/, "const textOf")
+      .replace(/const ask = `[\s\S]*?`;\n  const r = await fetch/, "const r = await fetch")
+      .replace(/function dealPrompt\(w\) \{[\s\S]*?\n\}\nfunction priceRouteBlocked/, "function priceRouteBlocked");
+    return src;
+  };
   const docs = ["index.html", "README.md", "manifest.webmanifest"].map(read).join("\n");
   const scripts = ["js/core.js", "js/records.js", "js/security.js", "js/cloud.js", "js/comms.js", "js/arms.js", "js/social.js", "js/stacks.js", "js/kits.js", "js/field.js"].map(f => literals(read(f))).join("\n");
-  const logic = literals(read("js/logic.js").replace(/export const PRICE_BACKSTOP =[\s\S]*?;/, ""));
-  const copy = docs + "\n" + scripts + "\n" + logic;
-  const phrases = [/belted ammo/i, /linked ammo/i, /ammo belt/i, /ammunition belt/i, /belt-fed/i];
-  for (const phrase of phrases) {
-    const banned = copy.match(new RegExp(".{0,48}" + phrase.source + ".{0,48}", "i"));
-    assert.equal(banned, null, banned && banned[0]);
-    assert.match("sample " + phrase.source.replace(/\\/g, ""), phrase);
-  }
-  const phrase = new RegExp(phrases.map(p => p.source).join("|"), "i");
-  assert.doesNotMatch("Unlinked", phrase);
-  assert.doesNotMatch("Linked radios", phrase);
+  const logicSrc = read("js/logic.js");
+  const workerSrc = read("api/worker.js");
+  const logic = literals(withoutAiPrompts("js/logic.js", logicSrc));
+  const worker = literals(withoutAiPrompts("api/worker.js", workerSrc));
+  const copy = docs + "\n" + scripts + "\n" + logic + "\n" + worker;
+  const hit = copy.match(new RegExp(".{0,48}(?:" + banned.source + ").{0,48}", "i"));
+  assert.equal(hit, null, hit && hit[0]);
+  assert.doesNotMatch(read("README.md"), banned);
+  for (const sample of ["belted", "Belted ammunition stays on Ammunition", "linked ammunition", "a linked belt", "ammunition belt", "ammo belt", "belt-fed", "linked ammo"]) assert.match(sample, banned);
+  for (const sample of ["Unlinked", "Linked radios", "battle belt", "store link"]) assert.doesNotMatch(sample, banned);
+  assert.match(logicSrc, /an ammunition \(linked\) belt/);
+  assert.doesNotMatch(logic, /an ammunition \(linked\) belt/);
+  assert.match(workerSrc, /ammunition belt/);
+  assert.doesNotMatch(worker, /ammunition belt/);
   const shot = new URL("../design/appstore-shots/scripts/seed-data.mjs", import.meta.url);
   if (fs.existsSync(shot)) assert.doesNotMatch(fs.readFileSync(shot, "utf8"), /Belts & Rigs/);
 });
