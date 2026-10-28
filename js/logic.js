@@ -208,7 +208,7 @@ export function monthQuotaKey(uid, date) {
   return `m:${uid}:${y}-${m}`;
 }
 
-export const DEFAULT_PLAN_LIMITS = { free: 40, pro: 400, armory: 2000 };
+export const DEFAULT_PLAN_LIMITS = { free: 10, pro: 100, armory: 500 };
 export const DEFAULT_REVIEW_DAILY_LIMIT = 8;
 export const DEFAULT_FREE_SPEND_CAP_USD = 25;
 export const DEFAULT_SPEND_RATES = { inputPerMillion: 1, outputPerMillion: 5, searchEach: 0.01 };

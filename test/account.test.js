@@ -39,8 +39,9 @@ test("review emails, month keys, and plan limits stay configurable", () => {
   assert.equal(isReviewEmail("Review@Example.com", { REVIEW_EMAILS: " review@example.com , other@example.com " }), true);
   assert.equal(isReviewEmail("nope@example.com", { REVIEW_EMAILS: "review@example.com" }), false);
   assert.equal(monthQuotaKey("uid", day), "m:uid:2026-10");
-  assert.equal(planMonthlyLimit("free", {}), 40);
-  assert.equal(planMonthlyLimit("pro", {}), 400);
+  assert.equal(planMonthlyLimit("free", {}), 10);
+  assert.equal(planMonthlyLimit("pro", {}), 100);
+  assert.equal(planMonthlyLimit("armory", {}), 500);
   assert.equal(planMonthlyLimit("armory", { PLAN_LIMIT_ARMORY: "12" }), 12);
   assert.equal(planMonthlyLimit("nope", { PLAN_LIMIT_FREE: "7" }), 7);
   assert.equal(reviewDailyLimit({}), 8);
