@@ -1,21 +1,15 @@
 {
-  "indexes": [
+  "indexes": [],
+  "fieldOverrides": [
     {
       "collectionGroup": "loans",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "friendEmailLower", "order": "ASCENDING" },
-        { "fieldPath": "__name__", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "lends",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "borrowerEmailLower", "order": "ASCENDING" },
-        { "fieldPath": "__name__", "order": "ASCENDING" }
+      "fieldPath": "friendEmailLower",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" },
+        { "arrayConfig": "CONTAINS", "queryScope": "COLLECTION" },
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }
       ]
     }
-  ],
-  "fieldOverrides": []
+  ]
 }
