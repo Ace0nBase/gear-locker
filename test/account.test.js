@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   decideAccess, isReviewEmail, monthQuotaKey, planMonthlyLimit, reviewDailyLimit, spendCapMicro,
-  estimateSpendMicro, usageFromResponse, freeSpendBlocked, usageDecision, lookupPlan,
-  deleteRevenueCatCustomer, accountDeletePlan, USER_COLLECTIONS,
+  estimateSpendMicro, usageFromResponse, freeSpendBlocked, usageDecision,
+  deleteRevenueCatCustomer, accountDeletePlan, accountPlan, USER_COLLECTIONS,
   signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
   clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, priciestRates, spendRates, applyReserve, applyReconcile,
   SEARCH_RESULT_TOKENS, roundFits, roundInputTokens, loanTargetsFromLends, loanRedactTargets, loansToMirror,
@@ -86,7 +86,7 @@ test("usageDecision pauses free lookups, skips the month for review, and keeps t
 });
 
 test("plan lookup is a free stub and account deletion names the exact keys", () => {
-  assert.equal(lookupPlan(), "free");
+  assert.equal(accountPlan(), "free");
   const hook = deleteRevenueCatCustomer();
   assert.equal(hook.ok, true);
   assert.equal(hook.skipped, true);

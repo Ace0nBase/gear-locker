@@ -16,7 +16,7 @@
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody } from "../js/logic.js";
+import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
 import { serviceAccountLogLine } from "./firestore-admin.js";
@@ -267,8 +267,13 @@ Use web search (at most 2 searches). Check TacSwap listings, eBay Buy It Now lis
 When done, reply with ONLY this JSON object:
 {"price": number|null, "where": "site or seller, e.g. 'TacSwap' or 'Amazon'", "url": "https link to the listing", "condition": "new|used|like new", "note": "one short sentence, e.g. 'Used, good condition, ships free'"}`;
 }
+function priceRouteBlocked(it) {
+  const category = String((it && it.category) || "");
+  if (category === "Magazines" || category === "Magazines & Belts") return true;
+  return saleRestricted(it || {});
+}
 async function dealCheck(env, w, budget) {
-  if (saleRestricted(w)) return { price: null, where: "", url: "", condition: "", note: "", date: localDay(new Date()), hit: false, usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 } };
+  if (priceRouteBlocked(w)) return { price: null, where: "", url: "", condition: "", note: "", date: localDay(new Date()), hit: false, usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 } };
   const spec = MODEL_CALLS.deal;
   const model = env.MODEL || "claude-haiku-5-5";
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: spec.searches }];
@@ -314,7 +319,7 @@ async function reserveCall(env, user, op, count, extra) {
   const n = Math.max(1, +count || 1);
   const email = String((user && user.email) || "");
   const review = isReviewEmail(email, env);
-  const plan = lookupPlan(user, env);
+  const plan = accountPlan(user, env);
   const skipSpend = review || plan !== "free";
   const day = new Date();
   const uid = user && (user.sub || user.uid);
@@ -487,7 +492,7 @@ async function runDueWatches(env, budget) {
     if (!access.ok) continue;
     const who = { sub: u.uid, email };
     const review = isReviewEmail(email, env);
-    const plan = lookupPlan(who, env);
+    const plan = accountPlan(who, env);
     const counts = await usageSnapshot(env, u.uid, now);
     if (!counts) continue;
     const dailyLimit = review ? reviewDailyLimit(env) : +(env.DAILY_AI_LIMIT || 40);
@@ -504,7 +509,7 @@ async function runDueWatches(env, budget) {
   for (const p of picked) {
     const u = eligible.find(x => x.uid === p.uid);
     const w = u && u.rec.list.find(x => x.id === p.watch.id);
-    if (!w || saleRestricted(w)) continue;
+    if (!w || priceRouteBlocked(w)) continue;
     const who = { sub: u.uid, email: u.rec.email };
     const hold = await reserveCall(env, who, "deal", 1, { alertAdd: 1, inputTokens: estimateInputTokens(JSON.stringify(w)) });
     if (!hold.ok) continue;
@@ -640,7 +645,8 @@ async function lookupOne(env, it, budget) {
     weightOnly: it.weightOnly === true || it.weightOnly === "true",
   };
   if (!clean.name) return { id: clean.id, ok: false, error: "missing name", usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spendMicro: 0 };
-  if (clean.kind === "wish" && saleRestricted(clean)) return { id: clean.id, ok: false, error: "Price search skips this item.", usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spendMicro: 0 };
+  if (priceRouteBlocked(clean)) clean.weightOnly = true;
+  if (clean.kind === "wish" && priceRouteBlocked(clean)) return { id: clean.id, ok: false, error: "Price search skips this item.", usage: { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spendMicro: 0 };
   let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spendMicro = 0;
   const primary = env.MODEL || "claude-haiku-5-5";
   const limit = budget == null ? null : budget;
@@ -673,7 +679,7 @@ async function lookupOne(env, it, budget) {
   const settled = settleLookup(clean, parsed);
   if (!settled.apply) { const e = new Error("couldn't read the lookup answer, try again"); e.usage = usage; e.spendMicro = spendMicro; throw e; }
   const { apply, ...fields } = settled;
-  if (saleRestricted(clean) || clean.weightOnly) {
+  if (priceRouteBlocked(clean) || clean.weightOnly) {
     return { id: clean.id, ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: fields.weightOz, priceNote: "", weightNote: publicWeightNote(parsed.weightNote), sources: [], usage, spendMicro };
   }
   return { id: clean.id, ok: true, ...fields, usage, spendMicro };
