@@ -107,7 +107,18 @@ export function mergeCategoryAnswers(local, remote) {
 }
 
 export function mergeByServerTime(local, remote, inflight) {
-  return keepMovedCategory(mergeByServerTimeWinner(local, remote, inflight), local, remote);
+  return keepMovedCategory(keepLookupError(mergeByServerTimeWinner(local, remote, inflight), local, remote), local, remote);
+}
+
+// A limit note is recorded after the row was last saved. A server echo of that older
+// save can win on its stamp a moment later; the note stays unless a newer save replaced the row.
+function keepLookupError(winner, local, remote) {
+  if (!winner || !local || !local.lookupError) return winner;
+  if (winner.lookupError) return winner;
+  const remoteAt = (remote && remote.updatedAt) || "";
+  if (remoteAt > (local.updatedAt || "")) return winner;
+  if (winner === local) return winner;
+  return { ...winner, lookupError: local.lookupError };
 }
 
 function mergeByServerTimeWinner(local, remote, inflight) {
@@ -199,6 +210,15 @@ export function quotaKey(uid, date) {
   return `q:${uid}:${utcDay(date)}`;
 }
 
+// Attempts are counted even when the lookup fails. This is the daily limit.
+export function attemptQuotaKey(uid, date) {
+  return `t:${uid}:${utcDay(date)}`;
+}
+
+export function dailySpendKey(uid, date) {
+  return `ds:${uid}:${utcDay(date)}`;
+}
+
 export function alertQuotaKey(uid, date) {
   return `a:${uid}:${utcDay(date)}`;
 }
@@ -208,6 +228,10 @@ export function monthQuotaKey(uid, date) {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
   return `m:${uid}:${y}-${m}`;
+}
+
+export function monthRefundKey(uid, date) {
+  return monthQuotaKey(uid, date).replace(/^m:/, "rf:");
 }
 
 function utcDateOnly(date) {
@@ -223,17 +247,18 @@ function previousUtcMonth(date) {
   return `${year}-${String(prev).padStart(2, "0")}`;
 }
 
-// Daily and alert counters older than 7 UTC days, and monthly counters older than the previous UTC month, can go.
+// Daily, alert, attempt, and per-account spend counters older than 7 UTC days,
+// and monthly counters (including the refund cap) older than the previous UTC month, can go.
 // The spend total, the seeded flag, and holds are not counters.
 export function quotaCounterExpired(key, now) {
   const k = String(key || "");
   if (!k || k === "spend:free" || k === "seeded:spend" || k.startsWith("hold:")) return false;
-  const day = k.match(/^[qa]:[^:]+:(\d{4}-\d{2}-\d{2})$/);
+  const day = k.match(/^(?:q|a|t|ds):[^:]+:(\d{4}-\d{2}-\d{2})$/);
   if (day) {
     const cutoff = utcDay(new Date(utcDateOnly(now).getTime() - 7 * 86400000));
     return day[1] < cutoff;
   }
-  const month = k.match(/^m:[^:]+:(\d{4}-\d{2})$/);
+  const month = k.match(/^(?:m|rf):[^:]+:(\d{4}-\d{2})$/);
   if (month) return month[1] < previousUtcMonth(now);
   return false;
 }
@@ -241,6 +266,9 @@ export function quotaCounterExpired(key, now) {
 export const DEFAULT_PLAN_LIMITS = { free: 10, pro: 100, armory: 500 };
 export const DEFAULT_REVIEW_DAILY_LIMIT = 8;
 export const DEFAULT_FREE_SPEND_CAP_USD = 25;
+export const DEFAULT_FREE_DAILY_SPEND_CAP_USD = 0.5;
+export const MONTHLY_REFUND_CAP = 5;
+export const DAILY_SPEND_FULL = "Today's lookup spending limit is reached. Try again tomorrow.";
 export const DEFAULT_SPEND_RATES = { inputPerMillion: 1, outputPerMillion: 5, searchEach: 0.01 };
 export const DEFAULT_FALLBACK_RATES = { inputPerMillion: 3, outputPerMillion: 15, searchEach: 0.01 };
 
@@ -262,6 +290,10 @@ export function reviewDailyLimit(env) {
 
 export function spendCapMicro(env) {
   return Math.round(configuredNumber(env && env.FREE_SPEND_CAP_USD, DEFAULT_FREE_SPEND_CAP_USD) * 1e6);
+}
+
+export function freeDailySpendCapMicro(env) {
+  return Math.round(configuredNumber(env && env.FREE_DAILY_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD) * 1e6);
 }
 
 export function spendRates(env) {
@@ -363,6 +395,22 @@ export function usageDecision(opts) {
   return { ok: true, status: 200, error: "", plan, review, daily, month };
 }
 
+// A model failure, or an answer with no price and no weight, did not use the lookup.
+export function lookupPriced(result) {
+  if (!result || result.ok !== true) return false;
+  return [result.retailNew, result.usedLow, result.usedHigh, result.value, result.weightOz].some(n => {
+    if (n == null || n === "") return false;
+    const v = +n;
+    return isFinite(v) && v > 0;
+  });
+}
+
+function quotaFullMessage(req, monthLeft, dailyLeft) {
+  const dailyLimit = Math.max(0, +req.dailyLimit || 0);
+  if (!req.skipMonth && monthLeft <= dailyLeft) return MONTHLY_FULL;
+  return `Daily lookup limit reached (${dailyLimit} per day). Try again tomorrow.`;
+}
+
 // A batch is trimmed to the lookups still left today and this month. The rest are refused, not charged.
 export function lookupBatchAllowance(opts) {
   opts = opts || {};
@@ -387,7 +435,7 @@ export function accountDeletePlan(uid) {
     collections: USER_COLLECTIONS.slice(),
     lendField: "lender",
     kvExact: [`w:${id}`],
-    kvPrefixes: [`q:${id}:`, `a:${id}:`, `m:${id}:`],
+    kvPrefixes: [`q:${id}:`, `a:${id}:`, `t:${id}:`, `ds:${id}:`, `m:${id}:`, `rf:${id}:`],
   };
 }
 
@@ -536,21 +584,50 @@ export function applyReserve(state, req) {
   const month = Math.max(0, Math.round(+state.month || 0));
   const alert = Math.max(0, Math.round(+state.alert || 0));
   const same = { spend, daily, month, alert };
-  const reserve = Math.max(0, Math.round(+req.reserve || 0));
-  const skipSpend = !!req.skipSpend;
-  if (!skipSpend && !reserveFits(spend, reserve, req.cap)) {
-    return { ok: false, status: 403, error: LOOKUPS_PAUSED, reserved: 0, state: same };
+  let reserve = Math.max(0, Math.round(+req.reserve || 0));
+  let dailyAdd = Math.max(0, +req.dailyAdd || 0);
+  let monthAdd = Math.max(0, +req.monthAdd || 0);
+  let refusedError = "";
+  // partial trims a raced batch to the slots still left, instead of refusing the whole request.
+  if (req.partial) {
+    const requested = Math.max(dailyAdd, req.skipMonth ? 0 : monthAdd);
+    if (requested > 0) {
+      const dailyLeft = Math.max(0, (+req.dailyLimit || 0) - daily);
+      const monthLeft = req.skipMonth ? requested : Math.max(0, (+req.monthLimit || 0) - month);
+      let fit = requested;
+      if (dailyAdd) fit = Math.min(fit, dailyLeft);
+      if (!req.skipMonth && monthAdd) fit = Math.min(fit, monthLeft);
+      fit = Math.max(0, fit);
+      if (fit <= 0) {
+        return { ok: false, status: 429, error: quotaFullMessage(req, monthLeft, dailyLeft), reserved: 0, charged: 0, state: same };
+      }
+      if (fit < requested) {
+        refusedError = quotaFullMessage(req, monthLeft, dailyLeft);
+        const each = Math.max(0, Math.round(+req.reserveEach || 0));
+        reserve = each ? each * fit : Math.ceil(reserve * fit / requested);
+        if (dailyAdd) dailyAdd = Math.min(dailyAdd, fit);
+        if (monthAdd) monthAdd = Math.min(monthAdd, fit);
+      }
+    }
   }
-  const dailyAdd = Math.max(0, +req.dailyAdd || 0);
+  const skipSpend = !!req.skipSpend;
+  if (!skipSpend && req.dailySpendCap != null && req.dailySpendCap !== "" && (dailyAdd || monthAdd)) {
+    const spentToday = Math.max(0, Math.round(+state.dailySpend || 0));
+    if (spentToday >= Math.max(0, Math.round(+req.dailySpendCap || 0))) {
+      return { ok: false, status: 429, error: DAILY_SPEND_FULL, reserved: 0, charged: 0, state: same };
+    }
+  }
+  if (!skipSpend && !reserveFits(spend, reserve, req.cap)) {
+    return { ok: false, status: 403, error: LOOKUPS_PAUSED, reserved: 0, charged: 0, state: same };
+  }
   const dailyDecision = chargeDecision(daily, dailyAdd, req.dailyLimit);
   if (dailyAdd && !dailyDecision.ok) {
-    return { ok: false, status: 429, error: `Daily lookup limit reached (${dailyDecision.limit} per day). Try again tomorrow.`, reserved: 0, state: same };
+    return { ok: false, status: 429, error: `Daily lookup limit reached (${dailyDecision.limit} per day). Try again tomorrow.`, reserved: 0, charged: 0, state: same };
   }
   let monthNext = month;
   if (!req.skipMonth) {
-    const monthAdd = Math.max(0, +req.monthAdd || 0);
     const monthDecision = chargeDecision(month, monthAdd, req.monthLimit);
-    if (monthAdd && !monthDecision.ok) return { ok: false, status: 429, error: MONTHLY_FULL, reserved: 0, state: same };
+    if (monthAdd && !monthDecision.ok) return { ok: false, status: 429, error: MONTHLY_FULL, reserved: 0, charged: 0, state: same };
     monthNext = monthAdd ? monthDecision.next : month;
   }
   const alertAdd = Math.max(0, +req.alertAdd || 0);
@@ -566,6 +643,8 @@ export function applyReserve(state, req) {
     status: 200,
     error: "",
     reserved: held,
+    charged: req.skipMonth ? dailyAdd : Math.max(dailyAdd, monthAdd),
+    refusedError,
     state: { spend: spend + held, daily: dailyAdd ? dailyDecision.next : daily, month: monthNext, alert: alertNext },
   };
 }
@@ -576,19 +655,36 @@ export function applyReconcile(state, req) {
   req = req || {};
   const reserved = Math.max(0, Math.round(+req.reserved || 0));
   const actual = Math.max(0, Math.round(+req.actual || 0));
+  const asked = Math.max(0, Math.round(+req.countRefund || 0));
+  const cap = req.refundCap == null || req.refundCap === "" ? asked : Math.max(0, Math.round(+req.refundCap));
+  const used = Math.max(0, Math.round(+state.refunds || 0));
+  const month = Math.max(0, Math.round(+state.month || 0));
+  const room = Math.max(0, cap - used);
+  const refund = req.skipMonth ? 0 : Math.min(asked, room, month);
   return {
     ok: true,
     billed: actual,
+    refunded: refund,
     state: {
       spend: reconcileSpendMicro(state.spend, reserved, actual),
       daily: Math.max(0, Math.round(+state.daily || 0)),
-      month: Math.max(0, Math.round(+state.month || 0)),
+      month: month - refund,
       alert: Math.max(0, Math.round(+state.alert || 0)),
+      refunds: used + refund,
+      dailySpend: Math.max(0, Math.round(+state.dailySpend || 0)) + actual,
     },
   };
 }
 
 export const SERVER_DELETE_STEPS = ["firestore", "watch", "auth", "usage"];
+
+// Firestore TTL deletes deletedUsers/{uid} after this. The stored value has to be a timestamp.
+export const DELETED_USER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function deletedUserExpireAt(nowMs) {
+  const now = nowMs == null || nowMs === "" ? Date.now() : +nowMs;
+  return new Date((Number.isFinite(now) ? now : Date.now()) + DELETED_USER_TTL_MS);
+}
 
 export function deleteRetryRoute(hasTombstone) {
   return hasTombstone ? ["server"] : ["client-data", "tombstone", "server"];
@@ -2127,11 +2223,11 @@ export function radioTxLabel(freq) {
 const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
-  parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, alertQuotaKey, monthQuotaKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
-  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_SPEND_RATES,
-  planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupBatchAllowance,
+  parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
+  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
+  planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupPriced, lookupBatchAllowance,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
-  DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, LOOKUPS_PAUSED,
+  DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, DELETED_USER_TTL_MS, deletedUserExpireAt, LOOKUPS_PAUSED,
   reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
   ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
   CLEANUP_MAX_ATTEMPTS, CLEANUP_MAX_AGE_MS, CLEANUP_RECORD_MAX_BYTES, orderRedactions,

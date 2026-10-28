@@ -9,14 +9,14 @@
 // The public web key is not used here. Other vars use the defaults below unless the dashboard sets them. BETA_ONLY stays unset.
 // Vars (dashboard, kept across deploys): FIREBASE_PROJECT, ALLOWED_ORIGINS, MODEL, FALLBACK_MODEL,
 // ALLOWED_EMAILS (used only when BETA_ONLY=true), BETA_ONLY, REVIEW_EMAILS, REVIEW_DAILY_LIMIT,
-// DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS, FREE_SPEND_CAP_USD,
+// DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS, FREE_SPEND_CAP_USD, FREE_DAILY_SPEND_CAP_USD,
 // PLAN_LIMIT_FREE, PLAN_LIMIT_PRO, PLAN_LIMIT_ARMORY, SPEND_INPUT_PER_MILLION, SPEND_OUTPUT_PER_MILLION, SPEND_SEARCH_EACH,
 // SPEND_RESERVE_USD (optional floor under the worst-case lookup hold; it cannot lower that hold),
 // FALLBACK_INPUT_PER_MILLION, FALLBACK_OUTPUT_PER_MILLION, FALLBACK_SEARCH_EACH (fallback model rates; the hold uses the higher of these and the primary rates)
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance } from "../js/logic.js";
+import { decideAccess, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced, MONTHLY_REFUND_CAP } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
 import { serviceAccountLogLine } from "./firestore-admin.js";
@@ -326,12 +326,18 @@ async function reserveCall(env, user, op, count, extra) {
   const review = isReviewEmail(email, env);
   const plan = accountPlan(user, env);
   const skipSpend = review || plan !== "free";
-  const day = new Date();
+  const day = extra.now instanceof Date ? extra.now : new Date();
   const uid = user && (user.sub || user.uid);
+  const dailyKey = attemptQuotaKey(uid, day);
+  const monthKey = monthQuotaKey(uid, day);
+  const refundKey = monthRefundKey(uid, day);
+  const spendDayKey = dailySpendKey(uid, day);
   try {
-    return await stub.reserve({
+    const reserved = await stub.reserve({
       id: crypto.randomUUID(),
       reserve: skipSpend ? 0 : (extra.reserveMicro != null ? Math.max(0, Math.round(+extra.reserveMicro)) : callHoldMicro(env, op, extra.inputTokens) * n),
+      reserveEach: Math.max(0, Math.round(+extra.reserveEach || 0)),
+      partial: !!extra.partial,
       cap: spendCapMicro(env),
       skipSpend,
       skipMonth: review,
@@ -341,25 +347,52 @@ async function reserveCall(env, user, op, count, extra) {
       monthLimit: planMonthlyLimit(plan, env),
       alertAdd: extra.alertAdd || 0,
       alertLimit: +(env.ALERT_DAILY_CAP || 6),
-      dailyKey: quotaKey(uid, day),
-      monthKey: monthQuotaKey(uid, day),
+      dailyKey,
+      monthKey,
+      dailySpendKey: spendDayKey,
+      dailySpendCap: skipSpend ? null : freeDailySpendCapMicro(env),
       alertKey: alertQuotaKey(uid, day),
       seedSpend: await spendSeed(env),
     });
+    return { ...reserved, dailyKey, monthKey, refundKey, dailySpendKey: spendDayKey, skipSpend, skipMonth: review };
   } catch {
-    return { ok: false, status: 503, error: LOOKUPS_PAUSED, reserved: 0 };
+    return { ok: false, status: 503, error: LOOKUPS_PAUSED, reserved: 0, charged: 0 };
   }
 }
 function spendOf(env, model, usage) {
   return estimateSpendMicro(usage, ratesForModel(env, model));
 }
-async function finishCall(env, id, reserved, usage) {
+async function finishCall(env, id, reserved, usage, extra) {
+  extra = extra || {};
   try {
     const stub = usageStub(env);
-    if (!stub || !id || !reserved) return;
+    if (!stub || !id) return;
     const actual = typeof usage === "number" ? Math.max(0, Math.round(usage)) : estimateSpendMicro(usage, spendRates(env));
-    await stub.reconcile({ id, actual });
+    await stub.reconcile({
+      id,
+      reserved,
+      actual: reserved ? actual : 0,
+      countRefund: Math.max(0, Math.round(+extra.countRefund || 0)),
+      refundCap: extra.refundCap,
+      monthKey: extra.monthKey || "",
+      refundKey: extra.refundKey || "",
+      dailySpendKey: extra.skipSpend ? "" : (extra.dailySpendKey || ""),
+      skipMonth: !!extra.skipMonth,
+    });
   } catch { /* the answer is already in hand */ }
+}
+function spendExtra(hold, extra) {
+  extra = extra || {};
+  hold = hold || {};
+  return {
+    monthKey: hold.monthKey,
+    refundKey: hold.refundKey,
+    dailySpendKey: hold.dailySpendKey,
+    skipSpend: hold.skipSpend,
+    skipMonth: hold.skipMonth,
+    countRefund: extra.countRefund || 0,
+    refundCap: extra.refundCap,
+  };
 }
 async function clearUsageForUser(env, uid) {
   const stub = usageStub(env);
@@ -371,7 +404,7 @@ async function usageSnapshot(env, uid, now) {
   const stub = usageStub(env);
   if (!stub) return null;
   try {
-    const read = await stub.read({ keys: [quotaKey(uid, now), monthQuotaKey(uid, now), alertQuotaKey(uid, now), SPEND_KEY] });
+    const read = await stub.read({ keys: [attemptQuotaKey(uid, now), monthQuotaKey(uid, now), alertQuotaKey(uid, now), dailySpendKey(uid, now), SPEND_KEY] });
     return (read && read.values) || {};
   } catch { return null; }
 }
@@ -501,9 +534,10 @@ async function runDueWatches(env, budget) {
     const counts = await usageSnapshot(env, u.uid, now);
     if (!counts) continue;
     const dailyLimit = review ? reviewDailyLimit(env) : +(env.DAILY_AI_LIMIT || 40);
-    if ((counts[quotaKey(u.uid, now)] || 0) >= dailyLimit) continue;
+    if ((counts[attemptQuotaKey(u.uid, now)] || 0) >= dailyLimit) continue;
     if (!review && (counts[monthQuotaKey(u.uid, now)] || 0) >= planMonthlyLimit(plan, env)) continue;
     if (!review && plan === "free" && (counts[SPEND_KEY] || 0) >= spendCapMicro(env)) continue;
+    if (!review && plan === "free" && (counts[dailySpendKey(u.uid, now)] || 0) >= freeDailySpendCapMicro(env)) continue;
     if ((counts[alertQuotaKey(u.uid, now)] || 0) >= alertLimit) continue;
     eligible.push(u);
   }
@@ -524,12 +558,12 @@ async function runDueWatches(env, budget) {
       const spentUsage = b.usage;
       delete b.usage;
       w.best = b; w.lastErr = "";
-      await finishCall(env, hold.id, hold.reserved, spentUsage);
+      await finishCall(env, hold.id, hold.reserved, spentUsage, spendExtra(hold));
       if (!wasHit && b.hit && u.rec.push) {
         const sent = await sendWebPush(u.rec.push, JSON.stringify({ title: "Price alert", body: `${w.name} is at or under your target`, url: "./?tab=wish" }), env);
         if (sent && sent.gone) delete u.rec.push;
       }
-    } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await finishCall(env, hold.id, hold.reserved, e.usage); }
+    } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await finishCall(env, hold.id, hold.reserved, e.usage, spendExtra(hold)); }
     w.lastCheck = new Date().toISOString();
     dirty.set(u.key, u.rec);
     done++;
@@ -690,7 +724,7 @@ async function lookupOne(env, it, budget) {
   return { id: clean.id, ok: true, ...fields, usage, spendMicro };
 }
 
-const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", BETA_ONLY: "", REVIEW_EMAILS: "", REVIEW_DAILY_LIMIT: "8", FREE_SPEND_CAP_USD: "25", PLAN_LIMIT_FREE: "10", PLAN_LIMIT_PRO: "100", PLAN_LIMIT_ARMORY: "500", SPEND_INPUT_PER_MILLION: "1", SPEND_OUTPUT_PER_MILLION: "5", SPEND_SEARCH_EACH: "0.01", FALLBACK_INPUT_PER_MILLION: "3", FALLBACK_OUTPUT_PER_MILLION: "15", FALLBACK_SEARCH_EACH: "0.01", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
+const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", BETA_ONLY: "", REVIEW_EMAILS: "", REVIEW_DAILY_LIMIT: "8", FREE_SPEND_CAP_USD: "25", FREE_DAILY_SPEND_CAP_USD: "0.50", PLAN_LIMIT_FREE: "10", PLAN_LIMIT_PRO: "100", PLAN_LIMIT_ARMORY: "500", SPEND_INPUT_PER_MILLION: "1", SPEND_OUTPUT_PER_MILLION: "5", SPEND_SEARCH_EACH: "0.01", FALLBACK_INPUT_PER_MILLION: "3", FALLBACK_OUTPUT_PER_MILLION: "15", FALLBACK_SEARCH_EACH: "0.01", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
 const ROUTES = ["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/watch/push", "/battery", "/ammo", "/pace"];
 
 export default {
@@ -795,10 +829,10 @@ export default {
         if (!watchHold.ok) return json({ error: watchHold.error || "Try again tomorrow." }, watchHold.status || 429, h);
         try {
           const b = await dealCheck(env, w, watchHold.reserved || null);
-          await finishCall(env, watchHold.id, watchHold.reserved, b.usage);
+          await finishCall(env, watchHold.id, watchHold.reserved, b.usage, spendExtra(watchHold));
           delete b.usage;
           w.best = b; w.lastErr = "";
-        } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await finishCall(env, watchHold.id, watchHold.reserved, e.usage); }
+        } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await finishCall(env, watchHold.id, watchHold.reserved, e.usage, spendExtra(watchHold)); }
         w.lastCheck = new Date().toISOString();
         await saveRec();
         return json(pub(), 200, h);
@@ -814,10 +848,10 @@ export default {
       if (!paceHold.ok) return json({ error: paceHold.error }, paceHold.status, h);
       try {
         const built = await paceBuild(env, b, paceHold.reserved || null);
-        await finishCall(env, paceHold.id, paceHold.reserved, built.usage);
+        await finishCall(env, paceHold.id, paceHold.reserved, built.usage, spendExtra(paceHold));
         return json({ result: built.result }, 200, h);
       }
-      catch (e) { await finishCall(env, paceHold.id, paceHold.reserved, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await finishCall(env, paceHold.id, paceHold.reserved, e.usage, spendExtra(paceHold)); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/ammo") return json({ error: "Ammo price search is turned off." }, 410, h);
     if (url.pathname === "/battery") {
@@ -825,10 +859,10 @@ export default {
       if (!battHold.ok) return json({ error: battHold.error }, battHold.status, h);
       try {
         const found = await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) }, battHold.reserved || null);
-        await finishCall(env, battHold.id, battHold.reserved, found.usage);
+        await finishCall(env, battHold.id, battHold.reserved, found.usage, spendExtra(battHold));
         return json({ result: found.result }, 200, h);
       }
-      catch (e) { await finishCall(env, battHold.id, battHold.reserved, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await finishCall(env, battHold.id, battHold.reserved, e.usage, spendExtra(battHold)); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/identify") {
       const subject = {
@@ -842,10 +876,10 @@ export default {
       if (!idHold.ok) return json({ error: idHold.error }, idHold.status, h);
       try {
         const found = await identify(env, img, String(body.hint || "").slice(0, 80));
-        await finishCall(env, idHold.id, idHold.reserved, found.usage);
+        await finishCall(env, idHold.id, idHold.reserved, found.usage, spendExtra(idHold));
         return json({ result: found.result }, 200, h);
       }
-      catch (e) { await finishCall(env, idHold.id, idHold.reserved, e.usage); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await finishCall(env, idHold.id, idHold.reserved, e.usage, spendExtra(idHold)); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     const max = +(env.MAX_ITEMS || 4);
     const items = Array.isArray(body.items) ? body.items.slice(0, max) : [];
@@ -858,21 +892,26 @@ export default {
     const snap = await usageSnapshot(env, uid, now) || {};
     const allowance = lookupBatchAllowance({
       count: items.length,
-      dailyUsed: snap[quotaKey(uid, now)] || 0,
+      dailyUsed: snap[attemptQuotaKey(uid, now)] || 0,
       dailyLimit,
       monthUsed: snap[monthQuotaKey(uid, now)] || 0,
       monthLimit: planMonthlyLimit(plan, env),
       skipMonth: review,
     });
     const accepted = items.slice(0, allowance.allowed);
-    const refused = items.slice(allowance.allowed).map(it => ({ id: String((it && it.id) || ""), ok: false, error: allowance.error }));
+    let refused = items.slice(allowance.allowed).map(it => ({ id: String((it && it.id) || ""), ok: false, error: allowance.error }));
     if (!accepted.length) return json({ error: allowance.error, results: refused }, 429, h);
     const budgets = accepted.map(it => callHoldMicro(env, "lookup", estimateInputTokens(JSON.stringify([{ role: "user", content: prompt(it) }]))));
     const reserveMicro = budgets.reduce((sum, n) => sum + n, 0);
-    const lookBill = await reserveCall(env, user, "lookup", accepted.length, { reserveMicro });
-    if (!lookBill.ok) return json({ error: lookBill.error, results: items.map(it => ({ id: String((it && it.id) || ""), ok: false, error: lookBill.error })) }, lookBill.status, h);
+    const reserveEach = budgets.reduce((max, n) => Math.max(max, n), 0);
+    const lookBill = await reserveCall(env, user, "lookup", accepted.length, { reserveMicro, reserveEach, partial: true, now });
+    if (!lookBill.ok) return json({ error: lookBill.error, results: accepted.map(it => ({ id: String((it && it.id) || ""), ok: false, error: lookBill.error })).concat(refused) }, lookBill.status, h);
+    const charged = Math.max(0, Math.round(+lookBill.charged || 0));
+    const run = accepted.slice(0, charged);
+    refused = accepted.slice(charged).map(it => ({ id: String((it && it.id) || ""), ok: false, error: lookBill.refusedError || allowance.error })).concat(refused);
+    if (!run.length) return json({ error: lookBill.refusedError || allowance.error, results: refused }, 429, h);
 
-    const packed = await Promise.all(accepted.map((it, i) => lookupOne(env, it, lookBill.reserved ? budgets[i] : null).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160), usage: e.usage, spendMicro: e.spendMicro }))));
+    const packed = await Promise.all(run.map((it, i) => lookupOne(env, it, lookBill.reserved ? budgets[i] : null).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160), usage: e.usage, spendMicro: e.spendMicro }))));
     let actual = 0;
     const results = packed.map(r => {
       actual += Math.max(0, Math.round(Number.isFinite(+r.spendMicro) ? +r.spendMicro : estimateSpendMicro(r.usage, spendRates(env))));
@@ -881,7 +920,10 @@ export default {
       delete copy.spendMicro;
       return copy;
     }).concat(refused);
-    await finishCall(env, lookBill.id, lookBill.reserved, actual);
+    await finishCall(env, lookBill.id, lookBill.reserved, actual, spendExtra(lookBill, {
+      countRefund: run.length - packed.filter(lookupPriced).length,
+      refundCap: MONTHLY_REFUND_CAP,
+    }));
     const firstErr = results.find(r => !r.ok)?.error;
     if (results.every(r => !r.ok)) return json({ error: firstErr || "Lookup failed", results }, 502, h);
     return json({ results }, 200, h);

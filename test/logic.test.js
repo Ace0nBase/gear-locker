@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  clearUserLocal, shareItemFields, decideAccess, chargeDecision, quotaKey, alertQuotaKey,
+  clearUserLocal, shareItemFields, decideAccess, chargeDecision, quotaKey, alertQuotaKey, deletedUserExpireAt, DELETED_USER_TTL_MS,
   selectDueWatches, pinLengthOk, newPasswordOk, mergeByServerTime, mergeKitsByServerTime, serverStampIso,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed,
   saleRestricted, countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
@@ -103,6 +103,14 @@ test("selectDueWatches round-robins inside the hourly budget and skips fresh che
   assert.equal(selectDueWatches(users, { now, budget: 6, minGapMs: 20 * 3600e3 }).some(p => p.watch.id === "a3"), false);
 });
 
+test("a deleted-account marker expires 30 days after it is written", () => {
+  const now = Date.parse("2026-10-28T00:00:00.000Z");
+  const expire = deletedUserExpireAt(now);
+  assert.equal(expire.getTime() - now, DELETED_USER_TTL_MS);
+  assert.equal(DELETED_USER_TTL_MS, 30 * 24 * 60 * 60 * 1000);
+  assert.equal(deletedUserExpireAt(now).toISOString(), "2026-11-27T00:00:00.000Z");
+});
+
 test("new PINs need 6 to 12 digits and new passwords need 12 characters", () => {
   assert.equal(pinLengthOk("1234"), false);
   assert.equal(pinLengthOk("123456"), true);
@@ -150,6 +158,17 @@ test("cloud merge prefers the server stamp and keeps a newer local edit on echo"
     { id: "1", name: "server", updatedAt: "2026-10-26T06:00:00.000Z", serverUpdatedAt: "2026-10-26T06:00:00.000Z" }
   );
   assert.equal(newerRemote.name, "server");
+  const noted = mergeByServerTime(
+    { id: "1", name: "local", updatedAt: "2026-10-26T02:00:00.000Z", serverUpdatedAt: "2026-10-26T01:00:00.000Z", lookupError: "You've used this month's lookups. They reset next month." },
+    { id: "1", name: "remote", updatedAt: "2026-10-26T00:00:00.000Z", serverUpdatedAt: "2026-10-26T03:00:00.000Z" }
+  );
+  assert.equal(noted.name, "remote");
+  assert.match(noted.lookupError, /this month's lookups/);
+  const replaced = mergeByServerTime(
+    { id: "1", name: "local", updatedAt: "2026-10-26T02:00:00.000Z", lookupError: "You've used this month's lookups. They reset next month." },
+    { id: "1", name: "remote", updatedAt: "2026-10-26T04:00:00.000Z", serverUpdatedAt: "2026-10-26T04:00:00.000Z" }
+  );
+  assert.equal(replaced.lookupError, undefined);
 });
 
 test("confirming an email refreshes the ID token before anything else reads it", async () => {

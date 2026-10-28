@@ -2,8 +2,8 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { assertFails, assertSucceeds, initializeTestEnvironment } from "@firebase/rules-unit-testing";
-import { collection, collectionGroup, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
-import { lendMailDocId } from "../js/logic.js";
+import { collection, collectionGroup, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, setDoc, Timestamp, updateDoc, where, writeBatch } from "firebase/firestore";
+import { deletedUserExpireAt, lendMailDocId } from "../js/logic.js";
 
 let env;
 
@@ -26,6 +26,10 @@ const loan = () => ({
   returned: "",
   updatedAt: "2026-10-26T00:00:00.000Z",
 });
+
+function tomb(uid, at, expireAt) {
+  return { uid, at, expireAt: expireAt || Timestamp.fromDate(deletedUserExpireAt(Date.now())) };
+}
 
 function as(uid, email, verified) {
   return env.authenticatedContext(uid, { email, email_verified: !!verified }).firestore();
@@ -153,7 +157,15 @@ test("a tombstone blocks later writes and the named person can clear their email
   await assertSucceeds(updateDoc(doc(borrower, "lends/loan1"), {
     borrowerEmail: "", borrowerEmailLower: "", updatedAt: serverTimestamp(),
   }));
-  await assertSucceeds(setDoc(doc(owner, "deletedUsers/owner"), { uid: "owner", at: "2026-10-27T00:00:00.000Z" }));
+  await assertFails(setDoc(doc(owner, "deletedUsers/owner"), tomb("owner", "2026-10-27T00:00:00.000Z", "2026-11-27T00:00:00.000Z")));
+  await assertFails(setDoc(doc(owner, "deletedUsers/owner"), tomb("owner", "2026-10-27T00:00:00.000Z", Timestamp.fromDate(new Date(Date.now() + 24 * 60 * 60 * 1000)))));
+  await assertFails(setDoc(doc(owner, "deletedUsers/owner"), tomb("owner", "2026-10-27T00:00:00.000Z", Timestamp.fromDate(new Date(Date.now() + 60 * 24 * 60 * 60 * 1000)))));
+  await assertSucceeds(setDoc(doc(owner, "deletedUsers/owner"), tomb("owner", "2026-10-27T00:00:00.000Z")));
+  const legacy = as("legacy", "legacy@example.com", true);
+  await assertSucceeds(setDoc(doc(legacy, "deletedUsers/legacy"), { uid: "legacy", at: "2026-10-27T00:00:00.000Z" }));
+  const legacyDoc = await getDoc(doc(legacy, "deletedUsers/legacy"));
+  assert.equal(legacyDoc.exists(), true);
+  assert.equal(legacyDoc.data().expireAt, undefined);
   await assertFails(setDoc(doc(owner, "users/owner/items/i2"), { name: "Belt" }));
   await assertFails(setDoc(doc(owner, "shares/share2"), share("owner")));
   await assertSucceeds(getDocs(query(collection(owner, "shares"), where("owner", "==", "owner"))));
@@ -162,13 +174,15 @@ test("a tombstone blocks later writes and the named person can clear their email
   await assertSucceeds(deleteDoc(doc(owner, "users/owner/items/i1")));
   await assertSucceeds(deleteDoc(doc(owner, "lends/loan1")));
   const named = as("named", "named@example.com", true);
-  await assertSucceeds(setDoc(doc(named, "deletedUsers/named"), { uid: "named", at: "2026-10-27T00:00:00.000Z" }));
+  await assertSucceeds(setDoc(doc(named, "deletedUsers/named"), tomb("named", "2026-10-27T00:00:00.000Z")));
   await assertSucceeds(updateDoc(doc(named, "lends/loan2"), {
     borrowerEmail: "", borrowerEmailLower: "", updatedAt: serverTimestamp(),
   }));
   const ownLoan = await assertSucceeds(getDoc(doc(owner, "users/owner/loans/loan1")));
   assert.equal(ownLoan.data().notes, "private range note");
-  await assertSucceeds(getDoc(doc(owner, "deletedUsers/owner")));
+  const marker = await assertSucceeds(getDoc(doc(owner, "deletedUsers/owner")));
+  assert.equal(marker.exists(), true);
+  assert.equal(typeof marker.data().expireAt.toDate, "function");
   await assertFails(updateDoc(doc(owner, "deletedUsers/owner"), { at: "later" }));
   await assertFails(deleteDoc(doc(owner, "deletedUsers/owner")));
   const other = as("friend", "friend@example.com", true);
@@ -240,7 +254,7 @@ test("a lender cannot change the borrower email, and the lend counter cannot be 
   const hash = await lendMailDocId("friend@example.com");
   await assertFails(deleteDoc(doc(owner, "users/owner/lendMail/" + hash)));
   assert.equal((await getDoc(doc(owner, "users/owner/lendMail/" + hash))).exists(), true);
-  await assertSucceeds(setDoc(doc(owner, "deletedUsers/owner"), { uid: "owner", at: "2026-10-28T00:00:00.000Z" }));
+  await assertSucceeds(setDoc(doc(owner, "deletedUsers/owner"), tomb("owner", "2026-10-28T00:00:00.000Z")));
   await assertSucceeds(deleteDoc(doc(owner, "users/owner/lendMail/" + hash)));
   assert.equal((await getDoc(doc(owner, "users/owner/lendMail/" + hash))).exists(), false);
 });

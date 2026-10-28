@@ -48,14 +48,16 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device, the app is version 42, and the service worker cache is version 48", () => {
+test("sign-out clears this device, the app is version 48, and the service worker cache is version 49", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v48/);
+  assert.match(sw, /war-box-v49/);
   assert.match(sw, /skip-waiting/);
-  assert.match(read("js/cloud.js"), /APP_VERSION="42"/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="48"/);
+  assert.match(read("js/cloud.js"), /function markLookupError/);
+  assert.match(read("js/core.js"), /i\.lookupError&&!lookingUp\.has\(i\.id\)/);
   assert.match(read("js/cloud.js"), /textContent="v"\+APP_VERSION/);
   assert.match(read("js/cloud.js"), /this month's lookups/);
   assert.match(sw, /caches\.delete/);
@@ -233,6 +235,8 @@ test("local test mode blocks the Google popup script and the page does not allow
   const delStart = delFn.indexOf("async function deleteMyAccount");
   const delStop = delFn.indexOf("async function startCloud");
   const delBody = delFn.slice(delStart, delStop);
+  assert.ok(delBody.indexOf("deleteRetryRoute") < delBody.indexOf("deletedUserExpireAt"));
+  assert.ok(delBody.indexOf("deletedUserExpireAt") < delBody.indexOf('where("owner","=="'));
   assert.ok(delBody.indexOf("deleteRetryRoute") < delBody.indexOf('where("owner","=="'));
   assert.ok(delBody.indexOf("deleteRetryRoute") < delBody.indexOf('"/account/delete"'));
   assert.doesNotMatch(delBody, /collectionGroup\("loans"\)/);
@@ -268,6 +272,11 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("js/security.js"), /err\.textContent=""/);
   assert.match(read("firestore.rules"), /deletedUsers/);
   assert.match(read("firestore.rules"), /tombstoned\(\)/);
+  assert.match(read("firestore.rules"), /expireAt is timestamp/);
+  assert.match(read("js/cloud.js"), /deletedUserExpireAt/);
+  assert.match(read("firestore.indexes.json"), /"collectionGroup": "deletedUsers"/);
+  assert.match(read("firestore.indexes.json"), /"fieldPath": "expireAt"/);
+  assert.match(read("firestore.indexes.json"), /"ttl": true/);
   assert.match(read("README.md"), /SPEND_RESERVE_USD/);
   const stub = read("api/stub.js");
   const stubDel = stub.indexOf('pathname === "/account/delete"');
@@ -276,6 +285,9 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("index.html"), /aria-label="Settings"/);
   assert.match(read("README.md"), /BETA_ONLY/);
   assert.match(read("README.md"), /FREE_SPEND_CAP_USD/);
+  assert.match(read("README.md"), /FREE_DAILY_SPEND_CAP_USD/);
+  assert.match(read("api/worker.js"), /FREE_DAILY_SPEND_CAP_USD:\s*"0\.50"/);
+  assert.match(read("js/core.js"), /spending limit/);
   assert.match(read("README.md"), /REVIEW_EMAILS/);
   assert.match(read("README.md"), /FIREBASE_SERVER_API_KEY/);
   assert.doesNotMatch(read("README.md"), /FIREBASE_API_KEY/);

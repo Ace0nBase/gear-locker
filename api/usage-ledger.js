@@ -52,28 +52,43 @@ export class UsageLedger extends DurableObject {
       daily: req.dailyKey ? this._get(req.dailyKey) : 0,
       month: req.monthKey ? this._get(req.monthKey) : 0,
       alert: req.alertKey ? this._get(req.alertKey) : 0,
+      dailySpend: req.dailySpendKey ? this._get(req.dailySpendKey) : 0,
     };
     const out = applyReserve(state, req);
-    if (!out.ok) return { ok: false, status: out.status, error: out.error, reserved: 0 };
+    if (!out.ok) return { ok: false, status: out.status, error: out.error, reserved: 0, charged: 0 };
     this._put(SPEND, out.state.spend);
-    if (req.dailyKey && req.dailyAdd) this._put(req.dailyKey, out.state.daily);
-    if (req.monthKey && req.monthAdd && !req.skipMonth) this._put(req.monthKey, out.state.month);
+    if (req.dailyKey && out.state.daily !== state.daily) this._put(req.dailyKey, out.state.daily);
+    if (req.monthKey && !req.skipMonth && out.state.month !== state.month) this._put(req.monthKey, out.state.month);
     if (req.alertKey && req.alertAdd) this._put(req.alertKey, out.state.alert);
     const id = String(req.id || "");
-    if (id && out.reserved) this._put("hold:" + id, out.reserved);
-    return { ok: true, status: 200, error: "", reserved: out.reserved, id };
+    // A zero hold still marks the call, so a quota refund can run once and a repeat reconcile cannot.
+    if (id) this._put("hold:" + id, out.reserved);
+    return { ok: true, status: 200, error: "", reserved: out.reserved, id, charged: out.charged, refusedError: out.refusedError || "" };
   }
 
   reconcile(req) {
     req = req || {};
     const id = String(req.id || "");
     const holdKey = id ? "hold:" + id : "";
-    if (holdKey && !this._has(holdKey)) return { ok: true, duplicate: true, spend: this._get(SPEND), billed: 0 };
+    if (holdKey && !this._has(holdKey)) return { ok: true, duplicate: true, spend: this._get(SPEND), billed: 0, refunded: 0 };
     const reserved = holdKey ? this._get(holdKey) : Math.max(0, Math.round(+req.reserved || 0));
-    const out = applyReconcile({ spend: this._get(SPEND) }, { reserved, actual: req.actual });
+    const dailyKey = String(req.dailyKey || "");
+    const monthKey = String(req.monthKey || "");
+    const refundKey = String(req.refundKey || "");
+    const dailySpendKey = String(req.dailySpendKey || "");
+    const out = applyReconcile({
+      spend: this._get(SPEND),
+      daily: dailyKey ? this._get(dailyKey) : 0,
+      month: monthKey ? this._get(monthKey) : 0,
+      refunds: refundKey ? this._get(refundKey) : 0,
+      dailySpend: dailySpendKey ? this._get(dailySpendKey) : 0,
+    }, { reserved, actual: req.actual, countRefund: req.countRefund, refundCap: req.refundCap, skipMonth: req.skipMonth });
     this._put(SPEND, out.state.spend);
+    if (out.refunded && monthKey && !req.skipMonth) this._put(monthKey, out.state.month);
+    if (out.refunded && refundKey && !req.skipMonth) this._put(refundKey, out.state.refunds);
+    if (dailySpendKey && out.state.dailySpend) this._put(dailySpendKey, out.state.dailySpend);
     if (holdKey) this._del(holdKey);
-    return { ok: true, duplicate: false, spend: out.state.spend, billed: out.billed };
+    return { ok: true, duplicate: false, spend: out.state.spend, billed: out.billed, refunded: out.refunded, daily: out.state.daily, month: out.state.month, refunds: out.state.refunds, dailySpend: out.state.dailySpend };
   }
 
   read(req) {
@@ -97,7 +112,7 @@ export class UsageLedger extends DurableObject {
   clearUser(req) {
     const uid = String((req && req.uid) || "");
     if (!uid || /[^A-Za-z0-9]/.test(uid)) return { ok: false };
-    for (const prefix of ["q:" + uid + ":", "a:" + uid + ":", "m:" + uid + ":"]) {
+    for (const prefix of ["q:" + uid + ":", "a:" + uid + ":", "t:" + uid + ":", "ds:" + uid + ":", "m:" + uid + ":", "rf:" + uid + ":"]) {
       const rows = this._rows("SELECT k FROM kv WHERE k GLOB ?", prefix + "*");
       for (const row of rows) this._del(row.k);
     }
