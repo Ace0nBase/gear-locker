@@ -1,7 +1,7 @@
 // On-device spreadsheet import. No network, no disk, no price lookups.
 // Column matching uses the header text only.
 
-import { GEAR_CATEGORIES, importRestricted, migrateCategoryName, saleRestricted } from "./logic.js";
+import { GEAR_CATEGORIES, importRestricted, migrateCategoryName, saleRestricted, userEnteredPrice } from "./logic.js";
 
 export const LIMITS = {
   fileBytes: 15 * 1024 * 1024,
@@ -782,14 +782,12 @@ function ownExport(columns) {
 
 // Our export's New retail and Value each. Price source stays as written.
 // An empty price source means the numbers were typed, so they are manual.
-// A restricted shelf keeps What I paid only.
+// Market and auto prices do not land on a restricted shelf. A typed or unmarked value does.
 function applyExportPrices(doc, fields) {
   if (fields.weight != null && fields.weight !== "") doc.weight = fields.weight;
-  const restricted = saleRestricted(doc) || importRestricted(doc) || doc.migratedFromMagShelf;
-  if (restricted) return;
+  const source = String(fields.priceSource || "").trim().toLowerCase();
   if (fields.retailNew != null && fields.retailNew !== "") doc.retailNew = fields.retailNew;
   if (fields.value != null && fields.value !== "") doc.value = fields.value;
-  const source = String(fields.priceSource || "").trim().toLowerCase();
   if (source) doc.priceSource = source;
   const priced = doc.retailNew != null || doc.value != null;
   if (priced && !doc.priceSource) {
@@ -799,6 +797,16 @@ function applyExportPrices(doc, fields) {
     doc.valueSource = "manual";
   }
   if (fields.priceDate && doc.priceSource === "market") doc.priceDate = String(fields.priceDate).slice(0, 40);
+  const restricted = saleRestricted(doc) || importRestricted(doc) || doc.migratedFromMagShelf;
+  const auto = doc.priceSource === "market" || doc.priceSource === "auto";
+  if (restricted && (auto || !userEnteredPrice(doc))) {
+    delete doc.retailNew;
+    delete doc.value;
+    delete doc.valueSource;
+    delete doc.priceSource;
+    delete doc.priceDate;
+    delete doc.marketSources;
+  }
 }
 
 function nameBrandKey(name, brand) {
@@ -1175,11 +1183,13 @@ export function planImport(tables, opts = {}) {
       if (!doc.serial && routed.target === "armory") tags.push("no serial");
       if (decision === "add" && duplicate) tags.push("possible duplicate");
       if (tags.length) doc.tags = tags;
-      if (importRestricted(doc) || saleRestricted(doc)) {
+      if ((importRestricted(doc) || saleRestricted(doc)) && !userEnteredPrice(doc)) {
         delete doc.value;
+        delete doc.valueSource;
         delete doc.retailNew;
         delete doc.cpr;
         delete doc.priceSource;
+        delete doc.priceDate;
         delete doc.marketSources;
       }
       items.push(doc);

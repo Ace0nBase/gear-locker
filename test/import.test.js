@@ -1052,6 +1052,7 @@ test("a round trip of this app's export keeps category and prices", () => {
     { name: "Rifle case", brand: "Pelican", category: "Cases & Bags", qty: 1, color: "Tan", condition: "Good", retailNew: 80, value: 64, paid: 70, weight: 12, location: "Shelf", notes: "Hard case", priceSource: "market", priceDate: "2026-10-01" },
     { name: "Glock pouch", brand: "Ferrowind", category: "Pouches", qty: 2, color: "", condition: "Good", retailNew: 40, value: 32, paid: 39.5, weight: "", location: "Bin", notes: "", priceSource: "", priceDate: "" },
     { name: "Ranger", brand: "Tarnway", category: "Firearms", qty: 1, color: "", condition: "Good", retailNew: 1200, value: 900, paid: 899.5, weight: "", location: "Safe", notes: "", priceSource: "market", priceDate: "2026-10-02" },
+    { name: "Typed rifle", brand: "Tarnway", category: "Firearms", qty: 1, color: "", condition: "Good", retailNew: 800, value: 500, paid: 750, weight: "", location: "Safe", notes: "", priceSource: "manual", valueSource: "manual", priceDate: "" },
     { name: "PMAG", brand: "Magpul", category: "Magazines", qty: 3, color: "", condition: "Good", paid: 14, retailNew: 18, value: 12, priceSource: "market", location: "", notes: "" },
     { name: "PMAG", brand: "Blue Alpha", category: "Magazines & Belts", qty: 1, color: "", condition: "Good", paid: 80, retailNew: 90, value: 70, priceSource: "manual", valueSource: "manual", location: "", notes: "" },
     { name: "Chest rig", brand: "Spiritus", category: "Belts & Rigs", qty: 1, color: "", condition: "Good", paid: 200, location: "", notes: "" },
@@ -1102,6 +1103,14 @@ test("a round trip of this app's export keeps category and prices", () => {
   assert.equal(gun.retailNew, undefined);
   assert.equal(gun.value, undefined);
   assert.equal(gun.priceSource, undefined);
+  const typed = item("Typed rifle", "Tarnway");
+  assert.equal(typed.category, "Firearms");
+  assert.equal(typed.paid, 750);
+  assert.equal(typed.paidSource, "manual");
+  assert.equal(typed.retailNew, 800);
+  assert.equal(typed.priceSource, "manual");
+  assert.equal(typed.value, 500);
+  assert.equal(typed.valueSource, "manual");
   const mag = item("PMAG", "Magpul");
   assert.equal(mag.category, "Magazines");
   assert.equal(mag.paid, 14);
