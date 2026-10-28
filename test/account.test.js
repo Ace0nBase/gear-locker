@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  decideAccess, isReviewEmail, monthQuotaKey, quotaCounterExpired, planMonthlyLimit, reviewDailyLimit, spendCapMicro, lookupBatchAllowance,
+  decideAccess, isReviewEmail, monthQuotaKey, quotaCounterExpired, planMonthlyLimit, reviewDailyLimit, spendCapMicro, lookupBatchAllowance, lookupPriced,
   estimateSpendMicro, usageFromResponse, freeSpendBlocked, usageDecision,
   deleteRevenueCatCustomer, accountDeletePlan, accountPlan, USER_COLLECTIONS,
   signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
@@ -295,6 +295,33 @@ test("20 parallel lookups near the cap let through only what fits", async () => 
   const again = spendLedger.reconcile({ id: spendOk[0].id, actual: 50 });
   assert.equal(again.duplicate, true);
   assert.equal(again.spend, released.spend);
+
+  const raced = ledgerWith(fakeSql());
+  const racedMonth = { reserve: 4, cap: 1e12, seedSpend: 0, dailyAdd: 4, dailyLimit: 40, monthAdd: 4, monthLimit: 10, dailyKey: "q:u:day", monthKey: "m:u:month", partial: true, reserveEach: 1 };
+  raced.reserve({ ...racedMonth, id: "seed", reserve: 0, dailyAdd: 5, monthAdd: 5, partial: false });
+  const racedPair = await Promise.all([0, 1].map(i => Promise.resolve().then(() => raced.reserve({ ...racedMonth, id: "race" + i }))));
+  assert.deepEqual(racedPair.map(r => r.charged).sort(), [1, 4]);
+  assert.equal(racedPair.every(r => r.ok), true);
+  assert.match(racedPair.find(r => r.charged === 1).refusedError, /this month's lookups/);
+  assert.equal(raced.read({ keys: ["m:u:month", "q:u:day"] }).values["m:u:month"], 10);
+  assert.equal(raced.read({ keys: ["q:u:day"] }).values["q:u:day"], 10);
+  const refunded = raced.reconcile({ id: "race0", actual: 0, countRefund: 1, dailyKey: "q:u:day", monthKey: "m:u:month" });
+  assert.equal(refunded.refunded, 1);
+  assert.equal(refunded.daily, 9);
+  assert.equal(refunded.month, 9);
+  const refundAgain = raced.reconcile({ id: "race0", actual: 0, countRefund: 5, dailyKey: "q:u:day", monthKey: "m:u:month" });
+  assert.equal(refundAgain.duplicate, true);
+  assert.equal(raced.read({ keys: ["m:u:month"] }).values["m:u:month"], 9);
+  const floored = applyReconcile({ spend: 0, daily: 0, month: 1 }, { reserved: 0, actual: 0, countRefund: 4 });
+  assert.equal(floored.state.daily, 0);
+  assert.equal(floored.state.month, 0);
+  assert.equal(lookupPriced({ ok: true, retailNew: 12 }), true);
+  assert.equal(lookupPriced({ ok: true, weightOz: 8, retailNew: null, usedLow: null, usedHigh: null, value: null }), true);
+  assert.equal(lookupPriced({ ok: true, retailNew: null, usedLow: null, usedHigh: null, value: null, weightOz: null }), false);
+  assert.equal(lookupPriced({ ok: false, error: "model blew up", retailNew: 12 }), false);
+  const partialNone = applyReserve({ spend: 0, daily: 0, month: 10, alert: 0 }, { reserve: 4, cap: 100, partial: true, dailyAdd: 4, dailyLimit: 40, monthAdd: 4, monthLimit: 10 });
+  assert.equal(partialNone.ok, false);
+  assert.equal(partialNone.charged, 0);
 
   const dailySql = fakeSql();
   const dailyLedger = ledgerWith(dailySql);

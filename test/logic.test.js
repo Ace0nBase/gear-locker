@@ -150,6 +150,17 @@ test("cloud merge prefers the server stamp and keeps a newer local edit on echo"
     { id: "1", name: "server", updatedAt: "2026-10-26T06:00:00.000Z", serverUpdatedAt: "2026-10-26T06:00:00.000Z" }
   );
   assert.equal(newerRemote.name, "server");
+  const noted = mergeByServerTime(
+    { id: "1", name: "local", updatedAt: "2026-10-26T02:00:00.000Z", serverUpdatedAt: "2026-10-26T01:00:00.000Z", lookupError: "You've used this month's lookups. They reset next month." },
+    { id: "1", name: "remote", updatedAt: "2026-10-26T00:00:00.000Z", serverUpdatedAt: "2026-10-26T03:00:00.000Z" }
+  );
+  assert.equal(noted.name, "remote");
+  assert.match(noted.lookupError, /this month's lookups/);
+  const replaced = mergeByServerTime(
+    { id: "1", name: "local", updatedAt: "2026-10-26T02:00:00.000Z", lookupError: "You've used this month's lookups. They reset next month." },
+    { id: "1", name: "remote", updatedAt: "2026-10-26T04:00:00.000Z", serverUpdatedAt: "2026-10-26T04:00:00.000Z" }
+  );
+  assert.equal(replaced.lookupError, undefined);
 });
 
 test("confirming an email refreshes the ID token before anything else reads it", async () => {

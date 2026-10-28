@@ -16,7 +16,7 @@
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance } from "../js/logic.js";
+import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
 import { serviceAccountLogLine } from "./firestore-admin.js";
@@ -326,12 +326,16 @@ async function reserveCall(env, user, op, count, extra) {
   const review = isReviewEmail(email, env);
   const plan = accountPlan(user, env);
   const skipSpend = review || plan !== "free";
-  const day = new Date();
+  const day = extra.now instanceof Date ? extra.now : new Date();
   const uid = user && (user.sub || user.uid);
+  const dailyKey = quotaKey(uid, day);
+  const monthKey = monthQuotaKey(uid, day);
   try {
-    return await stub.reserve({
+    const reserved = await stub.reserve({
       id: crypto.randomUUID(),
       reserve: skipSpend ? 0 : (extra.reserveMicro != null ? Math.max(0, Math.round(+extra.reserveMicro)) : callHoldMicro(env, op, extra.inputTokens) * n),
+      reserveEach: Math.max(0, Math.round(+extra.reserveEach || 0)),
+      partial: !!extra.partial,
       cap: spendCapMicro(env),
       skipSpend,
       skipMonth: review,
@@ -341,24 +345,34 @@ async function reserveCall(env, user, op, count, extra) {
       monthLimit: planMonthlyLimit(plan, env),
       alertAdd: extra.alertAdd || 0,
       alertLimit: +(env.ALERT_DAILY_CAP || 6),
-      dailyKey: quotaKey(uid, day),
-      monthKey: monthQuotaKey(uid, day),
+      dailyKey,
+      monthKey,
       alertKey: alertQuotaKey(uid, day),
       seedSpend: await spendSeed(env),
     });
+    return { ...reserved, dailyKey, monthKey, skipMonth: review };
   } catch {
-    return { ok: false, status: 503, error: LOOKUPS_PAUSED, reserved: 0 };
+    return { ok: false, status: 503, error: LOOKUPS_PAUSED, reserved: 0, charged: 0 };
   }
 }
 function spendOf(env, model, usage) {
   return estimateSpendMicro(usage, ratesForModel(env, model));
 }
-async function finishCall(env, id, reserved, usage) {
+async function finishCall(env, id, reserved, usage, extra) {
+  extra = extra || {};
   try {
     const stub = usageStub(env);
-    if (!stub || !id || !reserved) return;
+    if (!stub || !id) return;
     const actual = typeof usage === "number" ? Math.max(0, Math.round(usage)) : estimateSpendMicro(usage, spendRates(env));
-    await stub.reconcile({ id, actual });
+    await stub.reconcile({
+      id,
+      reserved,
+      actual: reserved ? actual : 0,
+      countRefund: Math.max(0, Math.round(+extra.countRefund || 0)),
+      dailyKey: extra.dailyKey || "",
+      monthKey: extra.monthKey || "",
+      skipMonth: !!extra.skipMonth,
+    });
   } catch { /* the answer is already in hand */ }
 }
 async function clearUsageForUser(env, uid) {
@@ -865,14 +879,19 @@ export default {
       skipMonth: review,
     });
     const accepted = items.slice(0, allowance.allowed);
-    const refused = items.slice(allowance.allowed).map(it => ({ id: String((it && it.id) || ""), ok: false, error: allowance.error }));
+    let refused = items.slice(allowance.allowed).map(it => ({ id: String((it && it.id) || ""), ok: false, error: allowance.error }));
     if (!accepted.length) return json({ error: allowance.error, results: refused }, 429, h);
     const budgets = accepted.map(it => callHoldMicro(env, "lookup", estimateInputTokens(JSON.stringify([{ role: "user", content: prompt(it) }]))));
     const reserveMicro = budgets.reduce((sum, n) => sum + n, 0);
-    const lookBill = await reserveCall(env, user, "lookup", accepted.length, { reserveMicro });
-    if (!lookBill.ok) return json({ error: lookBill.error, results: items.map(it => ({ id: String((it && it.id) || ""), ok: false, error: lookBill.error })) }, lookBill.status, h);
+    const reserveEach = budgets.reduce((max, n) => Math.max(max, n), 0);
+    const lookBill = await reserveCall(env, user, "lookup", accepted.length, { reserveMicro, reserveEach, partial: true, now });
+    if (!lookBill.ok) return json({ error: lookBill.error, results: accepted.map(it => ({ id: String((it && it.id) || ""), ok: false, error: lookBill.error })).concat(refused) }, lookBill.status, h);
+    const charged = Math.max(0, Math.round(+lookBill.charged || 0));
+    const run = accepted.slice(0, charged);
+    refused = accepted.slice(charged).map(it => ({ id: String((it && it.id) || ""), ok: false, error: lookBill.refusedError || allowance.error })).concat(refused);
+    if (!run.length) return json({ error: lookBill.refusedError || allowance.error, results: refused }, 429, h);
 
-    const packed = await Promise.all(accepted.map((it, i) => lookupOne(env, it, lookBill.reserved ? budgets[i] : null).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160), usage: e.usage, spendMicro: e.spendMicro }))));
+    const packed = await Promise.all(run.map((it, i) => lookupOne(env, it, lookBill.reserved ? budgets[i] : null).catch(e => ({ id: String(it.id || ""), ok: false, error: String(e.message || e).slice(0, 160), usage: e.usage, spendMicro: e.spendMicro }))));
     let actual = 0;
     const results = packed.map(r => {
       actual += Math.max(0, Math.round(Number.isFinite(+r.spendMicro) ? +r.spendMicro : estimateSpendMicro(r.usage, spendRates(env))));
@@ -881,7 +900,12 @@ export default {
       delete copy.spendMicro;
       return copy;
     }).concat(refused);
-    await finishCall(env, lookBill.id, lookBill.reserved, actual);
+    await finishCall(env, lookBill.id, lookBill.reserved, actual, {
+      countRefund: run.length - packed.filter(lookupPriced).length,
+      dailyKey: lookBill.dailyKey,
+      monthKey: lookBill.monthKey,
+      skipMonth: lookBill.skipMonth,
+    });
     const firstErr = results.find(r => !r.ok)?.error;
     if (results.every(r => !r.ok)) return json({ error: firstErr || "Lookup failed", results }, 502, h);
     return json({ results }, 200, h);

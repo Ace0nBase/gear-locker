@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
-import worker from "../api/worker.js";
+import worker, { UsageLedger } from "../api/worker.js";
+import { monthQuotaKey, quotaKey } from "../js/logic.js";
 
 const src = fs.readFileSync(new URL("../api/worker.js", import.meta.url), "utf8");
 
@@ -118,4 +120,127 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.match(counters, /clearUsageForUser/);
   assert.match(counters, /deleteUserKv/);
   assert.ok(src.indexOf("async function deleteWatchRecord") < src.indexOf("async function deleteAuthUser"));
+  assert.match(src, /countRefund/);
+  assert.match(src, /lookupPriced/);
+  assert.match(src, /partial: true/);
+});
+
+function fakeSql() {
+  const rows = new Map();
+  return {
+    rows,
+    exec(sql, ...args) {
+      const q = String(sql);
+      const done = list => ({ toArray() { return list; } });
+      if (q.startsWith("CREATE")) return done([]);
+      if (q.startsWith("SELECT v")) return done(rows.has(args[0]) ? [{ v: rows.get(args[0]) }] : []);
+      if (q.startsWith("SELECT 1")) return done(rows.has(args[0]) ? [{ n: 1 }] : []);
+      if (q.startsWith("SELECT k")) return done([...rows.keys()].map(k => ({ k })));
+      if (q.startsWith("INSERT")) { rows.set(args[0], args[1]); return done([]); }
+      if (q.startsWith("DELETE")) { rows.delete(args[0]); return done([]); }
+      throw new Error(q);
+    },
+  };
+}
+
+function b64url(buf) {
+  return Buffer.from(buf).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+test("one failed lookup is refunded, and a second batch in the same moment keeps the leftover slot", async () => {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const pub = publicKey.export({ format: "jwk" });
+  const kid = "refund-test";
+  const jwks = { keys: [{ kty: pub.kty, n: pub.n, e: pub.e, kid, alg: "RS256", use: "sig" }] };
+  const nowS = Math.floor(Date.now() / 1000);
+  const sub = "userrefund";
+  const head = b64url(JSON.stringify({ alg: "RS256", kid, typ: "JWT" }));
+  const pay = b64url(JSON.stringify({
+    aud: "gear-locker-c248c",
+    iss: "https://securetoken.google.com/gear-locker-c248c",
+    sub,
+    email: "user@example.com",
+    email_verified: true,
+    iat: nowS,
+    exp: nowS + 3600,
+  }));
+  const data = head + "." + pay;
+  const sig = crypto.sign("RSA-SHA256", Buffer.from(data), privateKey);
+  const token = data + "." + b64url(sig);
+  const orig = globalThis.fetch;
+  let anthropic = 0;
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.includes("googleapis.com")) return new Response(JSON.stringify(jwks), { status: 200, headers: { "content-type": "application/json" } });
+    if (u.includes("api.anthropic.com")) {
+      anthropic += 1;
+      const body = JSON.parse(opts.body);
+      const blob = JSON.stringify(body.messages || []);
+      if (blob.includes("Fail Item")) return new Response(JSON.stringify({ error: { message: "model blew up" } }), { status: 500, headers: { "content-type": "application/json" } });
+      const answer = JSON.stringify({ retailNew: 20, usedLow: 10, usedHigh: 15, value: 12, weightOz: 8, priceNote: "Amazon $20", weightNote: "maker spec", sources: [] });
+      return new Response(JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: answer }], usage: { input_tokens: 10, output_tokens: 10 } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return orig(url, opts);
+  };
+  const envFor = ledger => ({
+    ANTHROPIC_API_KEY: "test-key",
+    FREE_SPEND_CAP_USD: "100000",
+    PLAN_LIMIT_FREE: "10",
+    DAILY_AI_LIMIT: "40",
+    USAGE: { getByName: () => ledger },
+  });
+  const post = (ledger, items) => worker.fetch(new Request("https://gear-locker-api.example/lookup", {
+    method: "POST",
+    headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+    body: JSON.stringify({ items }),
+  }), envFor(ledger));
+  try {
+    const now = new Date();
+    const dayKey = quotaKey(sub, now);
+    const monthKey = monthQuotaKey(sub, now);
+    const sql = fakeSql();
+    const ledger = new UsageLedger({ storage: { sql } }, {});
+    sql.rows.set(monthKey, 7);
+    sql.rows.set(dayKey, 0);
+    sql.rows.set("seeded:spend", 1);
+    sql.rows.set("spend:free", 0);
+    const res = await post(ledger, [
+      { id: "a", name: "Pouch A", category: "Pouches" },
+      { id: "b", name: "Pouch B", category: "Pouches" },
+      { id: "c", name: "Fail Item", category: "Pouches" },
+      { id: "d", name: "Pouch D", category: "Pouches" },
+    ]);
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.results.filter(r => r.ok).length, 2);
+    assert.equal(body.results.find(r => r.id === "c").ok, false);
+    assert.equal(body.results.find(r => r.id === "d").ok, false);
+    assert.match(body.results.find(r => r.id === "d").error, /this month's lookups/);
+    assert.equal(sql.rows.get(monthKey), 9);
+    assert.equal(sql.rows.get(dayKey), 2);
+    assert.equal(anthropic, 3);
+
+    const raceSql = fakeSql();
+    const race = new UsageLedger({ storage: { sql: raceSql } }, {});
+    raceSql.rows.set(monthKey, 5);
+    raceSql.rows.set(dayKey, 0);
+    raceSql.rows.set("seeded:spend", 1);
+    raceSql.rows.set("spend:free", 0);
+    const item = n => ({ id: "r" + n, name: "Race " + n, category: "Pouches" });
+    const pair = await Promise.all([
+      post(race, [1, 2, 3, 4].map(item)),
+      post(race, [5, 6, 7, 8].map(item)),
+    ]);
+    const parsed = [];
+    for (const one of pair) {
+      const out = await one.json();
+      assert.equal(one.status, 200, JSON.stringify(out));
+      parsed.push(out.results.filter(r => r.ok).length);
+    }
+    assert.deepEqual(parsed.sort(), [1, 4]);
+    assert.equal(raceSql.rows.get(monthKey), 10);
+    assert.equal(raceSql.rows.get(dayKey), 5);
+  } finally {
+    globalThis.fetch = orig;
+  }
 });

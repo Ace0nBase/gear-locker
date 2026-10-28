@@ -393,7 +393,7 @@ async function qaStorageCheckRun(){
   else toast("Storage check failed. Another account or a signed-out check was not blocked ("+otherCode+" / "+signedOutCode+").",6000);
 }
 }
-var APP_VERSION="42";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+var APP_VERSION="48";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 var swReloadPending=false;
 function showUpdateToast(){
   const el=$("toast");if(!el)return;
@@ -478,6 +478,8 @@ async function apiLookup(list){
   return (await r.json()).results||[];
 }
 var lookupBody=i=>{const restricted=GearLogic.saleRestricted(i);return {id:i.id,name:i.name,brand:i.brand||"",category:i.category||"",condition:i.condition||"",color:i.color||"",notes:"",arm:i.arm||"",caliber:i.caliber||"",load:i.load||"",weightOnly:restricted}};
+function markLookupError(it,msg){if(!it||it.deleted)return;it.lookupError=String(msg||"No result").slice(0,160);it.updatedAt=now()}
+function refreshLookupDetail(ids){if(viewing&&!$("detail").hidden&&ids.includes(viewing.id))openDetail(all.find(i=>i.id===viewing.id),true)}
 function applyLookup(id,res){
   const it=all.find(x=>x.id===id);if(!it||it.deleted||!res||!res.ok||GearLogic.importSkipsLookup(it))return false;
   const restricted=GearLogic.saleRestricted(it);
@@ -507,10 +509,10 @@ async function runLookups(ids,quiet){
   for(let k=0;k<ids.length;k+=4){
     const chunk=ids.slice(k,k+4);
     let stop=false;
-    try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){const msg=lookupFailMessage(r.error||"No result");it.lookupError=msg.slice(0,160);fail=fail||msg}if(lookupStop.test(String(r.error||"")))stop=true}})}
-    catch(e){fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);if(it&&!it.deleted)it.lookupError=fail.slice(0,160)});if(lookupStop.test(String(e&&e.message||""))){ids.slice(k).forEach(id=>lookingUp.delete(id));render();break}}
+    try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){const msg=lookupFailMessage(r.error||"No result");markLookupError(it,msg);fail=fail||msg}if(lookupStop.test(String(r.error||"")))stop=true}})}
+    catch(e){fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);markLookupError(it,fail)});if(lookupStop.test(String(e&&e.message||""))){ids.slice(k).forEach(id=>lookingUp.delete(id));render();await persist();refreshLookupDetail(ids.slice(k));break}}
     chunk.forEach(id=>lookingUp.delete(id));if(stop)ids.slice(k+chunk.length).forEach(id=>lookingUp.delete(id));render();await persist();
-    if(viewing&&!$("detail").hidden&&chunk.includes(viewing.id))openDetail(all.find(i=>i.id===viewing.id),true);
+    refreshLookupDetail(chunk);
     if(stop)break;
   }
   if(!$("form").hidden&&editing){const busy=lookingUp.has(editing.id);$("mktBtn").disabled=busy;$("mktBtn").textContent=busy?"Looking up…":(GearLogic.saleRestricted(editing)?"Look up weight":"Market check")}
