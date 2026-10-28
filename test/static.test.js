@@ -48,14 +48,14 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device, the app is version 52, and the service worker cache is version 52", () => {
+test("sign-out clears this device, the app is version 53, and the service worker cache is version 53", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v52/);
+  assert.match(sw, /war-box-v53/);
   assert.match(sw, /skip-waiting/);
-  assert.match(read("js/cloud.js"), /APP_VERSION="52"/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="53"/);
   assert.match(read("js/cloud.js"), /function markLookupError/);
   assert.match(read("js/core.js"), /i\.lookupError&&!lookingUp\.has\(i\.id\)/);
   assert.match(read("js/cloud.js"), /textContent="v"\+APP_VERSION/);
@@ -299,7 +299,9 @@ test("local test mode blocks the Google popup script and the page does not allow
   const catchBody = runBody.slice(runBody.indexOf("catch(e)"));
   assert.match(runBody, /Today's lookup spending limit is reached/);
   assert.match(runBody, /try again in a moment/);
-  assert.match(runBody, /1000,2000,4000,8000,8000/);
+  assert.match(read("js/logic.js"), /1000, 2000, 4000, 8000, 8000/);
+  assert.match(runBody, /busyQueueStep/);
+  assert.match(runBody, /plan\.retry/);
   assert.doesNotMatch(runBody, /setTimeout\(r,400\)/);
   assert.doesNotMatch(runBody.slice(runBody.indexOf("const lookupStop"), runBody.indexOf("const spendStop")), /moment/);
   assert.doesNotMatch(forEach, /spendStop/);
@@ -339,7 +341,7 @@ test("user-facing copy and docs avoid belted and linked ammo phrases", () => {
     if (file === "js/logic.js") return src.replace(/export const PRICE_BACKSTOP =[\s\S]*?;/, "");
     if (file === "api/worker.js") return src
       .replace(/function prompt\(it\) \{[\s\S]*?\n\}\nconst textOf/, "const textOf")
-      .replace(/const ask = `[\s\S]*?`;\n  const r = await fetch/, "const r = await fetch")
+      .replace(/const ask = `[\s\S]*?`;\n  const r = await modelFetch/, "const r = await modelFetch")
       .replace(/function dealPrompt\(w\) \{[\s\S]*?\n\}\nfunction priceRouteBlocked/, "function priceRouteBlocked");
     return src;
   };

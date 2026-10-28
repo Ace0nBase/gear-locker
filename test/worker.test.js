@@ -125,6 +125,10 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.match(src, /countRefund/);
   assert.match(src, /lookupPriced/);
   assert.match(src, /partial: true/);
+  assert.match(src, /modelFetch/);
+  assert.match(src, /90_000/);
+  assert.match(src, /signal: modelSignal/);
+  assert.ok(src.indexOf("function modelFetch") < src.indexOf("async function callClaude"));
 });
 
 function fakeSql() {
@@ -175,10 +179,23 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
   let markRaceBatchStarted = () => {};
   const raceBatchStarted = new Promise(resolve => { markRaceBatchStarted = resolve; });
   let raceGate = null;
+  let hangAnthropic = false;
   globalThis.fetch = async (url, opts) => {
     const u = String(url);
     if (u.includes("googleapis.com")) return new Response(JSON.stringify(jwks), { status: 200, headers: { "content-type": "application/json" } });
     if (u.includes("api.anthropic.com")) {
+      if (hangAnthropic) {
+        anthropic += 1;
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("model call was not aborted")), 5000);
+          const fail = () => { clearTimeout(timer); reject(new DOMException("The operation was aborted", "AbortError")); };
+          const signal = opts && opts.signal;
+          if (signal) {
+            if (signal.aborted) fail();
+            else signal.addEventListener("abort", fail, { once: true });
+          }
+        });
+      }
       anthropic += 1;
       const body = JSON.parse(opts.body);
       const early = JSON.stringify(body.messages || []);
@@ -453,6 +470,38 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
       assert.equal(anthropic, before, path);
       assert.equal(routeSql.rows.get(cappedDay), 2000000, path);
     }
+
+    const hangSql = fakeSql();
+    const hangLedger = new UsageLedger({ storage: { sql: hangSql } }, {});
+    hangSql.rows.set("seeded:spend", 1);
+    hangSql.rows.set("seeded:pool", 1);
+    const hangEnv = { ...envFor(hangLedger), MODEL_TIMEOUT_MS: "1500", PLAN_LIMIT_FREE: "20", FREE_DAILY_SPEND_CAP_USD: "10", FREE_SPEND_CAP_USD: "25" };
+    hangAnthropic = true;
+    const hangStarted = Date.now();
+    const firstHang = worker.fetch(new Request("https://gear-locker-api.example/lookup", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ items: [1, 2, 3, 4].map(n => ({ id: "hang" + n, name: "Hang " + n, category: "Pouches" })) }),
+    }), hangEnv);
+    const flightNow = inflightKey(sub, new Date());
+    const waitLive = Date.now() + 1000;
+    while ((hangSql.rows.get(flightNow) || 0) < 4 && Date.now() < waitLive) await new Promise(r => setTimeout(r, 10));
+    assert.equal(hangSql.rows.get(flightNow) || 0, 4);
+    const busyHang = await worker.fetch(new Request("https://gear-locker-api.example/lookup", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ items: [5, 6, 7, 8].map(n => ({ id: "hang" + n, name: "Hang " + n, category: "Pouches" })) }),
+    }), hangEnv);
+    const busyBody = await busyHang.json();
+    assert.equal(busyHang.status, 429, JSON.stringify(busyBody));
+    assert.match(busyBody.error, /Try again in a moment/);
+    assert.equal(hangSql.rows.get(flightNow) || 0, 4);
+    const hung = await firstHang;
+    const hungBody = await hung.json();
+    assert.equal(hung.status, 502, JSON.stringify(hungBody));
+    assert.ok(Date.now() - hangStarted < 4000);
+    assert.equal(hangSql.rows.get(flightNow) || 0, 0);
+    hangAnthropic = false;
   } finally {
     globalThis.fetch = orig;
   }

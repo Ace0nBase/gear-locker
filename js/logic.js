@@ -249,6 +249,19 @@ export const FREE_INFLIGHT_LIMIT = 4;
 export const LOOKUP_BUSY = "Lookups are busy right now. Try again in a moment.";
 // Longer than a real lookup, shorter than leaving a dead request pinned all day.
 export const USAGE_HOLD_STALE_MS = 2 * 60 * 1000;
+// Model calls abort inside this, so a live request cannot outlast its hold.
+export const MODEL_TIMEOUT_MS = 90 * 1000;
+// The old lifetime pool counter belongs to the month it was already counting.
+export const POOL_SEED_KEY = "spend:free:2026-10";
+export const BUSY_RETRY_MS = [1000, 2000, 4000, 8000, 8000];
+
+// After the last wait, the whole lookup queue stops. Later items stay selectable.
+export function busyQueueStep(tries, waits) {
+  const list = Array.isArray(waits) && waits.length ? waits : BUSY_RETRY_MS;
+  const n = Math.max(0, Math.floor(+tries || 0));
+  if (n < list.length) return { retry: true, waitMs: list[n], stop: false };
+  return { retry: false, waitMs: 0, stop: true };
+}
 
 function utcDateOnly(date) {
   const d = date instanceof Date && !isNaN(date.getTime()) ? date : new Date(date || Date.now());
@@ -2353,7 +2366,7 @@ const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, attemptQuotaKey, dailySpendKey, poolSpendKey, inflightKey, alertQuotaKey, monthQuotaKey, monthRefundKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
-  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
+  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, BUSY_RETRY_MS, busyQueueStep, MODEL_TIMEOUT_MS, USAGE_HOLD_STALE_MS, POOL_SEED_KEY, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupPriced, lookupBatchAllowance,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, DELETED_USER_TTL_MS, deletedUserExpireAt, tombstoneDue, LOOKUPS_PAUSED,

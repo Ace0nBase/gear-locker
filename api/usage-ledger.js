@@ -5,11 +5,12 @@
 // The class extends DurableObject so the real binding exposes these methods over RPC.
 
 import { DurableObject } from "cloudflare:workers";
-import { applyReserve, applyReconcile, quotaCounterExpired, USAGE_HOLD_STALE_MS } from "../js/logic.js";
+import { applyReserve, applyReconcile, quotaCounterExpired, USAGE_HOLD_STALE_MS, POOL_SEED_KEY } from "../js/logic.js";
 
 const SPEND = "spend:free";
 const SEEDED = "seeded:spend";
 const POOL_SEEDED = "seeded:pool";
+const TOMBSTONE_MS = 24 * 60 * 60 * 1000;
 
 export class UsageLedger extends DurableObject {
   constructor(ctx, env) {
@@ -42,13 +43,9 @@ export class UsageLedger extends DurableObject {
     this.ctx.storage.sql.exec("DELETE FROM kv WHERE k = ?", k).toArray();
   }
 
-  _keys() {
-    return this._rows("SELECT k FROM kv").map(row => String(row.k));
-  }
-
-  // Copy the lifetime pool into this month once. max(old ledger, old KV, month already recorded).
+  // Copy the lifetime pool into October 2026 once. A later month starts at 0.
   _seedPool(spendKey, kvSpend) {
-    if (!/^spend:free:\d{4}-\d{2}$/.test(String(spendKey || ""))) return false;
+    if (String(spendKey || "") !== POOL_SEED_KEY) return false;
     if (this._has(POOL_SEEDED)) return false;
     const kvKnown = kvSpend != null && kvSpend !== "";
     if (!kvKnown && !this._has(SPEND)) return false;
@@ -60,9 +57,11 @@ export class UsageLedger extends DurableObject {
     return true;
   }
 
-  _releaseStale(id, uid, day, spendKey) {
+  _releaseStale(id, uid, day, spendKey, now) {
+    if (!id || this._has("done:" + id)) return;
     const holdKey = "hold:" + id;
-    if (this._has(holdKey)) {
+    const hadHold = this._has(holdKey);
+    if (hadHold) {
       const reserved = Math.max(0, this._get(holdKey));
       const month = day ? String(day).slice(0, 7) : "";
       const key = month ? "spend:free:" + month : (spendKey || SPEND);
@@ -71,7 +70,8 @@ export class UsageLedger extends DurableObject {
     }
     this._del("ht:" + id);
     const flightMark = "flight:" + id;
-    if (this._has(flightMark)) {
+    const hadFlight = this._has(flightMark);
+    if (hadFlight) {
       const n = Math.max(0, this._get(flightMark));
       if (uid && day && n) {
         const agg = "if:" + uid + ":" + day;
@@ -88,23 +88,41 @@ export class UsageLedger extends DurableObject {
       }
       this._del(dh);
     }
+    if (hadHold || hadFlight) this._put("rel:" + id, now || Date.now());
   }
 
+  // Only in-flight rows. A full ledger scan would run on every account's reserve.
   _expireStale(nowMs, spendKey) {
     const now = Math.round(+nowMs || Date.now());
     const cutoff = now - USAGE_HOLD_STALE_MS;
-    const keys = this._keys();
+    const keys = this._rows("SELECT k FROM kv WHERE k GLOB ?", "if:*").map(row => String(row.k));
     for (const k of keys) {
       const entry = k.match(/^if:([^:]+):(\d{4}-\d{2}-\d{2}):(.+)$/);
       if (!entry) continue;
       if (this._get(k) > cutoff) continue;
-      this._releaseStale(entry[3], entry[1], entry[2], spendKey);
+      this._releaseStale(entry[3], entry[1], entry[2], spendKey, now);
     }
-    for (const k of this._keys()) {
-      if (!k.startsWith("ht:")) continue;
-      if (this._get(k) > cutoff) continue;
-      this._releaseStale(k.slice(3), "", "", spendKey);
-    }
+  }
+
+  _billReleased(req, spendKey, now) {
+    const id = String(req.id || "");
+    const monthKey = String(req.monthKey || "");
+    const refundKey = String(req.refundKey || "");
+    const dailySpendKey = String(req.dailySpendKey || "");
+    const out = applyReconcile({
+      spend: this._get(spendKey),
+      daily: 0,
+      month: monthKey ? this._get(monthKey) : 0,
+      refunds: refundKey ? this._get(refundKey) : 0,
+      dailySpend: dailySpendKey ? this._get(dailySpendKey) : 0,
+    }, { reserved: 0, actual: req.actual, countRefund: req.countRefund, refundCap: req.refundCap, skipMonth: req.skipMonth, dailyHold: 0 });
+    this._put(spendKey, out.state.spend);
+    if (out.refunded && monthKey && !req.skipMonth) this._put(monthKey, out.state.month);
+    if (out.refunded && refundKey && !req.skipMonth) this._put(refundKey, out.state.refunds);
+    if (dailySpendKey) this._put(dailySpendKey, out.state.dailySpend);
+    this._del("rel:" + id);
+    this._put("done:" + id, now);
+    return { ok: true, duplicate: false, released: true, spend: out.state.spend, billed: out.billed, refunded: out.refunded, daily: out.state.daily, month: out.state.month, refunds: out.state.refunds, dailySpend: out.state.dailySpend };
   }
 
   reserve(req) {
@@ -157,7 +175,10 @@ export class UsageLedger extends DurableObject {
     this._seedPool(spendKey, req.seedSpend);
     this._expireStale(now, spendKey);
     const holdKey = id ? "hold:" + id : "";
-    if (holdKey && !this._has(holdKey)) return { ok: true, duplicate: true, spend: this._get(spendKey), billed: 0, refunded: 0 };
+    if (holdKey && !this._has(holdKey)) {
+      if (id && this._has("rel:" + id) && !this._has("done:" + id)) return this._billReleased(req, spendKey, now);
+      return { ok: true, duplicate: true, spend: this._get(spendKey), billed: 0, refunded: 0 };
+    }
     const reserved = holdKey ? this._get(holdKey) : Math.max(0, Math.round(+req.reserved || 0));
     const dailyKey = String(req.dailyKey || "");
     const monthKey = String(req.monthKey || "");
@@ -187,6 +208,10 @@ export class UsageLedger extends DurableObject {
       if (ik) this._del(ik + ":" + id);
       this._del(flightMark);
     }
+    if (id) {
+      this._del("rel:" + id);
+      this._put("done:" + id, now);
+    }
     return { ok: true, duplicate: false, spend: out.state.spend, billed: out.billed, refunded: out.refunded, daily: out.state.daily, month: out.state.month, refunds: out.state.refunds, dailySpend: out.state.dailySpend };
   }
 
@@ -205,6 +230,14 @@ export class UsageLedger extends DurableObject {
     let removed = 0;
     for (const row of rows) {
       if (row.k === SPEND && !seeded) continue;
+      if (String(row.k).startsWith("rel:") || String(row.k).startsWith("done:")) {
+        const ts = this._get(row.k);
+        if (ts && ts < now.getTime() - TOMBSTONE_MS) {
+          this._del(row.k);
+          removed++;
+        }
+        continue;
+      }
       if (!quotaCounterExpired(row.k, now)) continue;
       this._del(row.k);
       removed++;

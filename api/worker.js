@@ -157,12 +157,23 @@ function loopCeiling(env, model, messages, maxTokens, searches, searchedAlready)
     web_search_requests: n,
   }, ratesForModel(env, model));
 }
+const MODEL_TIMEOUT_MS = 90_000;
+function modelSignal(env) {
+  const ms = Math.max(1, Math.round(+(env && env.MODEL_TIMEOUT_MS) || MODEL_TIMEOUT_MS));
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") return AbortSignal.timeout(ms);
+  const ctrl = new AbortController();
+  setTimeout(() => ctrl.abort(), ms);
+  return ctrl.signal;
+}
+function modelFetch(env, url, opts) {
+  return fetch(url, { ...(opts || {}), signal: modelSignal(env) });
+}
 async function callClaude(env, model, it, budget) {
   const spec = MODEL_CALLS.lookup;
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: spec.searches }];
   const messages = [{ role: "user", content: prompt(it) }];
   const send = async (maxTokens, withTools) => {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
+    const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: claudeBody(model, { max_tokens: maxTokens, ...(withTools ? { tools } : {}), messages }),
@@ -237,7 +248,7 @@ Identify it. Look for logos, labels, tags, stitching patterns and distinctive de
 If the photo is a firearm, suppressor, lower receiver, magazine, ammunition belt, trigger part, or auto-fire device, set category to "". A plate carrier or chest rig uses Armor & Carriers. A battle belt, duty belt, or rigger's belt uses Belts. Do not mention a price or a place to buy it.
 Reply with ONLY this JSON object:
 {"name": "short item name, e.g. 'Double M4 mag pouch' or 'IFAK pouch'", "brand": "maker and model if identifiable with reasonable confidence, else empty string", "category": one of ${JSON.stringify(priced)} or "", "color": "color or camo pattern", "confidence": "high|medium|low", "summary": "one short sentence on what it looks like and what gave it away"}`;
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
+  const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: claudeBody(env.MODEL || "claude-haiku-5-5", { max_tokens: MODEL_CALLS.identify.maxTokens, messages: [{ role: "user", content: [
@@ -285,7 +296,7 @@ async function dealCheck(env, w, budget) {
   let data, all = [], usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
     if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, spec.searches, searched), budget)) break;
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
+    const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST",
       headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) });
     data = await r.json().catch(() => ({}));
@@ -619,7 +630,7 @@ Reply with ONLY this JSON:
   let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
     if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, spec.searches, searched), budget)) break;
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) });
+    const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) });
     data = await r.json().catch(() => ({}));
     const roundUsage = usageFromResponse(data);
     usage = addUsage(usage, roundUsage);
@@ -677,7 +688,7 @@ Reply with ONLY this JSON:
   let data = null, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
     if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, searches, searched), budget)) break;
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, ...(searches ? { tools } : {}), messages }) });
+    const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, ...(searches ? { tools } : {}), messages }) });
     data = await r.json().catch(() => ({}));
     const roundUsage = usageFromResponse(data);
     usage = addUsage(usage, roundUsage);
@@ -692,7 +703,7 @@ Reply with ONLY this JSON:
     messages.push({ role: "assistant", content: (data.content || []).filter(x => x.type !== "text" || (x.text || "").trim()) });
     messages.push({ role: "user", content: "Now reply with ONLY the JSON object described above. No other text." });
     if (budget == null || roundFits(spent, loopCeiling(env, model, messages, MODEL_CALLS.paceFollow.maxTokens, 0), budget)) {
-      const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: MODEL_CALLS.paceFollow.maxTokens, messages }) });
+      const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: MODEL_CALLS.paceFollow.maxTokens, messages }) });
       data = await r.json().catch(() => ({}));
       const roundUsage = usageFromResponse(data);
       usage = addUsage(usage, roundUsage);
