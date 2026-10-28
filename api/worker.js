@@ -176,9 +176,30 @@ function openDeadline(env) {
 function canContinue(deadline) {
   return roundAllowed(deadline, Date.now(), deadline && deadline.floor);
 }
+function pastDeadline(deadline) {
+  return !!(deadline && deadline.end != null && Date.now() >= deadline.end);
+}
 function modelFetch(env, url, opts, deadline) {
-  const signal = deadline && deadline.signal ? deadline.signal : openDeadline(env).signal;
-  return fetch(url, { ...(opts || {}), signal });
+  const signal = deadline && deadline.signal;
+  if (pastDeadline(deadline) || (signal && signal.aborted)) {
+    const e = new Error("The operation was aborted");
+    e.name = "AbortError";
+    e.aborted = true;
+    e.unsent = true;
+    throw e;
+  }
+  return fetch(url, { ...(opts || {}), signal: signal || openDeadline(env).signal });
+}
+function keepAbort(e, env, model, messages, usage, spent, extraInput) {
+  if (e.unsent) {
+    e.usage = e.usage || usage;
+    if (e.spent == null) e.spent = spent;
+  } else if (e.spent == null) {
+    const billed = billAbort(env, model, messages, usage, spent, extraInput);
+    e.usage = billed.usage;
+    e.spent = billed.spent;
+  }
+  e.aborted = true;
 }
 function billAbort(env, model, messages, usage, spent, extraInput) {
   const estimate = {
@@ -210,7 +231,7 @@ async function callClaude(env, model, it, budget, deadline) {
       headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: claudeBody(model, { max_tokens: maxTokens, ...(withTools ? { tools } : {}), messages }),
     }, deadline);
-    const data = await readModelJson(r, env, model, messages, null, 0);
+    const data = await readModelJson(r, env, model, messages, usage, spent);
     if (!r.ok) { const e = new Error(data?.error?.message || ("Claude API error " + r.status)); e.status = r.status; e.usage = usageFromResponse(data); throw e; }
     return data;
   };
@@ -222,13 +243,13 @@ async function callClaude(env, model, it, budget, deadline) {
   let askedJson = false;
   let searched = false;
   for (let i = 0; i < spec.rounds; i++) {
-    if (deadline && deadline.signal && deadline.signal.aborted) {
+    if (pastDeadline(deadline) || (deadline && deadline.signal && deadline.signal.aborted)) {
       const e = new Error("The operation was aborted");
       e.name = "AbortError";
       e.aborted = true;
-      const billed = billAbort(env, model, messages, usage, spent);
-      e.usage = billed.usage;
-      e.spent = billed.spent;
+      e.unsent = true;
+      e.usage = usage;
+      e.spent = spent;
       throw e;
     }
     if (i > 0 && !canContinue(deadline)) break;
@@ -242,12 +263,7 @@ async function callClaude(env, model, it, budget, deadline) {
     try { data = await send(spec.maxTokens, searching); }
     catch (e) {
       if (isAbortError(e)) {
-        if (e.spent == null) {
-          const billed = billAbort(env, model, messages, usage, spent);
-          e.usage = billed.usage;
-          e.spent = billed.spent;
-        }
-        e.aborted = true;
+        keepAbort(e, env, model, messages, usage, spent);
         throw e;
       }
       const roundUsage = e.usage;
@@ -310,14 +326,7 @@ Reply with ONLY this JSON object:
         { type: "text", text: ask } ] }] }),
     }, deadline);
   } catch (e) {
-    if (isAbortError(e)) {
-      if (e.spent == null) {
-        const billed = billAbort(env, env.MODEL || "claude-haiku-5-5", ask, null, 0, MODEL_CALLS.identify.promptTokens);
-        e.usage = billed.usage;
-        e.spent = billed.spent;
-      }
-      e.aborted = true;
-    }
+    if (isAbortError(e)) keepAbort(e, env, env.MODEL || "claude-haiku-5-5", ask, null, 0, MODEL_CALLS.identify.promptTokens);
     throw e;
   }
   let data;
@@ -363,6 +372,15 @@ async function dealCheck(env, w, budget, deadline) {
   const messages = [{ role: "user", content: dealPrompt(w) }];
   let data, all = [], usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
+    if (pastDeadline(deadline)) {
+      const e = new Error("The operation was aborted");
+      e.name = "AbortError";
+      e.aborted = true;
+      e.unsent = true;
+      e.usage = usage;
+      e.spent = spent;
+      throw e;
+    }
     if (i > 0 && !canContinue(deadline)) break;
     if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, spec.searches, searched), budget)) break;
     let r;
@@ -373,12 +391,7 @@ async function dealCheck(env, w, budget, deadline) {
       data = await readModelJson(r, env, model, messages, usage, spent);
     } catch (e) {
       if (!isAbortError(e)) throw e;
-      if (e.spent == null) {
-        const billed = billAbort(env, model, messages, usage, spent);
-        e.usage = billed.usage;
-        e.spent = billed.spent;
-      }
-      e.aborted = true;
+      keepAbort(e, env, model, messages, usage, spent);
       throw e;
     }
     const roundUsage = usageFromResponse(data);
@@ -715,6 +728,15 @@ Reply with ONLY this JSON:
   const messages = [{ role: "user", content: ask }];
   let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
+    if (pastDeadline(deadline)) {
+      const e = new Error("The operation was aborted");
+      e.name = "AbortError";
+      e.aborted = true;
+      e.unsent = true;
+      e.usage = usage;
+      e.spent = spent;
+      throw e;
+    }
     if (i > 0 && !canContinue(deadline)) break;
     if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, spec.searches, searched), budget)) break;
     let r;
@@ -723,12 +745,7 @@ Reply with ONLY this JSON:
       data = await readModelJson(r, env, model, messages, usage, spent);
     } catch (e) {
       if (!isAbortError(e)) throw e;
-      if (e.spent == null) {
-        const billed = billAbort(env, model, messages, usage, spent);
-        e.usage = billed.usage;
-        e.spent = billed.spent;
-      }
-      e.aborted = true;
+      keepAbort(e, env, model, messages, usage, spent);
       throw e;
     }
     const roundUsage = usageFromResponse(data);
@@ -787,6 +804,15 @@ Reply with ONLY this JSON:
   const messages = [{ role: "user", content: ask }];
   let data = null, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
+    if (pastDeadline(deadline)) {
+      const e = new Error("The operation was aborted");
+      e.name = "AbortError";
+      e.aborted = true;
+      e.unsent = true;
+      e.usage = usage;
+      e.spent = spent;
+      throw e;
+    }
     if (i > 0 && !canContinue(deadline)) break;
     if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, searches, searched), budget)) break;
     let r;
@@ -795,12 +821,7 @@ Reply with ONLY this JSON:
       data = await readModelJson(r, env, model, messages, usage, spent);
     } catch (e) {
       if (!isAbortError(e)) throw e;
-      if (e.spent == null) {
-        const billed = billAbort(env, model, messages, usage, spent);
-        e.usage = billed.usage;
-        e.spent = billed.spent;
-      }
-      e.aborted = true;
+      keepAbort(e, env, model, messages, usage, spent);
       throw e;
     }
     const roundUsage = usageFromResponse(data);
@@ -822,12 +843,7 @@ Reply with ONLY this JSON:
         data = await readModelJson(r, env, model, messages, usage, spent);
       } catch (e) {
         if (!isAbortError(e)) throw e;
-        if (e.spent == null) {
-          const billed = billAbort(env, model, messages, usage, spent);
-          e.usage = billed.usage;
-          e.spent = billed.spent;
-        }
-        e.aborted = true;
+        keepAbort(e, env, model, messages, usage, spent);
         throw e;
       }
       const roundUsage = usageFromResponse(data);
@@ -901,6 +917,10 @@ export default {
     const env = { ...DEFAULTS };
     for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
     const deadline = openDeadline(env);
+    if (env.HANDLER_DELAY_MS) await new Promise(r => setTimeout(r, Math.max(0, Math.round(+env.HANDLER_DELAY_MS || 0))));
+    let route = "";
+    try { route = new URL(req.url).pathname; } catch { route = ""; }
+    try {
     const h = cors(env, req);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: h });
     const url = new URL(req.url);
@@ -1098,6 +1118,10 @@ export default {
     const firstErr = results.find(r => !r.ok)?.error;
     if (results.every(r => !r.ok)) return json({ error: firstErr || "Lookup failed", results }, 502, h);
     return json({ results }, 200, h);
+    } finally {
+      const late = Date.now() - deadline.end;
+      if (late > 5000) console.log("deadline: late " + late + "ms " + route);
+    }
   },
   async scheduled(event, rawEnv, ctx) {
     const env = { ...DEFAULTS };

@@ -273,23 +273,33 @@ export function requestDeadline(nowMs, budgetMs) {
   return { start, end: start + budget };
 }
 
+// A positive base-10 integer. Hex, decimals, and other text are not numbers here.
+function decimalDigits(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!/^[0-9]+$/.test(s)) return null;
+  const n = parseInt(s, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
 // Whatever the env asks, the live window stays at most 100s and 15s inside the hold.
 export function clampedDeadlineBudget(raw, staleMs = USAGE_HOLD_STALE_MS) {
   const stale = Math.max(DEADLINE_MARGIN_MS + 1000, Math.round(+staleMs || USAGE_HOLD_STALE_MS));
   const cap = Math.min(REQUEST_DEADLINE_MS, stale - DEADLINE_MARGIN_MS);
-  if (raw == null || String(raw).trim() === "") return cap;
-  const n = Math.round(+raw);
-  if (!Number.isFinite(n) || n <= 0) return cap;
+  const n = decimalDigits(raw);
+  if (n == null || n <= 0) return cap;
   return Math.min(n, cap);
 }
+
+export const ROUND_FLOOR_MIN_MS = 15 * 1000;
 
 export function clampedRoundFloor(raw, budgetMs) {
   const budget = Math.max(1, Math.round(+budgetMs || REQUEST_DEADLINE_MS));
   const cap = Math.min(ROUND_FLOOR_MS, budget);
-  if (raw == null || String(raw).trim() === "") return cap;
-  const n = Math.round(+raw);
-  if (!Number.isFinite(n) || n < 0) return cap;
-  return Math.min(n, cap);
+  const n = decimalDigits(raw);
+  if (n == null) return cap;
+  if (budget >= ROUND_FLOOR_MIN_MS) return Math.min(cap, Math.max(ROUND_FLOOR_MIN_MS, n));
+  return Math.min(cap, n);
 }
 
 export function deadlineRemaining(deadline, nowMs) {
@@ -2413,7 +2423,7 @@ const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, attemptQuotaKey, dailySpendKey, poolSpendKey, inflightKey, alertQuotaKey, monthQuotaKey, monthRefundKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
-  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, BUSY_RETRY_MS, busyQueueStep, REQUEST_DEADLINE_MS, ROUND_FLOOR_MS, DEADLINE_MARGIN_MS, requestDeadline, clampedDeadlineBudget, clampedRoundFloor, roundAllowed, poolLifetimeExpired, USAGE_HOLD_STALE_MS, POOL_SEED_KEY, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
+  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, BUSY_RETRY_MS, busyQueueStep, REQUEST_DEADLINE_MS, ROUND_FLOOR_MS, ROUND_FLOOR_MIN_MS, DEADLINE_MARGIN_MS, requestDeadline, clampedDeadlineBudget, clampedRoundFloor, roundAllowed, poolLifetimeExpired, USAGE_HOLD_STALE_MS, POOL_SEED_KEY, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupPriced, lookupBatchAllowance,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, DELETED_USER_TTL_MS, deletedUserExpireAt, tombstoneDue, LOOKUPS_PAUSED,
