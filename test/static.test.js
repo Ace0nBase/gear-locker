@@ -158,7 +158,7 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.doesNotMatch(read("js/kits.js"), /Magazines & Belts|Belts & Rigs/);
   assert.match(read("js/stacks.js"), /\["Magazines","Magazines & Belts","Ammo Storage & Loaders","Mags & Ammo Storage"\]/);
   assert.doesNotMatch(read("js/stacks.js"), /Belts & Rigs/);
-  assert.doesNotMatch(read("README.md"), /\bbelted\b|\blinked\s+(ammo|ammunition|belt|rounds?)\b|\bammo(nition)?[\s-]belts?\b|\bbelt[\s-]fed\b/i);
+  assert.doesNotMatch(read("README.md"), /\bbelted\b|\blinked\s+(ammo|ammunition|belt|rounds?)\b|\bamm(?:o|unition)[\s-]belts?\b|\bbelt[\s-]fed\b/i);
   assert.match(read("js/cloud.js"), /swReloadPending/);
   assert.match(read("js/cloud.js"), /showUpdateToast/);
   assert.match(read("js/cloud.js"), /textContent="Reload"/);
@@ -205,7 +205,7 @@ test("local test mode blocks the Google popup script and the page does not allow
 });
 
 test("user-facing copy and docs avoid belted and linked ammo phrases", () => {
-  const banned = /\bbelted\b|\blinked\s+(ammo|ammunition|belt|rounds?)\b|\bammo(nition)?[\s-]belts?\b|\bbelt[\s-]fed\b/i;
+  const banned = /\bbelted\b|\blinked\s+(ammo|ammunition|belt|rounds?)\b|\bamm(?:o|unition)[\s-]belts?\b|\bbelt[\s-]fed\b/i;
   const withoutComments = src => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
   const literals = src => (withoutComments(src).match(/`(?:\\[\s\S]|[^`\\])*`|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'/g) || []).join("\n");
   const withoutAiPrompts = (file, src) => {
@@ -226,7 +226,7 @@ test("user-facing copy and docs avoid belted and linked ammo phrases", () => {
   const hit = copy.match(new RegExp(".{0,48}(?:" + banned.source + ").{0,48}", "i"));
   assert.equal(hit, null, hit && hit[0]);
   assert.doesNotMatch(read("README.md"), banned);
-  for (const sample of ["belted", "Belted ammunition stays on Ammunition", "linked ammunition", "a linked belt"]) assert.match(sample, banned);
+  for (const sample of ["belted", "Belted ammunition stays on Ammunition", "linked ammunition", "a linked belt", "ammunition belt", "ammo belt", "belt-fed", "linked ammo"]) assert.match(sample, banned);
   for (const sample of ["Unlinked", "Linked radios", "battle belt", "store link"]) assert.doesNotMatch(sample, banned);
   assert.match(logicSrc, /an ammunition \(linked\) belt/);
   assert.doesNotMatch(logic, /an ammunition \(linked\) belt/);
