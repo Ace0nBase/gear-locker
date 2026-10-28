@@ -645,13 +645,12 @@ test("belt and armor types use the renamed shelves, and old names migrate", () =
   assert.equal(row("Plate").category, "Armor & Carriers");
   assert.equal(saved("Rig").importPricedAllowlist, true);
   assert.equal(saved("Plate").importPricedAllowlist, true);
-  assert.equal(row("Old mag").category, "Magazines");
-  assert.equal(saleRestricted(saved("Old mag")), true);
-  assert.equal(saved("Old mag").importPricedAllowlist, undefined);
-  assert.equal(saved("Old mag").paid, 14);
-  assert.equal(importSkipsLookup(saved("Old mag")), true);
-  assert.equal(row("Old belt").category, "Belts");
-  assert.equal(saved("Old belt").importPricedAllowlist, true);
+  assert.equal(row("Old mag").target, "needs");
+  assert.equal(row("Old mag").category, "");
+  assert.equal(saved("Old mag"), undefined);
+  assert.equal(row("Old belt").target, "needs");
+  assert.equal(row("Old belt").category, "");
+  assert.equal(saved("Old belt"), undefined);
   assert.equal(row("Old can").category, "Ammo Storage & Loaders");
   assert.equal(saved("Old can").migratedFromMagShelf, true);
   assert.equal(row("Mag").category, "Magazines");
@@ -662,6 +661,50 @@ test("belt and armor types use the renamed shelves, and old names migrate", () =
   assert.equal(row("Belted").target, "needs");
   assert.equal(row("Belted").category, "");
   assert.equal(plan.rows.some(item => /belted|linked/i.test(item.category || "")), false);
+});
+
+test("an old combined shelf waits for a category and does not read the item name", () => {
+  const csv = [
+    "Item,Type,Price",
+    "PMAG 30,Magazines & Belts,14",
+    "Blue Alpha battle belt,Magazines & Belts,80",
+    "Triple mag pouch,Magazines & Belts,24",
+    "Spiritus chest rig,Belts & Rigs,180",
+    "AWS belt,Belts & Rigs,90",
+    "Duty,Duty belt,70",
+    "Rigger,Rigger belt,60",
+    "Apostrophe,Rigger's belt,55",
+    "Box,Magazine,12",
+  ].join("\n");
+  const plan = planImport(readCsvText(csv).tables, { importId: "01OLDSHELF", now: "2026-10-27T00:00:00.000Z" });
+  const row = name => plan.rows.find(item => item.name === name);
+  for (const name of ["PMAG 30", "Blue Alpha battle belt", "Triple mag pouch", "Spiritus chest rig", "AWS belt"]) {
+    assert.equal(row(name).target, "needs", name);
+    assert.equal(row(name).category, "", name);
+    assert.equal(plan.items.some(item => item.name === name), false, name);
+  }
+  assert.equal(plan.items.some(item => item.category === "Magazines" && /belt|pouch|rig/i.test(item.name)), false);
+  assert.equal(row("Duty").category, "Belts");
+  assert.equal(row("Rigger").category, "Belts");
+  assert.equal(row("Apostrophe").category, "Belts");
+  assert.equal(row("Box").category, "Magazines");
+  assert.equal(saleRestricted(plan.items.find(item => item.name === "Box")), true);
+});
+
+test("an import note uses the local date", () => {
+  const iso = "2026-10-27T03:30:00.000Z";
+  const d = new Date(iso);
+  const local = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const pouch = { id: "p1", name: "Chest Pouch (example)", brand: "Ferrowind", category: "Pouches", serial: "SAMPLE-5001" };
+  const csv = "Brand,Item,Type,Serial Number,Notes\nFerrowind,Chest Pouch (example),Pouches,SAMPLE-5001,From the old list\n";
+  const plan = planImport(readCsvText(csv).tables, {
+    items: [pouch], importId: "01NOTE", now: iso, rowDecisions: { 0: { 0: "merge" } },
+  });
+  assert.equal(plan.merges.length, 1);
+  assert.match(plan.merges[0].patch.notes, new RegExp(`Imported ${local}:`));
+  assert.match(plan.merges[0].patch.notes, /From the old list/);
+  const engine = fs.readFileSync(new URL("../js/import-engine.js", import.meta.url), "utf8");
+  assert.equal(engine.includes("now.slice(0, 10)"), false);
 });
 
 test("a legacy Mags & Ammo Storage import waits for the shelf answer", () => {
@@ -691,6 +734,12 @@ test("escape during a save reports the rows already written", () => {
   const askAt = ui.indexOf("askClose()", escapeAt);
   assert.ok(ui.slice(escapeAt, askAt).includes("S.saving"));
   assert.ok(ui.slice(escapeAt, askAt).includes("S.cancelSave = true"));
+  const savingEscape = ui.slice(escapeAt, askAt);
+  assert.ok(savingEscape.indexOf("S.cancelSave = true") < savingEscape.indexOf("paint()"));
+  assert.match(ui, /rollbackBusy \|\| S\.cancelSave \? "Stopping…"/);
+  const stopSave = ui.slice(ui.indexOf("async function undoImport"), ui.indexOf("async function undoImport") + 280);
+  assert.ok(stopSave.indexOf("S.cancelSave = true") < stopSave.indexOf("paint()"));
+  assert.match(ui.slice(ui.indexOf("function summaryView"), ui.indexOf("function doneView")), /text: "Stop"/);
   assert.match(ui, /escapeSaveReport/);
   const reportAt = ui.indexOf("const report = escapeSaveReport");
   const cancel = ui.slice(reportAt, ui.indexOf("S.tables.forEach", reportAt));
@@ -746,6 +795,9 @@ test("a gun type in the type column asks before a priced bulk category", () => {
   assert.equal(typeColumnIsGun("Red dot"), false);
   assert.equal(typeColumnIsGun("AR-15"), false);
   assert.equal(typeColumnIsGun(""), false);
+  for (const gear of ["Rifle case", "Pistol holster", "Gun safe", "Rifle sling", "Rifle scope", "Upper receiver", "Lower parts kit"]) {
+    assert.equal(typeColumnIsGun(gear), false, gear);
+  }
   const needs = planImport(readCsvText("Item,Type\nGlass,Rifle w/ scope\nDot,Red dot\n").tables, {
     importId: "01GUNTYPE", now: "2026-10-27T00:00:00.000Z",
   });
@@ -895,7 +947,7 @@ test("a merge keeps pricing on existing priced gear", () => {
     { category: "Firearms", arm: "FA", type: "Rifle", serial: "FA-9" },
     { category: "Suppressors", arm: "SU", type: "Suppressor", serial: "SU-9" },
     { category: "Lower receiver", arm: "FA", type: "Lower receiver", serial: "LR-9" },
-    { category: "Magazines & Belts", arm: "", type: "Magazines & Belts", serial: "MAG-9" },
+    { category: "Magazines & Belts", arm: "", type: "Magazine", serial: "MAG-9" },
     { category: "Ammunition", arm: "", kind: "ammo", type: "Misc", serial: "AM-9" },
   ];
   restricted.forEach(spec => {

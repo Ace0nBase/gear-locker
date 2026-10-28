@@ -718,14 +718,14 @@ function summaryView() {
   const progress = S.saveProgress || { done: 0, total };
   const btn = el("button", {
     className: "btn",
-    text: rollbackBusy ? "Stopping…" : S.saving ? `Saving ${progress.done} of ${progress.total}…` : `Import ${total} item${total === 1 ? "" : "s"}`,
+    text: rollbackBusy || S.cancelSave ? "Stopping…" : S.saving ? `Saving ${progress.done} of ${progress.total}…` : `Import ${total} item${total === 1 ? "" : "s"}`,
     attrs: { type: "button", "data-import": "save", disabled: total && !S.saving && !rollbackBusy ? null : "disabled" },
   });
   const actions = [btn];
   if (S.saving) {
     actions.push(el("button", {
       className: "btn ghost",
-      text: "Undo",
+      text: "Stop",
       attrs: { type: "button", "data-import": "undo", "data-id": S.importId },
     }));
   }
@@ -1017,7 +1017,10 @@ async function saveImport() {
 
 async function undoImport(id, opts) {
   if (S.saving && !(opts && opts.skipConfirm)) {
-    if (!id || id === S.importId) S.cancelSave = true;
+    if (!id || id === S.importId) {
+      S.cancelSave = true;
+      paint();
+    }
     return;
   }
   if (typeof all === "undefined" || typeof db === "undefined") return;
@@ -1218,6 +1221,7 @@ function onEscape() {
   if (!sh || sh.hidden) return false;
   if (S.saving) {
     S.cancelSave = true;
+    paint();
     return true;
   }
   if (S.step === "scan") stopCamera();

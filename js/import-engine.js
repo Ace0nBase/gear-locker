@@ -579,7 +579,8 @@ const GEAR_PHRASES = {
   "night vision": LASER,
   "weapon light": LIGHT, "weapon lights": LIGHT,
   "cleaning kit": CLEAN, "cleaning kits": CLEAN,
-  "battle belt": BELT, "chest rig": ARMOR, "plate carrier": ARMOR,
+  "battle belt": BELT, "duty belt": BELT, "rigger belt": BELT, "rigger s belt": BELT, "riggers belt": BELT,
+  "chest rig": ARMOR, "plate carrier": ARMOR,
 };
 const SOURCE_GEAR_PHRASES = {
   myarmory: GEAR_PHRASES,
@@ -636,9 +637,14 @@ function classifyType(typeText, categories, source) {
   return null;
 }
 
+// The old combined shelves mixed magazines with belts and pouches, and belts with rigs.
+// Import does not pick for the owner, and it does not read the item name.
+const AMBIGUOUS_LEGACY = new Set([normType("Magazines & Belts"), normType("Belts & Rigs")]);
+
 function routeNamedCategory(name) {
   const key = normType(name);
   if (!key) return null;
+  if (AMBIGUOUS_LEGACY.has(key)) return null;
   if (key === "firearms") return { target: "armory", arm: "FA", category: "Firearms", armType: "" };
   if (key === "suppressors" || key === "suppressor") return { target: "armory", arm: "SU", category: "Suppressors", armType: "Suppressor" };
   if (key === "lower receiver") return { target: "armory", arm: "FA", category: "Lower receiver", armType: "Lower receiver" };
@@ -828,6 +834,14 @@ function readFields(row, columns, opts) {
   return { fields, problems };
 }
 
+function localNoteDay(now) {
+  const d = new Date(now || Date.now());
+  if (!isFinite(d.getTime())) return String(now || "").slice(0, 10);
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
 function composeName(fields, index) {
   if (fields.name) return fields.name;
   const parts = [fields.brand, fields.model].map(s => String(s || "").trim()).filter(Boolean);
@@ -852,27 +866,25 @@ function mergeKeepsMarket(current) {
   return true;
 }
 
-const GUN_TYPE_WORDS = new Set();
-const GUN_TYPE_PHRASES = [];
-[...FIREARM_EXACT, ...SUPPRESSOR_TYPES, ...LOWER_TYPES].forEach(phrase => {
-  if (phrase.includes(" ")) GUN_TYPE_PHRASES.push(phrase);
-  else GUN_TYPE_WORDS.add(phrase);
-});
-
-function phraseInType(key, phrase) {
-  return key === phrase || key.startsWith(phrase + " ") || key.endsWith(" " + phrase) || key.includes(" " + phrase + " ");
+function filedAsFirearm(route) {
+  return !!(route && (route.target === "armory" || route.arm === "FA" || route.arm === "SU"));
 }
 
-// The file's type column only. Item names are not read.
+function comboPieces(typeText) {
+  return String(typeText || "")
+    .split(/\s*(?:\bw\/|\/|\+|&|,|;|\bwith\b|\band\b)\s*/i)
+    .map(part => part.trim())
+    .filter(Boolean);
+}
+
+// The file's type column only, using the same whole-type classifier as the import.
+// A gear name that merely contains a gun word is not a gun. Item names are not read.
 export function typeColumnIsGun(typeText) {
   const raw = String(typeText || "").trim();
   if (!raw) return false;
-  const routed = classifyType(raw, null, "generic");
-  if (routed && (routed.target === "armory" || routed.arm === "FA" || routed.arm === "SU")) return true;
-  const key = normType(raw);
-  if (!key) return false;
-  if (GUN_TYPE_PHRASES.some(phrase => phraseInType(key, phrase))) return true;
-  return key.split(" ").some(tok => GUN_TYPE_WORDS.has(tok));
+  if (filedAsFirearm(classifyType(raw, null, "generic"))) return true;
+  if (!comboMarked(raw)) return false;
+  return comboPieces(raw).some(part => filedAsFirearm(classifyType(part, null, "generic")));
 }
 
 export function planImport(tables, opts = {}) {
@@ -1049,7 +1061,7 @@ export function planImport(tables, opts = {}) {
           }
           if (incoming.notes) {
             undo.notes = current.notes || "";
-            const line = `Imported ${now.slice(0, 10)}: ${incoming.notes}`;
+            const line = `Imported ${localNoteDay(now)}: ${incoming.notes}`;
             patch.notes = current.notes ? `${current.notes}\n${line}` : line;
           }
           if (mergeKeepsMarket(current)) {
