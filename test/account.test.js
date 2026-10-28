@@ -5,7 +5,8 @@ import {
   estimateSpendMicro, usageFromResponse, freeSpendBlocked, usageDecision,
   deleteRevenueCatCustomer, accountDeletePlan, accountPlan, USER_COLLECTIONS,
   signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
-  clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, priciestRates, spendRates, applyReserve, applyReconcile,
+  clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, lookupItemHoldMicro, lookupTypicalMicro, operationTypicalMicro, priciestRates, spendRates, applyReserve, applyReconcile, DAILY_SPEND_FULL,
+  poolSpendKey, inflightKey, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, dailySpendKey, USAGE_HOLD_STALE_MS, BUSY_RETRY_MS, busyQueueStep, POOL_SEED_KEY, MODEL_TIMEOUT_MS,
   SEARCH_RESULT_TOKENS, roundFits, roundInputTokens, loanTargetsFromLends, loanRedactTargets, loansToMirror,
   deleteRetryRoute, runDeleteAttempt, SERVER_DELETE_STEPS, LOOKUPS_PAUSED,
   ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
@@ -160,7 +161,17 @@ test("a free spend hold is the worst case from the output cap and the search cou
   assert.equal(usage.web_search_requests, spec.searches * spec.rounds * spec.calls);
   assert.equal(usage.input_tokens, echoed * spec.calls);
   assert.ok(usage.input_tokens > spec.promptTokens * spec.rounds * spec.calls);
-  assert.equal(lookupReserveMicro({}), estimateSpendMicro(usage, priciestRates({})));
+  assert.ok(lookupReserveMicro({}) < 1e6);
+  assert.ok(lookupReserveMicro({}) * 8 < 25e6);
+  assert.equal(Math.floor(25e6 / lookupItemHoldMicro({})), 36);
+  assert.ok(lookupTypicalMicro({}) < 50_000);
+  assert.ok(lookupTypicalMicro({}) * 10 < 750_000);
+  for (const op of ["identify", "battery", "pace", "deal"]) {
+    assert.ok(operationTypicalMicro({}, op) >= 20_000, op);
+    assert.ok(operationTypicalMicro({}, op) < 100_000, op);
+  }
+  assert.ok(lookupReserveMicro({ FALLBACK_MODEL: "" }) < lookupReserveMicro({}));
+  assert.equal(lookupReserveMicro({}), lookupItemHoldMicro({}));
   assert.ok(priciestRates({}).outputPerMillion > spendRates({}).outputPerMillion);
   assert.deepEqual(priciestRates({ FALLBACK_MODEL: "" }), spendRates({ FALLBACK_MODEL: "" }));
   let small = 0;
@@ -404,14 +415,16 @@ test("a failed delete survives reload and the retry does not list shares on the 
   assert.equal(leftover.state.auth, false);
 });
 
-test("old daily and monthly lookup counters are pruned and spend stays", () => {
+test("old daily and monthly lookup counters are pruned and the current pool month stays", () => {
   const now = new Date("2026-10-28T04:00:00Z");
   assert.equal(quotaCounterExpired("q:user:2026-10-20", now), true);
   assert.equal(quotaCounterExpired("t:user:2026-10-20", now), true);
   assert.equal(quotaCounterExpired("ds:user:2026-10-20", now), true);
   assert.equal(quotaCounterExpired("a:user:2026-10-20", now), true);
+  assert.equal(quotaCounterExpired("if:user:2026-10-20", now), true);
   assert.equal(quotaCounterExpired("t:user:2026-10-21", now), false);
   assert.equal(quotaCounterExpired("ds:user:2026-10-21", now), false);
+  assert.equal(quotaCounterExpired("if:user:2026-10-21", now), false);
   assert.equal(quotaCounterExpired("rf:user:2026-08", now), true);
   assert.equal(quotaCounterExpired("rf:user:2026-10", now), false);
   assert.equal(quotaCounterExpired("q:user:2026-10-21", now), false);
@@ -419,9 +432,13 @@ test("old daily and monthly lookup counters are pruned and spend stays", () => {
   assert.equal(quotaCounterExpired("m:user:2026-08", now), true);
   assert.equal(quotaCounterExpired("m:user:2026-09", now), false);
   assert.equal(quotaCounterExpired("m:user:2026-10", now), false);
-  assert.equal(quotaCounterExpired("spend:free", now), false);
+  assert.equal(quotaCounterExpired("spend:free", now), true);
+  assert.equal(quotaCounterExpired("spend:free:2026-08", now), true);
+  assert.equal(quotaCounterExpired("spend:free:2026-09", now), false);
+  assert.equal(quotaCounterExpired("spend:free:2026-10", now), false);
   assert.equal(quotaCounterExpired("seeded:spend", now), false);
   assert.equal(quotaCounterExpired("hold:look-1", now), false);
+  assert.equal(quotaCounterExpired("flight:look-1", now), false);
   const year = new Date("2026-01-03T00:00:00Z");
   assert.equal(quotaCounterExpired("q:user:2025-12-26", year), true);
   assert.equal(quotaCounterExpired("q:user:2025-12-27", year), false);
@@ -431,17 +448,451 @@ test("old daily and monthly lookup counters are pruned and spend stays", () => {
 
   const sql = fakeSql();
   const ledger = ledgerWith(sql);
-  const keep = ["spend:free", "seeded:spend", "hold:look-1", "q:user:2026-10-21", "t:user:2026-10-21", "ds:user:2026-10-21", "a:user:2026-10-21", "m:user:2026-09", "m:user:2026-10", "rf:user:2026-10"];
-  const drop = ["q:user:2026-10-20", "t:user:2026-10-20", "ds:user:2026-10-20", "a:other:2026-10-01", "m:user:2026-08", "rf:user:2026-08", "m:other:2025-12"];
+  const keep = ["spend:free:2026-09", "spend:free:2026-10", "seeded:spend", "hold:look-1", "flight:look-1", "q:user:2026-10-21", "t:user:2026-10-21", "ds:user:2026-10-21", "if:user:2026-10-21", "a:user:2026-10-21", "m:user:2026-09", "m:user:2026-10", "rf:user:2026-10"];
+  const drop = ["spend:free", "spend:free:2026-08", "q:user:2026-10-20", "t:user:2026-10-20", "ds:user:2026-10-20", "if:user:2026-10-20", "a:other:2026-10-01", "m:user:2026-08", "rf:user:2026-08", "m:other:2025-12"];
   for (const key of [...keep, ...drop]) sql.rows.set(key, key.startsWith("spend") ? 25000000 : 3);
   sql.rows.set("seeded:spend", 1);
+  sql.rows.set("seeded:pool", 1);
   const out = ledger.prune({ now: now.toISOString() });
   assert.equal(out.removed, drop.length);
   for (const key of keep) assert.equal(sql.rows.has(key), true, key);
   for (const key of drop) assert.equal(sql.rows.has(key), false, key);
-  assert.equal(sql.rows.get("spend:free"), 25000000);
+  assert.equal(sql.rows.get("spend:free:2026-10"), 25000000);
   assert.equal(sql.rows.get("seeded:spend"), 1);
   assert.equal(sql.rows.get("hold:look-1"), 3);
+});
+
+test("four in-flight lookups fill a free account and the next one waits", async () => {
+  const sql = fakeSql();
+  const ledger = ledgerWith(sql);
+  const day = "2026-10-28";
+  const flight = inflightKey("user1", day + "T12:00:00Z");
+  const spendKey = poolSpendKey(day + "T12:00:00Z");
+  const daily = dailySpendKey("user1", day + "T12:00:00Z");
+  const typical = lookupTypicalMicro({});
+  const hold = lookupItemHoldMicro({});
+  assert.equal(FREE_INFLIGHT_LIMIT, 4);
+  const results = await Promise.all(Array.from({ length: 10 }, (_, i) => Promise.resolve().then(() => ledger.reserve({
+    id: "in" + i,
+    reserve: hold,
+    reserveEach: hold,
+    partial: true,
+    cap: 25e6,
+    spendKey,
+    dailyAdd: 1,
+    dailyLimit: 40,
+    monthAdd: 1,
+    monthLimit: 40,
+    dailyKey: "t:user1:" + day,
+    monthKey: "m:user1:2026-10",
+    dailySpendKey: daily,
+    dailySpendCap: 750000,
+    dailyEach: typical,
+    inflightKey: flight,
+    inflightLimit: FREE_INFLIGHT_LIMIT,
+  }))));
+  const admitted = results.filter(row => row.ok);
+  assert.equal(admitted.length, 4);
+  assert.equal(results.filter(row => !row.ok && row.error === LOOKUP_BUSY).length, 6);
+  assert.equal(sql.rows.get(flight), 4);
+  assert.equal(sql.rows.get(daily), 4 * typical);
+  const first = admitted[0];
+  ledger.reconcile({
+    id: first.id,
+    actual: typical,
+    spendKey,
+    dailySpendKey: daily,
+    dailyHold: first.dailyHeld,
+    inflightKey: flight,
+    monthKey: "m:user1:2026-10",
+  });
+  assert.equal(sql.rows.get(flight), 3);
+  const next = ledger.reserve({
+    id: "in-next",
+    reserve: hold,
+    partial: true,
+    cap: 25e6,
+    spendKey,
+    dailyAdd: 1,
+    dailyLimit: 40,
+    monthAdd: 1,
+    monthLimit: 40,
+    dailyKey: "t:user1:" + day,
+    monthKey: "m:user1:2026-10",
+    dailySpendKey: daily,
+    dailySpendCap: 750000,
+    dailyEach: typical,
+    inflightKey: flight,
+    inflightLimit: FREE_INFLIGHT_LIMIT,
+  });
+  assert.equal(next.ok, true);
+  assert.equal(sql.rows.get(flight), 4);
+  assert.equal(sql.rows.get(spendKey), 4 * hold + typical);
+  ledger.clearUser({ uid: "user1" });
+  assert.equal(sql.rows.has(flight), false);
+  assert.equal(sql.rows.get(spendKey), 4 * hold + typical);
+});
+
+test("the shared free pool starts over on the next UTC month", () => {
+  const sql = fakeSql();
+  const ledger = ledgerWith(sql);
+  const oct = new Date("2026-10-31T23:00:00Z");
+  const nov = new Date("2026-11-01T00:30:00Z");
+  const octKey = poolSpendKey(oct);
+  const novKey = poolSpendKey(nov);
+  assert.equal(octKey, "spend:free:2026-10");
+  assert.equal(novKey, "spend:free:2026-11");
+  sql.rows.set(octKey, 25e6);
+  const blocked = ledger.reserve({
+    id: "oct",
+    reserve: 1000,
+    cap: 25e6,
+    spendKey: octKey,
+    seedSpend: 0,
+    dailyAdd: 1,
+    dailyLimit: 40,
+    monthAdd: 1,
+    monthLimit: 10,
+    dailyKey: "t:u:2026-10-31",
+    monthKey: "m:u:2026-10",
+  });
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.error, /paused/);
+  assert.equal(sql.rows.get(octKey), 25e6);
+  const opened = ledger.reserve({
+    id: "nov",
+    reserve: 1000,
+    cap: 25e6,
+    spendKey: novKey,
+    seedSpend: 25e6,
+    dailyAdd: 1,
+    dailyLimit: 40,
+    monthAdd: 1,
+    monthLimit: 10,
+    dailyKey: "t:u:2026-11-01",
+    monthKey: "m:u:2026-11",
+  });
+  assert.equal(opened.ok, true);
+  assert.equal(sql.rows.get(novKey), 1000);
+  assert.equal(sql.rows.has("spend:free"), false);
+  sql.rows.set("spend:free", 25e6);
+  sql.rows.set("spend:free:2026-08", 25e6);
+  sql.rows.set("spend:free:2026-09", 1);
+  const pruned = ledger.prune({ now: nov.toISOString() });
+  assert.ok(pruned.removed >= 3);
+  assert.equal(sql.rows.has("spend:free"), false);
+  assert.equal(sql.rows.has("spend:free:2026-08"), false);
+  assert.equal(sql.rows.has("spend:free:2026-09"), false);
+  assert.equal(sql.rows.get(octKey), 25e6);
+  assert.equal(sql.rows.get(novKey), 1000);
+});
+
+test("a $20 lifetime pool balance is copied into the current month before the old key can be pruned", () => {
+  const sql = fakeSql();
+  const ledger = ledgerWith(sql);
+  const month = "spend:free:2026-10";
+  const now = "2026-10-28T12:00:00Z";
+  sql.rows.set("spend:free", 20e6);
+  ledger.prune({ now });
+  assert.equal(sql.rows.get("spend:free"), 20e6);
+  assert.equal(sql.rows.has(month), false);
+  const actual = 18000;
+  const held = ledger.reserve({
+    id: "mig",
+    reserve: actual,
+    cap: 25e6,
+    spendKey: month,
+    seedSpend: 20e6,
+    dailyAdd: 1,
+    dailyLimit: 40,
+    monthAdd: 1,
+    monthLimit: 10,
+    dailyKey: "t:u:2026-10-28",
+    monthKey: "m:u:2026-10",
+    now: Date.parse(now),
+  });
+  assert.equal(held.ok, true);
+  assert.equal(held.poolSeeded, true);
+  assert.equal(sql.rows.get("seeded:pool"), 1);
+  assert.equal(sql.rows.get("spend:free"), 20e6);
+  const settled = ledger.reconcile({ id: "mig", actual, spendKey: month, seedSpend: 20e6, now: Date.parse(now) });
+  assert.equal(settled.spend, 20e6 + actual);
+  assert.equal(sql.rows.get(month), 20e6 + actual);
+  const again = ledger.reserve({
+    id: "mig2",
+    reserve: 1000,
+    cap: 25e6,
+    spendKey: month,
+    seedSpend: 20e6,
+    dailyAdd: 1,
+    dailyLimit: 40,
+    monthAdd: 1,
+    monthLimit: 10,
+    dailyKey: "t:u:2026-10-28",
+    monthKey: "m:u:2026-10",
+    now: Date.parse(now),
+  });
+  assert.equal(again.ok, true);
+  assert.equal(again.poolSeeded, false);
+  assert.equal(sql.rows.get(month), 20e6 + actual + 1000);
+  ledger.prune({ now });
+  assert.equal(sql.rows.has("spend:free"), false);
+  assert.equal(sql.rows.get(month), 20e6 + actual + 1000);
+});
+
+test("a lookup that dies releases its pool hold and in-flight slots after two minutes", () => {
+  const day = "2026-10-28";
+  const t0 = Date.parse(day + "T12:00:00Z");
+  const spendKey = "spend:free:2026-10";
+  const flight = inflightKey("user1", t0);
+  const base = {
+    reserve: 2_520_000,
+    partial: true,
+    cap: 25e6,
+    spendKey,
+    seedSpend: 0,
+    dailyAdd: 4,
+    dailyLimit: 40,
+    monthAdd: 4,
+    monthLimit: 40,
+    dailyKey: "t:user1:" + day,
+    monthKey: "m:user1:2026-10",
+    dailySpendKey: "ds:user1:" + day,
+    dailySpendCap: 750000,
+    dailyEach: 1000,
+    inflightKey: flight,
+    inflightLimit: 4,
+  };
+  const sql = fakeSql();
+  const ledger = ledgerWith(sql);
+  const held = ledger.reserve({ ...base, id: "die", now: t0 });
+  assert.equal(held.ok, true);
+  assert.equal(held.charged, 4);
+  assert.equal(sql.rows.get(spendKey), 2_520_000);
+  assert.equal(sql.rows.get(flight), 4);
+  ledger.prune({ now: new Date(t0 + 30 * 1000).toISOString(), spendKey });
+  assert.equal(sql.rows.has("hold:die"), true);
+  assert.equal(sql.rows.get(flight), 4);
+  const later = t0 + USAGE_HOLD_STALE_MS + 1000;
+  const again = ledger.reserve({ ...base, id: "after", reserve: 1000, dailyAdd: 1, monthAdd: 1, now: later });
+  assert.equal(again.ok, true);
+  assert.equal(sql.rows.has("hold:die"), false);
+  assert.equal(sql.rows.get(flight), 1);
+  assert.equal(sql.rows.get(spendKey), 1000);
+  assert.equal(sql.rows.get("ds:user1:" + day), 1000);
+
+  const swept = fakeSql();
+  const sweeper = ledgerWith(swept);
+  sweeper.reserve({ ...base, id: "hourly", now: t0 });
+  sweeper.prune({ now: new Date(later).toISOString(), spendKey });
+  assert.equal(swept.rows.has("hold:hourly"), false);
+  assert.equal(swept.rows.get(flight) || 0, 0);
+  assert.equal(swept.rows.get(spendKey) || 0, 0);
+  assert.equal(swept.rows.get("ds:user1:" + day) || 0, 0);
+});
+
+test("a call that finishes after its hold was released is still billed, and live calls stay within 4", () => {
+  assert.equal(MODEL_TIMEOUT_MS, 90_000);
+  assert.ok(MODEL_TIMEOUT_MS < USAGE_HOLD_STALE_MS);
+  const day = "2026-10-28";
+  const t0 = Date.parse(day + "T12:00:00Z");
+  const spendKey = "spend:free:2026-10";
+  const flight = inflightKey("acctA", t0);
+  const daily = "ds:acctA:" + day;
+  const each = 18_000;
+  const batch = each * 4;
+  const base = {
+    reserve: 2_520_000,
+    reserveEach: 630_000,
+    partial: true,
+    cap: 25e6,
+    spendKey,
+    seedSpend: 0,
+    dailyAdd: 4,
+    dailyLimit: 40,
+    monthAdd: 4,
+    monthLimit: 40,
+    dailyKey: "t:acctA:" + day,
+    monthKey: "m:acctA:2026-10",
+    dailySpendKey: daily,
+    dailySpendCap: 750_000,
+    dailyEach: each,
+    inflightKey: flight,
+    inflightLimit: 4,
+  };
+  const bill = (ledger, id, now) => ledger.reconcile({
+    id,
+    actual: batch,
+    spendKey,
+    dailySpendKey: daily,
+    dailyHold: batch,
+    inflightKey: flight,
+    monthKey: base.monthKey,
+    now,
+  });
+  const sql = fakeSql();
+  const ledger = ledgerWith(sql);
+  const first = ledger.reserve({ ...base, id: "hang", now: t0 });
+  assert.equal(first.ok, true);
+  assert.equal(first.charged, 4);
+  assert.equal(sql.rows.get(flight), 4);
+  const early = ledger.reserve({ ...base, id: "early", now: t0 + 5000 });
+  assert.equal(early.ok, false);
+  assert.equal(early.error, LOOKUP_BUSY);
+  assert.equal(sql.rows.get(flight), 4);
+  const later = t0 + 125_000;
+  const second = ledger.reserve({ ...base, id: "next", now: later });
+  assert.equal(second.ok, true);
+  assert.equal(second.charged, 4);
+  assert.equal(sql.rows.get(flight), 4);
+  const late = bill(ledger, "hang", t0 + 151_000);
+  assert.equal(late.duplicate, false);
+  assert.equal(late.released, true);
+  const done = bill(ledger, "next", t0 + 160_000);
+  assert.equal(done.duplicate, false);
+  assert.equal(sql.rows.get(daily), batch * 2);
+  assert.equal(sql.rows.get(spendKey), batch * 2);
+  const dup = bill(ledger, "hang", t0 + 170_000);
+  assert.equal(dup.duplicate, true);
+  assert.equal(sql.rows.get(daily), batch * 2);
+  assert.equal(sql.rows.get(spendKey), batch * 2);
+
+  const hourlySql = fakeSql();
+  const hourly = ledgerWith(hourlySql);
+  hourly.reserve({ ...base, id: "job", now: t0 });
+  const still = hourly.reserve({ ...base, id: "live", now: t0 + 15_000 });
+  assert.equal(still.ok, false);
+  assert.equal(hourlySql.rows.get(flight), 4);
+  hourly.prune({ now: new Date(t0 + 130_000).toISOString(), spendKey });
+  assert.equal(hourlySql.rows.get(flight) || 0, 0);
+  hourly.reconcile({ id: "job", actual: batch, spendKey, dailySpendKey: daily, dailyHold: batch, inflightKey: flight, now: t0 + 140_000 });
+  const after = hourly.reserve({ ...base, id: "after-job", now: t0 + 141_000 });
+  assert.equal(after.charged, 4);
+  assert.equal(hourlySql.rows.get(flight), 4);
+  hourly.reconcile({ id: "after-job", actual: batch, spendKey, dailySpendKey: daily, dailyHold: batch, inflightKey: flight, now: t0 + 150_000 });
+  assert.equal(hourlySql.rows.get(daily), batch * 2);
+  assert.equal(hourlySql.rows.get(spendKey), batch * 2);
+});
+
+test("the lifetime pool seeds October 2026 and a November lookup starts at zero", () => {
+  const sql = fakeSql();
+  const ledger = ledgerWith(sql);
+  sql.rows.set("spend:free", 20e6);
+  const novKey = "spend:free:2026-11";
+  assert.notEqual(novKey, POOL_SEED_KEY);
+  const opened = ledger.reserve({
+    id: "nov",
+    reserve: 18_000,
+    cap: 25e6,
+    spendKey: novKey,
+    seedSpend: 20e6,
+    dailyAdd: 1,
+    dailyLimit: 40,
+    monthAdd: 1,
+    monthLimit: 10,
+    dailyKey: "t:u:2026-11-02",
+    monthKey: "m:u:2026-11",
+    now: Date.parse("2026-11-02T00:00:00Z"),
+  });
+  assert.equal(opened.ok, true);
+  assert.equal(opened.poolSeeded, false);
+  assert.equal(sql.rows.get(novKey), 18_000);
+  assert.equal(sql.rows.get("spend:free"), 20e6);
+  assert.equal(sql.rows.has("seeded:pool"), false);
+  ledger.prune({ now: "2026-11-02T00:00:00Z" });
+  assert.equal(sql.rows.get("spend:free"), 20e6);
+});
+
+test("stale release lists in-flight keys only", () => {
+  const sql = fakeSql();
+  const queries = [];
+  const orig = sql.exec.bind(sql);
+  sql.exec = (q, ...args) => {
+    if (String(q).startsWith("SELECT k")) queries.push(args[0] == null ? "*" : String(args[0]));
+    return orig(q, ...args);
+  };
+  for (let i = 0; i < 200; i++) sql.rows.set("m:other:" + i, 1);
+  sql.rows.set("spend:free:2026-10", 1);
+  sql.rows.set("q:acct:2026-10-28", 3);
+  const ledger = ledgerWith(sql);
+  const t0 = Date.parse("2026-10-28T12:00:00Z");
+  const flight = inflightKey("acct", t0);
+  ledger.reserve({
+    id: "one",
+    reserve: 1000,
+    cap: 25e6,
+    spendKey: "spend:free:2026-10",
+    seedSpend: 0,
+    dailyAdd: 1,
+    dailyLimit: 40,
+    monthAdd: 1,
+    monthLimit: 10,
+    dailyKey: "t:acct:2026-10-28",
+    monthKey: "m:acct:2026-10",
+    inflightKey: flight,
+    inflightLimit: 4,
+    now: t0,
+  });
+  queries.length = 0;
+  ledger.reserve({
+    id: "two",
+    reserve: 1000,
+    cap: 25e6,
+    spendKey: "spend:free:2026-10",
+    seedSpend: 0,
+    dailyAdd: 1,
+    dailyLimit: 40,
+    monthAdd: 1,
+    monthLimit: 10,
+    dailyKey: "t:acct:2026-10-28",
+    monthKey: "m:acct:2026-10",
+    inflightKey: flight,
+    inflightLimit: 4,
+    now: t0 + 1000,
+  });
+  ledger.reconcile({ id: "two", actual: 10, spendKey: "spend:free:2026-10", inflightKey: flight, now: t0 + 2000 });
+  assert.ok(queries.length > 0);
+  assert.equal(queries.includes("*"), false);
+  assert.ok(queries.every(q => q.startsWith("if:")));
+});
+
+test("a busy lookup queue stops and leaves the rest selectable", () => {
+  assert.deepEqual(BUSY_RETRY_MS, [1000, 2000, 4000, 8000, 8000]);
+  assert.ok(BUSY_RETRY_MS.reduce((sum, n) => sum + n, 0) > 20_000);
+  const waits = [];
+  let tries = 0;
+  for (;;) {
+    const step = busyQueueStep(tries);
+    if (!step.retry) {
+      assert.equal(step.stop, true);
+      break;
+    }
+    waits.push(step.waitMs);
+    tries++;
+  }
+  assert.deepEqual(waits, BUSY_RETRY_MS);
+  const ids = Array.from({ length: 19 }, (_, i) => "item-" + i);
+  const errors = [];
+  const attempted = [];
+  let index = 0;
+  let busyTries = 0;
+  while (index < ids.length) {
+    const chunk = ids.slice(index, index + 4);
+    attempted.push(chunk.slice());
+    const step = busyQueueStep(busyTries);
+    if (step.retry) {
+      busyTries++;
+      continue;
+    }
+    assert.equal(step.stop, true);
+    const pending = ids.slice(index);
+    assert.equal(errors.length, 0);
+    assert.ok(pending.length >= 16);
+    assert.deepEqual(pending, ids);
+    break;
+  }
+  assert.equal(attempted.length, BUSY_RETRY_MS.length + 1);
+  assert.ok(attempted.every(chunk => chunk[0] === "item-0"));
 });
 
 test("a mocked $3.05 lookup records $3.05", () => {
@@ -704,7 +1155,7 @@ test("the first round of every AI op fits its hold, and the input cap applies af
       web_search_requests: spec.searches,
     }, priciestRates({}));
     assert.ok(first <= callHoldMicro({}, op), op);
-    if (spec.searches > 0) {
+    if (op !== "lookup" && spec.searches > 0) {
       const floored = estimateSpendMicro({
         input_tokens: ROUND_INPUT_TOKEN_CAP,
         output_tokens: spec.maxTokens,
@@ -718,7 +1169,38 @@ test("the first round of every AI op fits its hold, and the input cap applies af
     output_tokens: 4000,
     web_search_requests: 3,
   }, priciestRates({}));
-  assert.ok(oneRound < lookupReserveMicro({}));
+  assert.ok(oneRound > lookupReserveMicro({}));
+  const searchRound = estimateSpendMicro({
+    input_tokens: MODEL_CALLS.lookup.promptTokens + MODEL_CALLS.lookup.searches * SEARCH_RESULT_TOKENS,
+    output_tokens: MODEL_CALLS.lookup.maxTokens,
+    web_search_requests: MODEL_CALLS.lookup.searches,
+  }, spendRates({}));
+  assert.ok(searchRound <= lookupReserveMicro({}));
+  const trimmed = applyReserve({ spend: 0, daily: 0, month: 0, alert: 0, dailySpend: 0 }, {
+    partial: true, reserve: 4000, reserveEach: 1000, dailyEach: 100, cap: 1e12, dailyAdd: 4, dailyLimit: 40, monthAdd: 4, monthLimit: 100, dailySpendCap: 250,
+  });
+  assert.equal(trimmed.ok, true);
+  assert.equal(trimmed.charged, 2);
+  assert.equal(trimmed.reserved, 2000);
+  assert.equal(trimmed.dailyHeld, 200);
+  assert.equal(trimmed.state.dailySpend, 200);
+  assert.match(trimmed.refusedError, /Today's lookup spending limit is reached/);
+  const openBatch = applyReserve({ spend: 0, daily: 0, month: 0, alert: 0, dailySpend: 0 }, {
+    partial: true, reserve: lookupItemHoldMicro({}) * 4, reserveEach: lookupItemHoldMicro({}), dailyEach: lookupTypicalMicro({}), cap: 25e6,
+    dailyAdd: 4, dailyLimit: 40, monthAdd: 4, monthLimit: 10, dailySpendCap: 750000,
+  });
+  assert.equal(openBatch.charged, 4);
+  assert.equal(openBatch.refusedError, "");
+  const already = applyReserve({ spend: 0, daily: 0, month: 0, alert: 0, dailySpend: 750000 }, {
+    reserve: 100, cap: 25e6, dailyAdd: 1, dailyLimit: 40, monthAdd: 1, monthLimit: 10, dailySpendCap: 750000, dailyEach: 0,
+  });
+  assert.equal(already.ok, false);
+  assert.equal(already.error, DAILY_SPEND_FULL);
+  assert.equal(already.charged, 0);
+  const settled = applyReconcile({ spend: 2000, dailySpend: 200, month: 2, refunds: 0 }, { reserved: 2000, actual: 50, dailyHold: 200 });
+  assert.equal(settled.state.spend, 50);
+  assert.equal(settled.state.dailySpend, 50);
+  assert.equal(DAILY_SPEND_FULL.length > 0, true);
   const loose = estimateSpendMicro({ input_tokens: 48_000, output_tokens: 4000, web_search_requests: 3 }, spendRates({}));
   const tight = estimateSpendMicro({ input_tokens: 1_200_000, output_tokens: 4000, web_search_requests: 3 }, spendRates({}));
   assert.ok(tight - loose >= 860_000);

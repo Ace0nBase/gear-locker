@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import worker, { UsageLedger } from "../api/worker.js";
-import { attemptQuotaKey, dailySpendKey, estimateSpendMicro, monthQuotaKey, monthRefundKey, ratesForModel } from "../js/logic.js";
+import { attemptQuotaKey, dailySpendKey, estimateSpendMicro, inflightKey, lookupItemHoldMicro, lookupTypicalMicro, monthQuotaKey, monthRefundKey, poolSpendKey, ratesForModel } from "../js/logic.js";
 
 const src = fs.readFileSync(new URL("../api/worker.js", import.meta.url), "utf8");
 
@@ -90,6 +90,8 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.ok(sessionAt > 0 && sessionAt < apiKeyAt);
   assert.ok(src.indexOf("releaseEmailHold(env, sessionUser)") > sessionAt);
   const scheduled = src.slice(src.indexOf("async scheduled"));
+  assert.match(scheduled, /sweepTombstones/);
+  assert.ok(scheduled.indexOf("sweepTombstones") < scheduled.indexOf("pruneUsageCounters"));
   assert.match(scheduled, /pruneUsageCounters/);
   assert.ok(scheduled.indexOf("pruneUsageCounters") < scheduled.indexOf("retryQueuedCleanups"));
   assert.ok(scheduled.indexOf("retryQueuedCleanups") < scheduled.indexOf("runQueuedRedactions"));
@@ -123,6 +125,10 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.match(src, /countRefund/);
   assert.match(src, /lookupPriced/);
   assert.match(src, /partial: true/);
+  assert.match(src, /modelFetch/);
+  assert.match(src, /90_000/);
+  assert.match(src, /signal: modelSignal/);
+  assert.ok(src.indexOf("function modelFetch") < src.indexOf("async function callClaude"));
 });
 
 function fakeSql() {
@@ -169,13 +175,42 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
   const token = data + "." + b64url(sig);
   const orig = globalThis.fetch;
   let anthropic = 0;
+  let releaseRaceBatch = () => {};
+  let markRaceBatchStarted = () => {};
+  const raceBatchStarted = new Promise(resolve => { markRaceBatchStarted = resolve; });
+  let raceGate = null;
+  let hangAnthropic = false;
   globalThis.fetch = async (url, opts) => {
     const u = String(url);
     if (u.includes("googleapis.com")) return new Response(JSON.stringify(jwks), { status: 200, headers: { "content-type": "application/json" } });
     if (u.includes("api.anthropic.com")) {
+      if (hangAnthropic) {
+        anthropic += 1;
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("model call was not aborted")), 5000);
+          const fail = () => { clearTimeout(timer); reject(new DOMException("The operation was aborted", "AbortError")); };
+          const signal = opts && opts.signal;
+          if (signal) {
+            if (signal.aborted) fail();
+            else signal.addEventListener("abort", fail, { once: true });
+          }
+        });
+      }
       anthropic += 1;
       const body = JSON.parse(opts.body);
+      const early = JSON.stringify(body.messages || []);
+      if (early.includes("Race ")) {
+        if (!raceGate) {
+          raceGate = new Promise(resolve => { releaseRaceBatch = resolve; });
+          markRaceBatchStarted();
+        }
+        await raceGate;
+      }
       const blob = JSON.stringify(body.messages || []);
+      if (blob.includes("Heavy")) {
+        const answer = JSON.stringify({ retailNew: 20, usedLow: 10, usedHigh: 15, value: 12, weightOz: 8, priceNote: "Amazon $20", weightNote: "maker spec", sources: [] });
+        return new Response(JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: answer }], usage: { input_tokens: 2000, output_tokens: 80000 } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       if (blob.includes("Junk")) return new Response(JSON.stringify({ error: { message: "model blew up" }, usage: { input_tokens: 1000, output_tokens: 1000 } }), { status: 500, headers: { "content-type": "application/json" } });
       if (blob.includes("Fallback Item")) {
         const usage = String(body.model).includes("sonnet") ? { input_tokens: 2000, output_tokens: 2000 } : { input_tokens: 1000, output_tokens: 1000 };
@@ -192,6 +227,7 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
   const envFor = ledger => ({
     ANTHROPIC_API_KEY: "test-key",
     FREE_SPEND_CAP_USD: "100000",
+    FREE_DAILY_SPEND_CAP_USD: "100",
     PLAN_LIMIT_FREE: "10",
     DAILY_AI_LIMIT: "40",
     USAGE: { getByName: () => ledger },
@@ -205,6 +241,7 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     const now = new Date();
     const dayKey = attemptQuotaKey(sub, now);
     const monthKey = monthQuotaKey(sub, now);
+    const poolKey = poolSpendKey(now);
     const sql = fakeSql();
     const ledger = new UsageLedger({ storage: { sql } }, {});
     sql.rows.set(monthKey, 7);
@@ -234,19 +271,39 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     raceSql.rows.set("seeded:spend", 1);
     raceSql.rows.set("spend:free", 0);
     const item = n => ({ id: "r" + n, name: "Race " + n, category: "Pouches" });
-    const pair = await Promise.all([
+    const pairPromise = Promise.all([
       post(race, [1, 2, 3, 4].map(item)),
       post(race, [5, 6, 7, 8].map(item)),
     ]);
-    const parsed = [];
+    await raceBatchStarted;
+    await new Promise(r => setTimeout(r, 100));
+    assert.equal(raceSql.rows.get(monthKey), 9);
+    assert.equal(raceSql.rows.get(inflightKey(sub, now)), 4);
+    releaseRaceBatch();
+    const pair = await pairPromise;
+    let busy = 0;
+    let pricedRace = 0;
     for (const one of pair) {
       const out = await one.json();
-      assert.equal(one.status, 200, JSON.stringify(out));
-      parsed.push(out.results.filter(r => r.ok).length);
+      if (one.status === 429) {
+        busy++;
+        assert.match(out.error, /Try again in a moment/);
+      } else {
+        assert.equal(one.status, 200, JSON.stringify(out));
+        pricedRace += out.results.filter(r => r.ok).length;
+      }
     }
-    assert.deepEqual(parsed.sort(), [1, 4]);
+    assert.equal(busy, 1);
+    assert.equal(pricedRace, 4);
+    assert.equal(raceSql.rows.get(monthKey), 9);
+    assert.equal(raceSql.rows.get(dayKey), 4);
+    assert.equal(raceSql.rows.get(inflightKey(sub, now)) || 0, 0);
+    const follow = await post(race, [9, 10, 11, 12].map(item));
+    const followBody = await follow.json();
+    assert.equal(follow.status, 200, JSON.stringify(followBody));
+    assert.equal(followBody.results.filter(r => r.ok).length, 1);
+    assert.match(followBody.results.find(r => !r.ok).error, /this month's lookups/);
     assert.equal(raceSql.rows.get(monthKey), 10);
-    assert.equal(raceSql.rows.get(dayKey), 5);
 
     const junkSql = fakeSql();
     const junk = new UsageLedger({ storage: { sql: junkSql } }, {});
@@ -279,8 +336,8 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     assert.equal(junkSql.rows.get(dayKey), 40);
     assert.equal(junkSql.rows.get(monthKey), 35);
     assert.equal(junkSql.rows.get(monthRefundKey(sub, now)), 5);
-    assert.equal(junkSql.rows.get("spend:free"), 40 * unit);
-    assert.ok(junkSql.rows.get("spend:free") < 25e6);
+    assert.equal(junkSql.rows.get(poolKey), 40 * unit);
+    assert.ok(junkSql.rows.get(poolKey) < 25e6);
     assert.equal(junkSql.rows.get(dailySpendKey(sub, now)), 40 * unit);
 
     const fbSql = fakeSql();
@@ -296,21 +353,155 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     const rateEnv = { FALLBACK_MODEL: "claude-sonnet-5-5", FALLBACK_INPUT_PER_MILLION: "3", FALLBACK_OUTPUT_PER_MILLION: "15", FALLBACK_SEARCH_EACH: "0.01" };
     const both = estimateSpendMicro({ input_tokens: 1000, output_tokens: 1000 }) + estimateSpendMicro({ input_tokens: 2000, output_tokens: 2000 }, ratesForModel(rateEnv, "claude-sonnet-5-5"));
     assert.equal(fbSql.rows.get(dailySpendKey(sub, now)), both);
-    assert.equal(fbSql.rows.get("spend:free"), both);
+    assert.equal(fbSql.rows.get(poolKey), both);
     assert.equal(fbSql.rows.get(dayKey), 1);
 
     const cappedSql = fakeSql();
     const capped = new UsageLedger({ storage: { sql: cappedSql } }, {});
     cappedSql.rows.set("seeded:spend", 1);
     cappedSql.rows.set("spend:free", 0);
-    cappedSql.rows.set(dailySpendKey(sub, now), 500000);
+    cappedSql.rows.set(dailySpendKey(sub, now), 750000);
     const capBefore = anthropic;
-    const capRes = await post(capped, [{ id: "cap", name: "Pouch Cap", category: "Pouches" }]);
+    const capRes = await worker.fetch(new Request("https://gear-locker-api.example/lookup", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ items: [{ id: "cap", name: "Pouch Cap", category: "Pouches" }] }),
+    }), { ...envFor(capped), FREE_DAILY_SPEND_CAP_USD: "0.75" });
     const capBody = await capRes.json();
     assert.equal(capRes.status, 429, JSON.stringify(capBody));
     assert.match(capBody.error, /spending limit/);
     assert.equal(anthropic, capBefore);
-    assert.equal(cappedSql.rows.get("spend:free"), 0);
+    assert.equal(cappedSql.rows.get(poolKey) || 0, 0);
+
+    const freshSql = fakeSql();
+    const fresh = new UsageLedger({ storage: { sql: freshSql } }, {});
+    freshSql.rows.set("seeded:spend", 1);
+    freshSql.rows.set("spend:free", 0);
+    const freshEnv = { ...envFor(fresh), PLAN_LIMIT_FREE: "10", FREE_DAILY_SPEND_CAP_USD: "0.75", FREE_SPEND_CAP_USD: "25" };
+    const postFresh = items => worker.fetch(new Request("https://gear-locker-api.example/lookup", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ items }),
+    }), freshEnv);
+    const first = await postFresh([1, 2, 3, 4].map(n => ({ id: "t" + n, name: "Typical " + n, category: "Pouches" })));
+    const firstBody = await first.json();
+    assert.equal(first.status, 200, JSON.stringify(firstBody));
+    assert.equal(firstBody.results.filter(r => r.ok).length, 4);
+    assert.equal(firstBody.results.some(r => /spending limit/i.test(r.error || "")), false);
+    let priced = 4;
+    for (let n = 5; priced < 10; n++) {
+      const one = await postFresh([{ id: "t" + n, name: "Typical " + n, category: "Pouches" }]);
+      const body = await one.json();
+      assert.equal(one.status, 200, JSON.stringify(body));
+      assert.equal(body.results.filter(r => r.ok).length, 1);
+      assert.equal(/spending limit/i.test(body.error || ""), false);
+      priced++;
+    }
+    assert.equal(priced, 10);
+    assert.ok(freshSql.rows.get(dailySpendKey(sub, now)) < 750000);
+    const monthFull = await postFresh([{ id: "t11", name: "Typical 11", category: "Pouches" }]);
+    const monthBody = await monthFull.json();
+    assert.equal(monthFull.status, 429);
+    assert.match(monthBody.error, /this month's lookups/);
+    assert.doesNotMatch(monthBody.error, /spending limit/);
+
+    const heavySql = fakeSql();
+    const heavy = new UsageLedger({ storage: { sql: heavySql } }, {});
+    heavySql.rows.set("seeded:spend", 1);
+    heavySql.rows.set("spend:free", 0);
+    const heavyEnv = { ...envFor(heavy), PLAN_LIMIT_FREE: "10", FREE_DAILY_SPEND_CAP_USD: "0.75", FREE_SPEND_CAP_USD: "25" };
+    const heavyBefore = anthropic;
+    const heavyRes = await worker.fetch(new Request("https://gear-locker-api.example/lookup", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ items: [1, 2, 3, 4].map(n => ({ id: "h" + n, name: "Heavy " + n, category: "Pouches" })) }),
+    }), heavyEnv);
+    const heavyBody = await heavyRes.json();
+    assert.equal(heavyRes.status, 200, JSON.stringify(heavyBody));
+    assert.equal(heavyBody.results.filter(r => r.ok).length, 4);
+    assert.equal(anthropic - heavyBefore, 4);
+    const heavyUnit = estimateSpendMicro({ input_tokens: 2000, output_tokens: 80000 });
+    assert.equal(heavySql.rows.get(dailySpendKey(sub, now)), 4 * heavyUnit);
+    assert.ok(4 * heavyUnit > 750000);
+    assert.ok(4 * lookupTypicalMicro(heavyEnv) < 750000);
+    const again = await worker.fetch(new Request("https://gear-locker-api.example/lookup", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ items: [{ id: "h5", name: "Heavy 5", category: "Pouches" }] }),
+    }), heavyEnv);
+    const againBody = await again.json();
+    assert.equal(again.status, 429, JSON.stringify(againBody));
+    assert.match(againBody.error, /Today's lookup spending limit is reached/);
+    assert.equal(heavySql.rows.get(dailySpendKey(sub, now)), 4 * heavyUnit);
+    assert.equal(anthropic - heavyBefore, 4);
+    assert.equal(Math.floor(25e6 / lookupItemHoldMicro({})), 36);
+
+    const cappedDay = dailySpendKey(sub, now);
+    const routes = [
+      ["/identify", { image: "aaaa", category: "Pouches" }, {}],
+      ["/battery", { name: "Light", category: "Pouches" }, {}],
+      ["/pace", { location: "Camp" }, {}],
+      ["/watch/check", { id: "w1" }, {
+        WATCH: {
+          get: async (key, type) => {
+            if (key !== "w:" + sub) return null;
+            const rec = { list: [{ id: "w1", name: "Pouch", category: "Pouches", target: 20 }] };
+            return type === "json" ? rec : JSON.stringify(rec);
+          },
+          put: async () => {},
+          delete: async () => {},
+        },
+      }],
+    ];
+    for (const [path, body, extraEnv] of routes) {
+      const routeSql = fakeSql();
+      const routeLedger = new UsageLedger({ storage: { sql: routeSql } }, {});
+      routeSql.rows.set("seeded:spend", 1);
+      routeSql.rows.set(cappedDay, 2000000);
+      const before = anthropic;
+      const res = await worker.fetch(new Request("https://gear-locker-api.example" + path, {
+        method: "POST",
+        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }), { ...envFor(routeLedger), FREE_DAILY_SPEND_CAP_USD: "0.75", ...extraEnv });
+      const out = await res.json();
+      assert.equal(res.status, 429, path + " " + JSON.stringify(out));
+      assert.match(out.error, /Today's lookup spending limit is reached/);
+      assert.equal(anthropic, before, path);
+      assert.equal(routeSql.rows.get(cappedDay), 2000000, path);
+    }
+
+    const hangSql = fakeSql();
+    const hangLedger = new UsageLedger({ storage: { sql: hangSql } }, {});
+    hangSql.rows.set("seeded:spend", 1);
+    hangSql.rows.set("seeded:pool", 1);
+    const hangEnv = { ...envFor(hangLedger), MODEL_TIMEOUT_MS: "1500", PLAN_LIMIT_FREE: "20", FREE_DAILY_SPEND_CAP_USD: "10", FREE_SPEND_CAP_USD: "25" };
+    hangAnthropic = true;
+    const hangStarted = Date.now();
+    const firstHang = worker.fetch(new Request("https://gear-locker-api.example/lookup", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ items: [1, 2, 3, 4].map(n => ({ id: "hang" + n, name: "Hang " + n, category: "Pouches" })) }),
+    }), hangEnv);
+    const flightNow = inflightKey(sub, new Date());
+    const waitLive = Date.now() + 1000;
+    while ((hangSql.rows.get(flightNow) || 0) < 4 && Date.now() < waitLive) await new Promise(r => setTimeout(r, 10));
+    assert.equal(hangSql.rows.get(flightNow) || 0, 4);
+    const busyHang = await worker.fetch(new Request("https://gear-locker-api.example/lookup", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ items: [5, 6, 7, 8].map(n => ({ id: "hang" + n, name: "Hang " + n, category: "Pouches" })) }),
+    }), hangEnv);
+    const busyBody = await busyHang.json();
+    assert.equal(busyHang.status, 429, JSON.stringify(busyBody));
+    assert.match(busyBody.error, /Try again in a moment/);
+    assert.equal(hangSql.rows.get(flightNow) || 0, 4);
+    const hung = await firstHang;
+    const hungBody = await hung.json();
+    assert.equal(hung.status, 502, JSON.stringify(hungBody));
+    assert.ok(Date.now() - hangStarted < 4000);
+    assert.equal(hangSql.rows.get(flightNow) || 0, 0);
+    hangAnthropic = false;
   } finally {
     globalThis.fetch = orig;
   }

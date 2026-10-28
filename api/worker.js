@@ -12,14 +12,14 @@
 // DAILY_AI_LIMIT, ALERT_DAILY_CAP, WATCH_BATCH, MIN_ALERT_GAP_HOURS, FREE_SPEND_CAP_USD, FREE_DAILY_SPEND_CAP_USD,
 // PLAN_LIMIT_FREE, PLAN_LIMIT_PRO, PLAN_LIMIT_ARMORY, SPEND_INPUT_PER_MILLION, SPEND_OUTPUT_PER_MILLION, SPEND_SEARCH_EACH,
 // SPEND_RESERVE_USD (optional floor under the worst-case lookup hold; it cannot lower that hold),
-// FALLBACK_INPUT_PER_MILLION, FALLBACK_OUTPUT_PER_MILLION, FALLBACK_SEARCH_EACH (fallback model rates; the hold uses the higher of these and the primary rates)
+// FALLBACK_INPUT_PER_MILLION, FALLBACK_OUTPUT_PER_MILLION, FALLBACK_SEARCH_EACH (fallback model rates; a lookup hold adds one search round and one answer round at these rates)
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced, MONTHLY_REFUND_CAP } from "../js/logic.js";
+import { decideAccess, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced, lookupTypicalMicro, operationTypicalMicro, poolSpendKey, inflightKey, FREE_INFLIGHT_LIMIT, MONTHLY_REFUND_CAP } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
-import { serviceAccountLogLine } from "./firestore-admin.js";
+import { serviceAccountLogLine, sweepTombstones } from "./firestore-admin.js";
 import { enqueueRedaction, releaseEmailHold, runQueuedRedactions } from "./redact.js";
 
 export { UsageLedger } from "./usage-ledger.js";
@@ -157,12 +157,23 @@ function loopCeiling(env, model, messages, maxTokens, searches, searchedAlready)
     web_search_requests: n,
   }, ratesForModel(env, model));
 }
+const MODEL_TIMEOUT_MS = 90_000;
+function modelSignal(env) {
+  const ms = Math.max(1, Math.round(+(env && env.MODEL_TIMEOUT_MS) || MODEL_TIMEOUT_MS));
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") return AbortSignal.timeout(ms);
+  const ctrl = new AbortController();
+  setTimeout(() => ctrl.abort(), ms);
+  return ctrl.signal;
+}
+function modelFetch(env, url, opts) {
+  return fetch(url, { ...(opts || {}), signal: modelSignal(env) });
+}
 async function callClaude(env, model, it, budget) {
   const spec = MODEL_CALLS.lookup;
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: spec.searches }];
   const messages = [{ role: "user", content: prompt(it) }];
   const send = async (maxTokens, withTools) => {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
+    const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: claudeBody(model, { max_tokens: maxTokens, ...(withTools ? { tools } : {}), messages }),
@@ -181,7 +192,11 @@ async function callClaude(env, model, it, budget) {
   for (let i = 0; i < spec.rounds; i++) {
     const searching = !askedJson && (i === 0 || (data && data.stop_reason === "pause_turn"));
     const searches = searching ? spec.searches : 0;
-    if (limit != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, searches, searched), limit)) break;
+    if (limit != null && !roundFits(spent, estimateSpendMicro({
+      input_tokens: estimateInputTokens(JSON.stringify(messages)) + searches * SEARCH_RESULT_TOKENS,
+      output_tokens: clampMaxTokens(spec.maxTokens),
+      web_search_requests: searches,
+    }, ratesForModel(env, model)), limit)) break;
     try { data = await send(spec.maxTokens, searching); }
     catch (e) {
       const roundUsage = e.usage;
@@ -233,7 +248,7 @@ Identify it. Look for logos, labels, tags, stitching patterns and distinctive de
 If the photo is a firearm, suppressor, lower receiver, magazine, ammunition belt, trigger part, or auto-fire device, set category to "". A plate carrier or chest rig uses Armor & Carriers. A battle belt, duty belt, or rigger's belt uses Belts. Do not mention a price or a place to buy it.
 Reply with ONLY this JSON object:
 {"name": "short item name, e.g. 'Double M4 mag pouch' or 'IFAK pouch'", "brand": "maker and model if identifiable with reasonable confidence, else empty string", "category": one of ${JSON.stringify(priced)} or "", "color": "color or camo pattern", "confidence": "high|medium|low", "summary": "one short sentence on what it looks like and what gave it away"}`;
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
+  const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: claudeBody(env.MODEL || "claude-haiku-5-5", { max_tokens: MODEL_CALLS.identify.maxTokens, messages: [{ role: "user", content: [
@@ -281,7 +296,7 @@ async function dealCheck(env, w, budget) {
   let data, all = [], usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
     if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, spec.searches, searched), budget)) break;
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
+    const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST",
       headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) });
     data = await r.json().catch(() => ({}));
@@ -299,7 +314,6 @@ async function dealCheck(env, w, budget) {
   return { ...settled, date: localDay(new Date()), hit: settled.price != null && settled.price <= +w.target, usage };
 }
 const WKEY = uid => "w:" + uid;
-const SPEND_KEY = "spend:free";
 function usageStub(env) {
   const ns = env && env.USAGE;
   if (!ns) return null;
@@ -310,12 +324,19 @@ function usageStub(env) {
 async function pruneUsageCounters(env) {
   const stub = usageStub(env);
   if (!stub || typeof stub.prune !== "function") return;
-  try { await stub.prune({ now: new Date().toISOString() }); } catch {}
+  const now = new Date();
+  try { await stub.prune({ now: now.toISOString(), spendKey: poolSpendKey(now) }); } catch {}
 }
-async function spendSeed(env) {
-  if (!env.WATCH) return 0;
-  try { return +(await env.WATCH.get(SPEND_KEY)) || 0; }
+async function legacyPoolSpend(env) {
+  if (!env || !env.WATCH || typeof env.WATCH.get !== "function") return 0;
+  try { return Math.max(0, Math.round(+(await env.WATCH.get("spend:free")) || 0)); }
   catch { return null; }
+}
+function settleCall(ctx, promise) {
+  if (ctx && typeof ctx.waitUntil === "function") {
+    try { ctx.waitUntil(promise); } catch { /* the caller still awaits the same promise */ }
+  }
+  return promise;
 }
 async function reserveCall(env, user, op, count, extra) {
   extra = extra || {};
@@ -332,6 +353,11 @@ async function reserveCall(env, user, op, count, extra) {
   const monthKey = monthQuotaKey(uid, day);
   const refundKey = monthRefundKey(uid, day);
   const spendDayKey = dailySpendKey(uid, day);
+  const spendKey = poolSpendKey(day);
+  const flightKey = skipSpend ? "" : inflightKey(uid, day);
+  const namedDaily = extra.dailyEach != null && extra.dailyEach !== "";
+  const dailyEach = skipSpend ? 0 : (namedDaily ? Math.max(0, Math.round(+extra.dailyEach)) : operationTypicalMicro(env, op));
+  const legacySpend = await legacyPoolSpend(env);
   try {
     const reserved = await stub.reserve({
       id: crypto.randomUUID(),
@@ -351,10 +377,18 @@ async function reserveCall(env, user, op, count, extra) {
       monthKey,
       dailySpendKey: spendDayKey,
       dailySpendCap: skipSpend ? null : freeDailySpendCapMicro(env),
+      dailyEach,
       alertKey: alertQuotaKey(uid, day),
-      seedSpend: await spendSeed(env),
+      spendKey,
+      inflightKey: flightKey,
+      inflightLimit: flightKey ? FREE_INFLIGHT_LIMIT : 0,
+      seedSpend: legacySpend,
+      now: day.getTime(),
     });
-    return { ...reserved, dailyKey, monthKey, refundKey, dailySpendKey: spendDayKey, skipSpend, skipMonth: review };
+    if (reserved.poolSeeded && env.WATCH && typeof env.WATCH.delete === "function") {
+      try { await env.WATCH.delete("spend:free"); } catch { /* the ledger already kept the balance */ }
+    }
+    return { ...reserved, dailyKey, monthKey, refundKey, dailySpendKey: spendDayKey, spendKey, inflightKey: flightKey, seedSpend: legacySpend, skipSpend, skipMonth: review, dailyHeld: reserved.dailyHeld || 0 };
   } catch {
     return { ok: false, status: 503, error: LOOKUPS_PAUSED, reserved: 0, charged: 0 };
   }
@@ -377,6 +411,11 @@ async function finishCall(env, id, reserved, usage, extra) {
       monthKey: extra.monthKey || "",
       refundKey: extra.refundKey || "",
       dailySpendKey: extra.skipSpend ? "" : (extra.dailySpendKey || ""),
+      dailyHold: extra.skipSpend ? 0 : Math.max(0, Math.round(+extra.dailyHold || 0)),
+      spendKey: extra.spendKey || "",
+      inflightKey: extra.inflightKey || "",
+      seedSpend: extra.seedSpend,
+      now: Date.now(),
       skipMonth: !!extra.skipMonth,
     });
   } catch { /* the answer is already in hand */ }
@@ -392,6 +431,10 @@ function spendExtra(hold, extra) {
     skipMonth: hold.skipMonth,
     countRefund: extra.countRefund || 0,
     refundCap: extra.refundCap,
+    dailyHold: extra.dailyHold != null ? extra.dailyHold : (hold.dailyHeld || 0),
+    spendKey: hold.spendKey || "",
+    inflightKey: hold.inflightKey || "",
+    seedSpend: hold.seedSpend,
   };
 }
 async function clearUsageForUser(env, uid) {
@@ -404,7 +447,7 @@ async function usageSnapshot(env, uid, now) {
   const stub = usageStub(env);
   if (!stub) return null;
   try {
-    const read = await stub.read({ keys: [attemptQuotaKey(uid, now), monthQuotaKey(uid, now), alertQuotaKey(uid, now), dailySpendKey(uid, now), SPEND_KEY] });
+    const read = await stub.read({ keys: [attemptQuotaKey(uid, now), monthQuotaKey(uid, now), alertQuotaKey(uid, now), dailySpendKey(uid, now), poolSpendKey(now)] });
     return (read && read.values) || {};
   } catch { return null; }
 }
@@ -536,7 +579,7 @@ async function runDueWatches(env, budget) {
     const dailyLimit = review ? reviewDailyLimit(env) : +(env.DAILY_AI_LIMIT || 40);
     if ((counts[attemptQuotaKey(u.uid, now)] || 0) >= dailyLimit) continue;
     if (!review && (counts[monthQuotaKey(u.uid, now)] || 0) >= planMonthlyLimit(plan, env)) continue;
-    if (!review && plan === "free" && (counts[SPEND_KEY] || 0) >= spendCapMicro(env)) continue;
+    if (!review && plan === "free" && (counts[poolSpendKey(now)] || 0) >= spendCapMicro(env)) continue;
     if (!review && plan === "free" && (counts[dailySpendKey(u.uid, now)] || 0) >= freeDailySpendCapMicro(env)) continue;
     if ((counts[alertQuotaKey(u.uid, now)] || 0) >= alertLimit) continue;
     eligible.push(u);
@@ -587,7 +630,7 @@ Reply with ONLY this JSON:
   let data, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
     if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, spec.searches, searched), budget)) break;
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) });
+    const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, tools, messages }) });
     data = await r.json().catch(() => ({}));
     const roundUsage = usageFromResponse(data);
     usage = addUsage(usage, roundUsage);
@@ -645,7 +688,7 @@ Reply with ONLY this JSON:
   let data = null, usage = { input_tokens: 0, output_tokens: 0, web_search_requests: 0 }, spent = 0, searched = false;
   for (let i = 0; i < spec.rounds; i++) {
     if (budget != null && !roundFits(spent, loopCeiling(env, model, messages, spec.maxTokens, searches, searched), budget)) break;
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, ...(searches ? { tools } : {}), messages }) });
+    const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: spec.maxTokens, ...(searches ? { tools } : {}), messages }) });
     data = await r.json().catch(() => ({}));
     const roundUsage = usageFromResponse(data);
     usage = addUsage(usage, roundUsage);
@@ -660,7 +703,7 @@ Reply with ONLY this JSON:
     messages.push({ role: "assistant", content: (data.content || []).filter(x => x.type !== "text" || (x.text || "").trim()) });
     messages.push({ role: "user", content: "Now reply with ONLY the JSON object described above. No other text." });
     if (budget == null || roundFits(spent, loopCeiling(env, model, messages, MODEL_CALLS.paceFollow.maxTokens, 0), budget)) {
-      const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: MODEL_CALLS.paceFollow.maxTokens, messages }) });
+      const r = await modelFetch(env, "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: claudeBody(model, { max_tokens: MODEL_CALLS.paceFollow.maxTokens, messages }) });
       data = await r.json().catch(() => ({}));
       const roundUsage = usageFromResponse(data);
       usage = addUsage(usage, roundUsage);
@@ -724,11 +767,11 @@ async function lookupOne(env, it, budget) {
   return { id: clean.id, ok: true, ...fields, usage, spendMicro };
 }
 
-const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", BETA_ONLY: "", REVIEW_EMAILS: "", REVIEW_DAILY_LIMIT: "8", FREE_SPEND_CAP_USD: "25", FREE_DAILY_SPEND_CAP_USD: "0.50", PLAN_LIMIT_FREE: "10", PLAN_LIMIT_PRO: "100", PLAN_LIMIT_ARMORY: "500", SPEND_INPUT_PER_MILLION: "1", SPEND_OUTPUT_PER_MILLION: "5", SPEND_SEARCH_EACH: "0.01", FALLBACK_INPUT_PER_MILLION: "3", FALLBACK_OUTPUT_PER_MILLION: "15", FALLBACK_SEARCH_EACH: "0.01", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
+const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", BETA_ONLY: "", REVIEW_EMAILS: "", REVIEW_DAILY_LIMIT: "8", FREE_SPEND_CAP_USD: "25", FREE_DAILY_SPEND_CAP_USD: "0.75", PLAN_LIMIT_FREE: "10", PLAN_LIMIT_PRO: "100", PLAN_LIMIT_ARMORY: "500", SPEND_INPUT_PER_MILLION: "1", SPEND_OUTPUT_PER_MILLION: "5", SPEND_SEARCH_EACH: "0.01", FALLBACK_INPUT_PER_MILLION: "3", FALLBACK_OUTPUT_PER_MILLION: "15", FALLBACK_SEARCH_EACH: "0.01", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
 const ROUTES = ["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/watch/push", "/battery", "/ammo", "/pace"];
 
 export default {
-  async fetch(req, rawEnv) {
+  async fetch(req, rawEnv, ctx) {
     const env = { ...DEFAULTS };
     for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
     const h = cors(env, req);
@@ -829,10 +872,10 @@ export default {
         if (!watchHold.ok) return json({ error: watchHold.error || "Try again tomorrow." }, watchHold.status || 429, h);
         try {
           const b = await dealCheck(env, w, watchHold.reserved || null);
-          await finishCall(env, watchHold.id, watchHold.reserved, b.usage, spendExtra(watchHold));
+          await settleCall(ctx, finishCall(env, watchHold.id, watchHold.reserved, b.usage, spendExtra(watchHold)));
           delete b.usage;
           w.best = b; w.lastErr = "";
-        } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await finishCall(env, watchHold.id, watchHold.reserved, e.usage, spendExtra(watchHold)); }
+        } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await settleCall(ctx, finishCall(env, watchHold.id, watchHold.reserved, e.usage, spendExtra(watchHold))); }
         w.lastCheck = new Date().toISOString();
         await saveRec();
         return json(pub(), 200, h);
@@ -848,10 +891,10 @@ export default {
       if (!paceHold.ok) return json({ error: paceHold.error }, paceHold.status, h);
       try {
         const built = await paceBuild(env, b, paceHold.reserved || null);
-        await finishCall(env, paceHold.id, paceHold.reserved, built.usage, spendExtra(paceHold));
+        await settleCall(ctx, finishCall(env, paceHold.id, paceHold.reserved, built.usage, spendExtra(paceHold)));
         return json({ result: built.result }, 200, h);
       }
-      catch (e) { await finishCall(env, paceHold.id, paceHold.reserved, e.usage, spendExtra(paceHold)); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await settleCall(ctx, finishCall(env, paceHold.id, paceHold.reserved, e.usage, spendExtra(paceHold))); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/ammo") return json({ error: "Ammo price search is turned off." }, 410, h);
     if (url.pathname === "/battery") {
@@ -859,10 +902,10 @@ export default {
       if (!battHold.ok) return json({ error: battHold.error }, battHold.status, h);
       try {
         const found = await batteryLookup(env, { name: String(body.name || "").slice(0, 120), brand: String(body.brand || "").slice(0, 80), category: String(body.category || "").slice(0, 60), type: String(body.type || "").slice(0, 40) }, battHold.reserved || null);
-        await finishCall(env, battHold.id, battHold.reserved, found.usage, spendExtra(battHold));
+        await settleCall(ctx, finishCall(env, battHold.id, battHold.reserved, found.usage, spendExtra(battHold)));
         return json({ result: found.result }, 200, h);
       }
-      catch (e) { await finishCall(env, battHold.id, battHold.reserved, e.usage, spendExtra(battHold)); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await settleCall(ctx, finishCall(env, battHold.id, battHold.reserved, e.usage, spendExtra(battHold))); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     if (url.pathname === "/identify") {
       const subject = {
@@ -876,10 +919,10 @@ export default {
       if (!idHold.ok) return json({ error: idHold.error }, idHold.status, h);
       try {
         const found = await identify(env, img, String(body.hint || "").slice(0, 80));
-        await finishCall(env, idHold.id, idHold.reserved, found.usage, spendExtra(idHold));
+        await settleCall(ctx, finishCall(env, idHold.id, idHold.reserved, found.usage, spendExtra(idHold)));
         return json({ result: found.result }, 200, h);
       }
-      catch (e) { await finishCall(env, idHold.id, idHold.reserved, e.usage, spendExtra(idHold)); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
+      catch (e) { await settleCall(ctx, finishCall(env, idHold.id, idHold.reserved, e.usage, spendExtra(idHold))); return json({ error: String(e.message || e).slice(0, 160) }, 502, h); }
     }
     const max = +(env.MAX_ITEMS || 4);
     const items = Array.isArray(body.items) ? body.items.slice(0, max) : [];
@@ -904,7 +947,7 @@ export default {
     const budgets = accepted.map(it => callHoldMicro(env, "lookup", estimateInputTokens(JSON.stringify([{ role: "user", content: prompt(it) }]))));
     const reserveMicro = budgets.reduce((sum, n) => sum + n, 0);
     const reserveEach = budgets.reduce((max, n) => Math.max(max, n), 0);
-    const lookBill = await reserveCall(env, user, "lookup", accepted.length, { reserveMicro, reserveEach, partial: true, now });
+    const lookBill = await reserveCall(env, user, "lookup", accepted.length, { reserveMicro, reserveEach, dailyEach: lookupTypicalMicro(env), partial: true, now });
     if (!lookBill.ok) return json({ error: lookBill.error, results: accepted.map(it => ({ id: String((it && it.id) || ""), ok: false, error: lookBill.error })).concat(refused) }, lookBill.status, h);
     const charged = Math.max(0, Math.round(+lookBill.charged || 0));
     const run = accepted.slice(0, charged);
@@ -920,10 +963,11 @@ export default {
       delete copy.spendMicro;
       return copy;
     }).concat(refused);
-    await finishCall(env, lookBill.id, lookBill.reserved, actual, spendExtra(lookBill, {
+    await settleCall(ctx, finishCall(env, lookBill.id, lookBill.reserved, actual, spendExtra(lookBill, {
       countRefund: run.length - packed.filter(lookupPriced).length,
       refundCap: MONTHLY_REFUND_CAP,
-    }));
+      dailyHold: lookBill.dailyHeld,
+    })));
     const firstErr = results.find(r => !r.ok)?.error;
     if (results.every(r => !r.ok)) return json({ error: firstErr || "Lookup failed", results }, 502, h);
     return json({ results }, 200, h);
@@ -933,6 +977,7 @@ export default {
     for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
     ctx.waitUntil((async () => {
       await serviceAccountLogLine(env);
+      await sweepTombstones(env);
       await pruneUsageCounters(env);
       await retryQueuedCleanups(env);
       await runQueuedRedactions(env);

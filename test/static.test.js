@@ -48,14 +48,14 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device, the app is version 48, and the service worker cache is version 49", () => {
+test("sign-out clears this device, the app is version 53, and the service worker cache is version 53", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v49/);
+  assert.match(sw, /war-box-v53/);
   assert.match(sw, /skip-waiting/);
-  assert.match(read("js/cloud.js"), /APP_VERSION="48"/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="53"/);
   assert.match(read("js/cloud.js"), /function markLookupError/);
   assert.match(read("js/core.js"), /i\.lookupError&&!lookingUp\.has\(i\.id\)/);
   assert.match(read("js/cloud.js"), /textContent="v"\+APP_VERSION/);
@@ -274,9 +274,12 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("firestore.rules"), /tombstoned\(\)/);
   assert.match(read("firestore.rules"), /expireAt is timestamp/);
   assert.match(read("js/cloud.js"), /deletedUserExpireAt/);
-  assert.match(read("firestore.indexes.json"), /"collectionGroup": "deletedUsers"/);
-  assert.match(read("firestore.indexes.json"), /"fieldPath": "expireAt"/);
-  assert.match(read("firestore.indexes.json"), /"ttl": true/);
+  assert.doesNotMatch(read("firestore.indexes.json"), /deletedUsers/);
+  assert.doesNotMatch(read("firestore.indexes.json"), /"ttl"/);
+  assert.match(read("api/firestore-admin.js"), /tombstones: /);
+  assert.match(read("api/firestore-admin.js"), /tombstone:cursor/);
+  assert.match(read("api/firestore-admin.js"), /LESS_THAN/);
+  assert.match(read("api/worker.js"), /sweepTombstones/);
   assert.match(read("README.md"), /SPEND_RESERVE_USD/);
   const stub = read("api/stub.js");
   const stubDel = stub.indexOf('pathname === "/account/delete"');
@@ -286,8 +289,23 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.match(read("README.md"), /BETA_ONLY/);
   assert.match(read("README.md"), /FREE_SPEND_CAP_USD/);
   assert.match(read("README.md"), /FREE_DAILY_SPEND_CAP_USD/);
-  assert.match(read("api/worker.js"), /FREE_DAILY_SPEND_CAP_USD:\s*"0\.50"/);
+  assert.match(read("api/worker.js"), /FREE_DAILY_SPEND_CAP_USD:\s*"0\.75"/);
   assert.match(read("js/core.js"), /spending limit/);
+  assert.match(read("js/logic.js"), /Today's lookup spending limit is reached/);
+  const runLookups = read("js/cloud.js");
+  const runStart = runLookups.indexOf("async function runLookups");
+  const runBody = runLookups.slice(runStart, runLookups.indexOf("var _saveCurrent"));
+  const forEach = runBody.slice(runBody.indexOf("res.forEach"), runBody.indexOf("catch(e)"));
+  const catchBody = runBody.slice(runBody.indexOf("catch(e)"));
+  assert.match(runBody, /Today's lookup spending limit is reached/);
+  assert.match(runBody, /try again in a moment/);
+  assert.match(read("js/logic.js"), /1000, 2000, 4000, 8000, 8000/);
+  assert.match(runBody, /busyQueueStep/);
+  assert.match(runBody, /plan\.retry/);
+  assert.doesNotMatch(runBody, /setTimeout\(r,400\)/);
+  assert.doesNotMatch(runBody.slice(runBody.indexOf("const lookupStop"), runBody.indexOf("const spendStop")), /moment/);
+  assert.doesNotMatch(forEach, /spendStop/);
+  assert.match(catchBody, /spendStop/);
   assert.match(read("README.md"), /REVIEW_EMAILS/);
   assert.match(read("README.md"), /FIREBASE_SERVER_API_KEY/);
   assert.doesNotMatch(read("README.md"), /FIREBASE_API_KEY/);
@@ -323,7 +341,7 @@ test("user-facing copy and docs avoid belted and linked ammo phrases", () => {
     if (file === "js/logic.js") return src.replace(/export const PRICE_BACKSTOP =[\s\S]*?;/, "");
     if (file === "api/worker.js") return src
       .replace(/function prompt\(it\) \{[\s\S]*?\n\}\nconst textOf/, "const textOf")
-      .replace(/const ask = `[\s\S]*?`;\n  const r = await fetch/, "const r = await fetch")
+      .replace(/const ask = `[\s\S]*?`;\n  const r = await modelFetch/, "const r = await modelFetch")
       .replace(/function dealPrompt\(w\) \{[\s\S]*?\n\}\nfunction priceRouteBlocked/, "function priceRouteBlocked");
     return src;
   };

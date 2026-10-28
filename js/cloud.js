@@ -389,7 +389,7 @@ async function qaStorageCheckRun(){
   else toast("Storage check failed. Another account or a signed-out check was not blocked ("+otherCode+" / "+signedOutCode+").",6000);
 }
 }
-var APP_VERSION="48";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+var APP_VERSION="53";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 var swReloadPending=false;
 function showUpdateToast(){
   const el=$("toast");if(!el)return;
@@ -501,15 +501,34 @@ async function runLookups(ids,quiet){
   if(!ids.length)return;
   ids.forEach(id=>lookingUp.add(id));render();
   let ok=0,fail="";
-  const lookupStop=/turned off|confirm your email|daily lookup limit|this month's lookups|spending limit/i;
-  for(let k=0;k<ids.length;k+=4){
+  const lookupStop=/turned off|confirm your email|daily lookup limit|this month's lookups/i;
+  const spendStop=/Today's lookup spending limit is reached/i;
+  const busyWait=/try again in a moment/i;
+  let busyTries=0;
+  for(let k=0;k<ids.length;){
     const chunk=ids.slice(k,k+4);
-    let stop=false;
-    try{const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){const msg=lookupFailMessage(r.error||"No result");markLookupError(it,msg);fail=fail||msg}if(lookupStop.test(String(r.error||"")))stop=true}})}
-    catch(e){fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);markLookupError(it,fail)});if(lookupStop.test(String(e&&e.message||""))){ids.slice(k).forEach(id=>lookingUp.delete(id));render();await persist();refreshLookupDetail(ids.slice(k));break}}
+    let stop=false,retry=false;
+    try{
+      const res=await apiLookup(chunk.map(id=>lookupBody(all.find(i=>i.id===id))));
+      const again=[];
+      res.forEach(r=>{if(applyLookup(r.id,r))ok++;else{const raw=String(r.error||"");if(busyWait.test(raw)){again.push(r.id);return}const it=all.find(x=>x.id===r.id);if(it&&!it.deleted){const msg=lookupFailMessage(raw||"No result");markLookupError(it,msg);fail=fail||msg}if(lookupStop.test(raw))stop=true}});
+      const plan=GearLogic.busyQueueStep(busyTries);
+      if(again.length&&plan.retry){busyTries++;chunk.forEach(id=>{if(!again.includes(id))lookingUp.delete(id)});ids.splice(k,chunk.length,...again);retry=true;await new Promise(r=>setTimeout(r,plan.waitMs))}
+      else if(again.length){fail=lookupFailMessage("Lookups are busy right now. Try again in a moment.");ids.slice(k).forEach(id=>lookingUp.delete(id));render();await persist();refreshLookupDetail(ids.slice(k));break}
+    }
+    catch(e){
+      const raw=String(e&&e.message||"");
+      const plan=GearLogic.busyQueueStep(busyTries);
+      if(busyWait.test(raw)&&plan.retry){busyTries++;retry=true;await new Promise(r=>setTimeout(r,plan.waitMs))}
+      else if(busyWait.test(raw)){fail=lookupFailMessage(raw);ids.slice(k).forEach(id=>lookingUp.delete(id));render();await persist();refreshLookupDetail(ids.slice(k));break}
+      else{fail=lookupFailMessage(e&&e.message);chunk.forEach(id=>{const it=all.find(x=>x.id===id);markLookupError(it,fail)});if(lookupStop.test(raw)||spendStop.test(raw)){ids.slice(k).forEach(id=>lookingUp.delete(id));render();await persist();refreshLookupDetail(ids.slice(k));break}}
+    }
+    if(retry)continue;
+    busyTries=0;
     chunk.forEach(id=>lookingUp.delete(id));if(stop)ids.slice(k+chunk.length).forEach(id=>lookingUp.delete(id));render();await persist();
     refreshLookupDetail(chunk);
     if(stop)break;
+    k+=chunk.length;
   }
   if(!$("form").hidden&&editing){const busy=lookingUp.has(editing.id);$("mktBtn").disabled=busy;$("mktBtn").textContent=busy?"Looking up…":(GearLogic.saleRestricted(editing)?"Look up weight":"Market check")}
   if(fail)toast(fail,6000);else if(!quiet||ids.length>1)toast(`Looked up ${ok} item${ok===1?"":"s"}`);
