@@ -2,8 +2,10 @@
 // POST /lookup  { items: [{ id, name, brand, category, condition, color, notes, kind? }] }
 // Header: Authorization: Bearer <Firebase ID token from the signed-in app user>
 // Returns { results: [{ id, ok, retailNew, usedLow, usedHigh, value, weightOz, priceNote, weightNote, sources }] }
-// Secrets (set in the Cloudflare dashboard, never in code): ANTHROPIC_API_KEY, FIREBASE_SERVER_API_KEY.
+// Secrets (set in the Cloudflare dashboard, never in code): ANTHROPIC_API_KEY, FIREBASE_SERVER_API_KEY,
+// FIREBASE_SA_JSON, EMAIL_HMAC_KEY.
 // FIREBASE_SERVER_API_KEY is a second Google key restricted to the Identity Toolkit API, with no app restriction.
+// FIREBASE_SA_JSON is a Google service account with Cloud Datastore User on gear-locker-c248c. It is not required for deletion to finish.
 // The public web key is not used here. Other vars use the defaults below unless the dashboard sets them. BETA_ONLY stays unset.
 // Vars (dashboard, kept across deploys): FIREBASE_PROJECT, ALLOWED_ORIGINS, MODEL, FALLBACK_MODEL,
 // ALLOWED_EMAILS (used only when BETA_ONLY=true), BETA_ONLY, REVIEW_EMAILS, REVIEW_DAILY_LIMIT,
@@ -17,6 +19,7 @@
 import { decideAccess, quotaKey, alertQuotaKey, monthQuotaKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, spendRates, lookupPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
+import { enqueueRedaction, releaseEmailHold, runQueuedRedactions } from "./redact.js";
 
 export { UsageLedger } from "./usage-ledger.js";
 
@@ -698,15 +701,17 @@ export default {
         if (!cleaned.ok) return json({ error: cleaned.error }, 502, h);
         const watchGone = await retryOnce(() => deleteWatchRecord(env, accountUser.sub));
         if (!watchGone) return json({ error: "Couldn't remove your price alerts. Your sign-in is still here. Try again." }, 502, h);
+        const usageQueued = await retryOnce(() => queueUsageCleanup(env, accountUser.sub));
+        const redactQueued = await retryOnce(() => enqueueRedaction(env, accountUser.sub, String(accountUser.email || "").toLowerCase()));
+        const queued = usageQueued && redactQueued;
+        const countersGone = queued ? await retryOnce(() => clearUsageCounters(env, accountUser.sub)) : false;
+        const cleanup = deleteCleanupResult(queued, countersGone);
+        if (cleanup.status !== 200) return json(cleanup.body, cleanup.status, h);
         const removed = await deleteAuthUser(env, idToken);
         if (!removed.ok) return json({ error: removed.error }, 502, h);
-        const countersGone = await retryOnce(() => clearUsageCounters(env, accountUser.sub));
-        const queueSaved = countersGone ? true : await retryOnce(() => queueUsageCleanup(env, accountUser.sub));
-        const cleanup = deleteCleanupResult(countersGone, queueSaved);
-        if (cleanup.status !== 200) return json(cleanup.body, cleanup.status, h);
         deleteRevenueCatCustomer(env, accountUser.sub);
         return json(cleanup.body, 200, h);
-      } catch { return json({ error: "Couldn't finish deleting the account. Try again." }, 502, h); }
+      } catch { return json({ error: "Couldn't finish deleting the account. Your sign-in is still here. Try again." }, 502, h); }
     }
     if (!ROUTES.includes(url.pathname) || req.method !== "POST") return json({ error: "Not found" }, 404, h);
     if (!env.ANTHROPIC_API_KEY) return json({ error: "Lookup service isn't set up yet (missing API key)." }, 503, h);
@@ -714,6 +719,7 @@ export default {
     let user;
     try { user = await verifyFirebaseToken((req.headers.get("authorization") || "").replace(/^Bearer\s+/i, ""), env.FIREBASE_PROJECT); }
     catch { return json({ error: "Please sign in again." }, 401, h); }
+    await releaseEmailHold(env, user);
     const access = decideAccess(user, env);
     if (!access.ok) return json({ error: access.error }, access.status, h);
 
@@ -847,6 +853,7 @@ export default {
     for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
     ctx.waitUntil((async () => {
       await retryQueuedCleanups(env);
+      await runQueuedRedactions(env);
       if (env.ANTHROPIC_API_KEY) await runDueWatches(env, +(env.WATCH_BATCH || 6));
     })());
   },

@@ -27,6 +27,18 @@ service cloud.firestore {
     function tombstoned() {
       return signedIn() && exists(/databases/$(database)/documents/deletedUsers/$(request.auth.uid));
     }
+    function lendMailPath(addr) {
+      return /databases/$(database)/documents/users/$(request.auth.uid)/lendMail/$(hashing.sha256(addr.lower()).toHexString());
+    }
+    function lendMailIncreased(id) {
+      let path = lendMailPath(request.resource.data.borrowerEmailLower);
+      return existsAfter(path)
+        && getAfter(path).data.loanId == id
+        && getAfter(path).data.n is int
+        && getAfter(path).data.n >= 1
+        && getAfter(path).data.n <= 40
+        && getAfter(path).data.n == (exists(path) ? get(path).data.n + 1 : 1);
+    }
     function itemOk(m) {
       return m is map
         && m.keys().hasOnly(['id','name','brand','color','category','nick','qty','weight','parent','caliber','value','paid']);
@@ -172,7 +184,9 @@ service cloud.firestore {
         && request.resource.data.borrowerEmail is string
         && request.resource.data.borrowerEmailLower is string
         && request.resource.data.borrowerEmail.size() > 3
-        && request.resource.data.borrowerEmailLower.size() > 3;
+        && request.resource.data.borrowerEmailLower.size() > 3
+        && request.resource.data.borrowerEmailLower == request.resource.data.borrowerEmail.lower()
+        && lendMailIncreased(id);
       allow update: if !tombstoned() && ((isLender()
           && request.resource.data.lender == resource.data.lender)
         || (borrowerMatch()
@@ -185,6 +199,27 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['borrowerEmail','borrowerEmailLower','updatedAt','serverUpdatedAt']);
       allow delete: if isLender();
+    }
+
+    match /users/{uid}/lendMail/{hash} {
+      allow get, list: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && !tombstoned()
+        && request.resource.data.keys().hasOnly(['n', 'loanId'])
+        && request.resource.data.n == 1
+        && request.resource.data.loanId is string
+        && request.resource.data.loanId.size() > 0
+        && request.resource.data.loanId.size() < 200;
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && !tombstoned()
+        && request.resource.data.keys().hasOnly(['n', 'loanId'])
+        && request.resource.data.n is int
+        && request.resource.data.loanId is string
+        && request.resource.data.n == resource.data.n + 1
+        && request.resource.data.n <= 40;
+      allow delete: if signedIn() && request.auth.uid == uid;
     }
 
     match /deletedUsers/{uid} {

@@ -9,8 +9,8 @@ import {
   SEARCH_RESULT_TOKENS, roundFits, roundInputTokens, loanTargetsFromLends, loanRedactTargets, loansToMirror,
   deleteRetryRoute, runDeleteAttempt, SERVER_DELETE_STEPS, LOOKUPS_PAUSED,
   ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
-  CLEANUP_MAX_ATTEMPTS, CLEANUP_MAX_AGE_MS, CLEANUP_RECORD_MAX_BYTES, orderRedactions,
-  REDACT_LIMIT, lendMirrorOps,
+  CLEANUP_MAX_ATTEMPTS, CLEANUP_MAX_AGE_MS, CLEANUP_RECORD_MAX_BYTES,
+  lendMirrorOps,
   ROUND_INPUT_TOKEN_CAP,
 } from "../js/logic.js";
 import { UsageLedger } from "../api/usage-ledger.js";
@@ -377,8 +377,8 @@ test("a mocked $3.05 lookup records $3.05", () => {
   assert.equal(ledger.read({ keys: ["spend:free"] }).values["spend:free"], 3_050_000);
 });
 
-test("server cleanup pages 305 shares before it finishes", async () => {
-  const names = Array.from({ length: 305 }, (_, i) => "projects/demo/databases/(default)/documents/shares/s" + String(i).padStart(4, "0"));
+test("own shares page until they are gone, and lends that name the user are not read", async () => {
+  const names = Array.from({ length: 600 }, (_, i) => "projects/demo/databases/(default)/documents/shares/s" + String(i).padStart(4, "0"));
   const left = new Set(names);
   let shareQueries = 0;
   let lendQueries = 0;
@@ -400,6 +400,8 @@ test("server cleanup pages 305 shares before it finishes", async () => {
       const limit = body.structuredQuery.limit;
       const after = body.structuredQuery.startAt && body.structuredQuery.startAt.values[0].referenceValue;
       assert.ok(limit > 0 && limit < 305);
+      const field = body.structuredQuery.where.fieldFilter.field.fieldPath;
+      assert.equal(field === "borrowerEmail" || field === "borrowerEmailLower", false);
       if (col === "shares") {
         shareQueries += 1;
         let rows = [...left].sort();
@@ -408,7 +410,10 @@ test("server cleanup pages 305 shares before it finishes", async () => {
         if (!rows.length) return json(200, [{}]);
         return json(200, rows.map(name => ({ document: { name } })));
       }
-      if (col === "lends") lendQueries += 1;
+      if (col === "lends") {
+        lendQueries += 1;
+        assert.equal(field, "lender");
+      }
       return json(200, [{}]);
     }
     return json(200, { documents: [] });
@@ -416,125 +421,12 @@ test("server cleanup pages 305 shares before it finishes", async () => {
   const out = await deleteUserFirestore({ FIREBASE_PROJECT: "demo" }, "token", { sub: "abc", email: "a@b.co" }, fetchImpl);
   assert.equal(out.ok, true);
   assert.equal(left.size, 0);
-  assert.equal(deleted.length, 305);
-  assert.ok(shareQueries >= 2);
-  assert.ok(lendQueries >= 1);
+  assert.equal(deleted.length, 600);
+  assert.equal(new Set(deleted).size, 600);
+  assert.ok(shareQueries >= 3);
+  assert.equal(lendQueries, 1);
 });
 
-test("a borrowed lend clears the lender loan, and a query error is not an empty list", async () => {
-  const lendName = "projects/demo/databases/(default)/documents/lends/loan1";
-  const loanName = "projects/demo/databases/(default)/documents/users/owner/loans/loan1";
-  const patches = [];
-  const lendDoc = {
-    name: lendName,
-    fields: {
-      lender: { stringValue: "owner" },
-      borrowerEmail: { stringValue: "a@b.co" },
-    },
-  };
-  const fetchImpl = async (url, opts) => {
-    const method = (opts && opts.method) || "GET";
-    const body = opts && opts.body ? JSON.parse(opts.body) : null;
-    const json = (status, data) => ({ status, json: async () => data });
-    if (String(url).includes(":commit")) {
-      const write = body && body.writes && body.writes[0];
-      patches.push({ url: String((write && write.update && write.update.name) || url), body: write });
-      return json(200, {});
-    }
-    if (method === "PATCH") {
-      patches.push({ url: String(url), body });
-      return json(200, {});
-    }
-    if (method === "DELETE") return json(200, {});
-    if (String(url).includes(":runQuery")) {
-      const q = body.structuredQuery;
-      const field = q.where.fieldFilter.field.fieldPath;
-      const value = q.where.fieldFilter.value.stringValue;
-      if (q.from[0].collectionId === "lends" && field === "borrowerEmail" && value === "a@b.co") {
-        return json(200, [{ document: lendDoc }]);
-      }
-      return json(200, [{}]);
-    }
-    return json(200, { documents: [] });
-  };
-  const env = { FIREBASE_PROJECT: "demo" };
-  const cleared = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, fetchImpl);
-  assert.equal(cleared.ok, true);
-  const loanPatch = patches.find(p => p.url.includes("users/owner/loans/loan1"));
-  assert.ok(loanPatch);
-  assert.equal(loanPatch.body.update.fields.friendEmail.stringValue, "");
-  assert.equal(loanPatch.body.currentDocument.exists, true);
-  assert.ok(loanPatch.body.updateTransforms.some(t => t.fieldPath === "serverUpdatedAt" && t.setToServerValue === "REQUEST_TIME"));
-  assert.ok(loanPatch.body.updateTransforms.some(t => t.fieldPath === "updatedAt" && t.setToServerValue === "REQUEST_TIME"));
-  assert.ok(patches.some(p => p.url.includes("lends/loan1")));
-  assert.equal(patches.some(p => p.url.includes("/loans/") && !p.url.includes("users/owner/loans/loan1")), false);
-  assert.equal(patches.some(p => p.url.includes("/deletedEmails/")), false);
-
-  const none = [];
-  const empty = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, async (url, opts) => {
-    const method = (opts && opts.method) || "GET";
-    if (method === "PATCH") { none.push(String(url)); return { status: 200, json: async () => ({}) }; }
-    if (String(url).includes(":runQuery")) return { status: 200, json: async () => [{}] };
-    return { status: 200, json: async () => ({ documents: [] }) };
-  });
-  assert.equal(empty.ok, true);
-  assert.deepEqual(none, []);
-
-  const denied = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, async (url, opts) => {
-    const method = (opts && opts.method) || "GET";
-    const body = opts && opts.body ? JSON.parse(opts.body) : null;
-    if (String(url).includes(":runQuery")) {
-      const q = body.structuredQuery;
-      if (q.from[0].collectionId === "lends" && q.where.fieldFilter.field.fieldPath === "borrowerEmail") {
-        return { status: 403, json: async () => ({ error: { status: "PERMISSION_DENIED" } }) };
-      }
-      return { status: 200, json: async () => [{}] };
-    }
-    if (method === "PATCH") return { status: 200, json: async () => ({}) };
-    return { status: 200, json: async () => ({ documents: [] }) };
-  });
-  assert.equal(denied.ok, true);
-  assert.equal(denied.redactPending.some(row => row.reason === "lends-query"), true);
-
-  const blockedLoan = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, async (url, opts) => {
-    const method = (opts && opts.method) || "GET";
-    const body = opts && opts.body ? JSON.parse(opts.body) : null;
-    if (String(url).includes(":commit")) {
-      const name = (body && body.writes && body.writes[0] && body.writes[0].update && body.writes[0].update.name) || "";
-      if (name.includes("users/owner/loans/loan1")) return { status: 403, json: async () => ({}) };
-      return { status: 200, json: async () => ({}) };
-    }
-    if (method === "PATCH" && String(url).includes("users/owner/loans/loan1")) {
-      return { status: 403, json: async () => ({}) };
-    }
-    if (String(url).includes(":runQuery")) {
-      const q = body.structuredQuery;
-      if (q.from[0].collectionId === "lends" && q.where.fieldFilter.field.fieldPath === "borrowerEmail") {
-        return { status: 200, json: async () => [{ document: lendDoc }] };
-      }
-      return { status: 200, json: async () => [{}] };
-    }
-    return { status: 200, json: async () => ({ documents: [] }) };
-  });
-  assert.equal(blockedLoan.ok, true);
-  assert.equal(blockedLoan.redactPending.some(row => row.reason === "loan" && row.loanId === "loan1"), true);
-
-  const brokenLend = await deleteUserFirestore(env, "token", { sub: "abc", email: "a@b.co" }, async (url, opts) => {
-    const body = opts && opts.body ? JSON.parse(opts.body) : null;
-    if (String(url).includes(":runQuery")) {
-      const q = body.structuredQuery;
-      if (q.from[0].collectionId === "lends" && q.where.fieldFilter.field.fieldPath === "borrowerEmail") {
-        return { status: 200, json: async () => [{ document: { name: lendName, fields: {} } }] };
-      }
-      return { status: 200, json: async () => [{}] };
-    }
-    if ((opts && opts.method) === "PATCH") return { status: 200, json: async () => ({}) };
-    return { status: 200, json: async () => ({ documents: [] }) };
-  });
-  assert.equal(brokenLend.ok, true);
-  assert.deepEqual(brokenLend.redactPending, []);
-  assert.equal(loanName.includes("users/owner/loans/loan1"), true);
-});
 
 test("server cleanup treats a missing document as already gone", async () => {
   let shares = 1;
@@ -568,87 +460,6 @@ test("server cleanup treats a missing document as already gone", async () => {
   assert.match(broken.error, /sign-in is still here/);
 });
 
-test("orphan, mismatched, changed, and unverified lends do not block account deletion", async () => {
-  const env = { FIREBASE_PROJECT: "demo" };
-  const lendName = "projects/demo/databases/(default)/documents/lends/x";
-  function lendDoc() {
-    return {
-      name: lendName,
-      fields: {
-        lender: { stringValue: "owner" },
-        borrowerEmail: { stringValue: "v@example.com" },
-        borrowerEmailLower: { stringValue: "v@example.com" },
-      },
-    };
-  }
-  async function run(user, loanReply) {
-    const calls = [];
-    const fetchImpl = async (url, opts) => {
-      const method = (opts && opts.method) || "GET";
-      const body = opts && opts.body ? JSON.parse(opts.body) : null;
-      const u = String(url);
-      calls.push(method + " " + u);
-      const json = (status, data) => ({ status, json: async () => data });
-      if (u.includes(":runQuery")) {
-        const q = body.structuredQuery;
-        const field = q.where.fieldFilter.field.fieldPath;
-        if (q.from[0].collectionId === "lends" && (field === "borrowerEmail" || field === "borrowerEmailLower")) {
-          return json(200, [{ document: lendDoc() }]);
-        }
-        return json(200, [{}]);
-      }
-      if (u.includes(":commit")) {
-        const writes = (body && body.writes) || [];
-        for (const w of writes) {
-          const name = (w.update && w.update.name) || "";
-          const exists = w.currentDocument && w.currentDocument.exists === true ? " exists=true" : "";
-          calls.push("COMMIT " + name + exists);
-        }
-        return json(200, {});
-      }
-      if (method === "GET" && u.includes("/loans/")) return loanReply(u);
-      if (method === "PATCH" || method === "DELETE") return json(200, {});
-      return json(200, { documents: [] });
-    };
-    const out = await deleteUserFirestore(env, "token", user, fetchImpl);
-    return { out, calls };
-  }
-  const user = { sub: "vee", email: "v@example.com", email_verified: true };
-  const loanPatch = calls => calls.some(c => c.startsWith("COMMIT") && c.includes("/loans/"));
-  const lendPatch = calls => calls.some(c => c.startsWith("COMMIT") && c.includes("/lends/"));
-
-  const orphan = await run(user, () => ({ status: 404, json: async () => ({}) }));
-  assert.equal(orphan.out.ok, true);
-  assert.deepEqual(orphan.out.redactPending, []);
-  assert.equal(loanPatch(orphan.calls), false);
-  assert.equal(lendPatch(orphan.calls), true);
-
-  const mismatch = await run(user, () => ({ status: 200, json: async () => ({ fields: { lender: { stringValue: "someone-else" }, friendEmail: { stringValue: "v@example.com" } } }) }));
-  assert.equal(mismatch.out.ok, true);
-  assert.deepEqual(mismatch.out.redactPending, []);
-  assert.equal(loanPatch(mismatch.calls), false);
-  assert.equal(lendPatch(mismatch.calls), true);
-
-  const changed = await run(user, () => ({ status: 200, json: async () => ({ fields: { lender: { stringValue: "owner" }, friendEmail: { stringValue: "other@example.com" } } }) }));
-  assert.equal(changed.out.ok, true);
-  assert.equal(loanPatch(changed.calls), false);
-
-  const cleared = await run(user, () => ({ status: 200, json: async () => ({ fields: { friendEmail: { stringValue: "" } } }) }));
-  assert.equal(cleared.out.ok, true);
-  assert.equal(loanPatch(cleared.calls), false);
-
-  const caps = await run(
-    { sub: "vee", email: "qa-b@example.test", email_verified: true },
-    () => ({ status: 200, json: async () => ({ fields: { friendEmail: { stringValue: "QA-B@Example.test" } } }) }),
-  );
-  assert.equal(caps.out.ok, true);
-  assert.equal(caps.calls.some(c => c.startsWith("COMMIT") && c.includes("/loans/") && c.includes("exists=true")), true);
-
-  const unverified = await run({ sub: "vee", email: "v@example.com", email_verified: false }, () => ({ status: 500, json: async () => ({}) }));
-  assert.equal(unverified.out.ok, true);
-  assert.deepEqual(unverified.out.redactPending, []);
-  assert.equal(unverified.calls.some(c => c.includes("borrowerEmail")), false);
-});
 
 test("the deleted-account note survives sign-out, and both cleanup failures are an error", () => {
   assert.equal(deletedAccountGate("", "").text, "Sign in to open War Box.");
@@ -661,11 +472,11 @@ test("the deleted-account note survives sign-out, and both cleanup failures are 
   assert.equal(kept.clearStored, false);
   assert.equal(deleteCleanupResult(true, true).status, 200);
   assert.equal(deleteCleanupResult(true, true).body.cleanup, "done");
-  assert.equal(deleteCleanupResult(false, true).status, 200);
-  assert.equal(deleteCleanupResult(false, true).body.cleanup, "pending");
+  assert.equal(deleteCleanupResult(true, false).status, 200);
+  assert.equal(deleteCleanupResult(true, false).body.cleanup, "pending");
   assert.equal(deleteCleanupResult(false, false).status, 502);
-  assert.equal(deleteCleanupResult(true, false).status, 502);
-  assert.match(deleteCleanupResult(true, false).body.error, /Couldn't finish deleting the account/);
+  assert.equal(deleteCleanupResult(false, true).status, 502);
+  assert.match(deleteCleanupResult(false, true).body.error, /Your sign-in is still here/);
   const now = Date.parse("2026-10-27T00:00:00.000Z");
   const fresh = cleanupRetryPlan({
     uid: "abc",
@@ -779,93 +590,3 @@ test("the first round of every AI op fits its hold, and the input cap applies af
   assert.ok(tight - loose >= 860_000);
 });
 
-test("redaction stops at the cap and queues the rest", async () => {
-  const docs = Array.from({ length: REDACT_LIMIT + 1 }, (_, i) => ({
-    name: "projects/demo/databases/(default)/documents/lends/loan" + i,
-    fields: { lender: { stringValue: "owner" }, borrowerEmail: { stringValue: "a@b.co" } },
-  }));
-  let loanGets = 0;
-  let loanCommits = 0;
-  const fetchImpl = async (url, opts) => {
-    const method = (opts && opts.method) || "GET";
-    const body = opts && opts.body ? JSON.parse(opts.body) : null;
-    const json = (status, data) => ({ status, json: async () => data });
-    if (String(url).includes(":commit")) {
-      const name = body.writes[0].update.name || "";
-      if (name.includes("/loans/")) loanCommits += 1;
-      return json(200, {});
-    }
-    if (String(url).includes(":runQuery")) {
-      const q = body.structuredQuery;
-      if (q.from[0].collectionId === "lends" && q.where.fieldFilter.field.fieldPath === "borrowerEmail") {
-        return json(200, docs.map(document => ({ document })));
-      }
-      return json(200, [{}]);
-    }
-    if (method === "GET" && String(url).includes("/loans/")) { loanGets += 1; return json(404, {}); }
-    return json(200, { documents: [] });
-  };
-  const out = await deleteUserFirestore({ FIREBASE_PROJECT: "demo" }, "token", { sub: "abc", email: "a@b.co" }, fetchImpl);
-  assert.equal(out.ok, true);
-  assert.equal(loanGets, REDACT_LIMIT + 1);
-  assert.equal(loanCommits, 0);
-  assert.equal(out.redactPending.filter(row => row.reason === "capped").length, 1);
-  assert.equal(out.redactPending.some(row => row.loanId === "loan" + REDACT_LIMIT), true);
-});
-
-test("a real lender loan is redacted before forged lends fill the cap", async () => {
-  const forged = Array.from({ length: REDACT_LIMIT }, (_, i) => ({
-    id: "fake" + i, match: false, clearLoan: false,
-  }));
-  const real = { id: "realLoan", match: true, clearLoan: true };
-  const ordered = orderRedactions([...forged, real], REDACT_LIMIT);
-  assert.equal(ordered.now[0].id, "realLoan");
-  assert.equal(ordered.now.some(row => row.id === "realLoan"), true);
-  assert.equal(ordered.later.some(row => row.id === "realLoan"), false);
-  assert.equal(ordered.later.length, 1);
-
-  const docs = [
-    ...forged.map(row => ({
-      name: "projects/demo/databases/(default)/documents/lends/" + row.id,
-      fields: { lender: { stringValue: "owner" }, borrowerEmail: { stringValue: "a@b.co" } },
-    })),
-    {
-      name: "projects/demo/databases/(default)/documents/lends/realLoan",
-      fields: { lender: { stringValue: "owner" }, borrowerEmail: { stringValue: "a@b.co" } },
-    },
-  ];
-  const loanCommits = [];
-  let loanGets = 0;
-  const fetchImpl = async (url, opts) => {
-    const method = (opts && opts.method) || "GET";
-    const body = opts && opts.body ? JSON.parse(opts.body) : null;
-    const json = (status, data) => ({ status, json: async () => data });
-    if (String(url).includes(":commit")) {
-      const name = body.writes[0].update.name || "";
-      if (name.includes("/loans/")) loanCommits.push(name);
-      return json(200, {});
-    }
-    if (String(url).includes(":runQuery")) {
-      const q = body.structuredQuery;
-      if (q.from[0].collectionId === "lends" && q.where.fieldFilter.field.fieldPath === "borrowerEmail") {
-        return json(200, docs.map(document => ({ document })));
-      }
-      return json(200, [{}]);
-    }
-    if (method === "GET" && String(url).includes("/loans/")) {
-      loanGets += 1;
-      if (String(url).includes("/loans/realLoan")) {
-        return json(200, { fields: { lender: { stringValue: "owner" }, friendEmail: { stringValue: "a@b.co" } } });
-      }
-      return json(404, {});
-    }
-    return json(200, { documents: [] });
-  };
-  const out = await deleteUserFirestore({ FIREBASE_PROJECT: "demo" }, "token", { sub: "abc", email: "a@b.co" }, fetchImpl);
-  assert.equal(out.ok, true);
-  assert.equal(loanGets, REDACT_LIMIT + 1);
-  assert.deepEqual(loanCommits.filter(name => name.includes("/loans/realLoan")).length, 1);
-  assert.equal(loanCommits.some(name => name.includes("/loans/fake")), false);
-  assert.equal(out.redactPending.some(row => row.loanId === "realLoan"), false);
-  assert.equal(out.redactPending.filter(row => row.reason === "capped").length, 1);
-});

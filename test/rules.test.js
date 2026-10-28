@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { assertFails, assertSucceeds, initializeTestEnvironment } from "@firebase/rules-unit-testing";
 import { collection, collectionGroup, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
+import { lendMailDocId } from "../js/logic.js";
 
 let env;
 
@@ -30,6 +31,15 @@ function as(uid, email, verified) {
   return env.authenticatedContext(uid, { email, email_verified: !!verified }).firestore();
 }
 
+async function shareLend(uid, email, verified, id, data, n) {
+  const db = as(uid, email, verified);
+  const hash = await lendMailDocId(data.borrowerEmailLower || data.borrowerEmail);
+  const batch = writeBatch(db);
+  batch.set(doc(db, "users/" + uid + "/lendMail/" + hash), { n: n == null ? 1 : n, loanId: id });
+  batch.set(doc(db, "lends/" + id), data);
+  await batch.commit();
+}
+
 before(async () => {
   env = await initializeTestEnvironment({
     projectId: "demo-gear-locker",
@@ -53,7 +63,7 @@ test("a person can read and write only their own locker, even before email is co
 
 test("loans are readable only by the lender or a confirmed matching email", async () => {
   await env.clearFirestore();
-  await assertSucceeds(setDoc(doc(as("owner", "owner@example.com", true), "lends/loan1"), loan()));
+  await assertSucceeds(shareLend("owner", "owner@example.com", true, "loan1", loan()));
   const unverified = as("friend", "friend@example.com", false);
   await assertFails(getDoc(doc(unverified, "lends/loan1")));
   await assertFails(getDocs(query(collection(unverified, "lends"), where("borrowerEmailLower", "==", "friend@example.com"))));
@@ -73,9 +83,11 @@ test("a verified lender commits the private loan and the shared lend together", 
   await env.clearFirestore();
   const owner = as("owner", "owner@example.com", true);
   const batch = writeBatch(owner);
+  const hash = await lendMailDocId("friend@example.com");
   batch.set(doc(owner, "users/owner/loans/loan1"), {
-    id: "loan1", borrower: "Friend", friendEmail: "friend@example.com", itemId: "i1", updatedAt: "2026-10-26T00:00:00.000Z",
+    id: "loan1", borrower: "Friend", friendEmail: "friend@example.com", friendEmailLower: "friend@example.com", itemId: "i1", updatedAt: "2026-10-26T00:00:00.000Z",
   });
+  batch.set(doc(owner, "users/owner/lendMail/" + hash), { n: 1, loanId: "loan1" });
   batch.set(doc(owner, "lends/loan1"), loan());
   await assertSucceeds(batch.commit());
   await assertSucceeds(getDoc(doc(owner, "users/owner/loans/loan1")));
@@ -117,10 +129,10 @@ test("a tombstone blocks later writes and the named person can clear their email
   await assertSucceeds(setDoc(doc(owner, "users/owner/loans/loan1"), {
     id: "loan1", borrower: "Friend", friendEmail: "friend@example.com", notes: "private range note", itemId: "i1", updatedAt: "2026-10-26T00:00:00.000Z",
   }));
-  await assertSucceeds(setDoc(doc(owner, "lends/loan1"), loan()));
+  await assertSucceeds(shareLend("owner", "owner@example.com", true, "loan1", loan()));
   await assertSucceeds(setDoc(doc(owner, "users/owner/items/i1"), { name: "Pouch" }));
   await assertSucceeds(setDoc(doc(owner, "shares/share1"), share("owner")));
-  await assertSucceeds(setDoc(doc(owner, "lends/loan2"), { ...loan(), borrowerEmail: "named@example.com", borrowerEmailLower: "named@example.com" }));
+  await assertSucceeds(shareLend("owner", "owner@example.com", true, "loan2", { ...loan(), borrowerEmail: "named@example.com", borrowerEmailLower: "named@example.com" }));
   const borrower = as("friend", "friend@example.com", true);
   await assertFails(getDoc(doc(borrower, "users/owner/loans/loan1")));
   await assertFails(getDocs(query(collectionGroup(borrower, "loans"), where("friendEmail", "==", "friend@example.com"))));
@@ -193,6 +205,21 @@ test("a deleted-address record cannot be written, and a missing lend delete is d
   const owner = as("owner", "owner@example.com", true);
   await assertFails(setDoc(doc(owner, "deletedEmails/abc"), { at: serverTimestamp() }));
   await assertFails(deleteDoc(doc(owner, "lends/missing")));
-  await assertSucceeds(setDoc(doc(owner, "lends/open"), loan()));
+  await assertSucceeds(shareLend("owner", "owner@example.com", true, "open", loan()));
   await assertSucceeds(deleteDoc(doc(owner, "lends/open")));
+});
+
+test("one lender can publish 40 lends to an email and not a 41st", async () => {
+  await env.clearFirestore();
+  const owner = as("owner", "owner@example.com", true);
+  await assertFails(setDoc(doc(owner, "lends/plain"), loan()));
+  await assertSucceeds(shareLend("owner", "owner@example.com", true, "loan1", loan()));
+  const hash = await lendMailDocId("friend@example.com");
+  await env.withSecurityRulesDisabled(async context => {
+    await setDoc(doc(context.firestore(), "users/owner/lendMail/" + hash), { n: 40, loanId: "loan1" });
+  });
+  const extra = writeBatch(owner);
+  extra.set(doc(owner, "users/owner/lendMail/" + hash), { n: 41, loanId: "extra" });
+  extra.set(doc(owner, "lends/extra"), loan());
+  await assertFails(extra.commit());
 });

@@ -69,12 +69,13 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.ok(delBody.indexOf("signInIsRecent(accountUser.auth_time") < delBody.indexOf("deleteWatchRecord"));
   assert.ok(delBody.indexOf("deleteUserFirestore") < delBody.indexOf("deleteWatchRecord"));
   assert.ok(delBody.indexOf("deleteWatchRecord") < delBody.indexOf("deleteAuthUser"));
-  assert.ok(delBody.indexOf("deleteAuthUser(env, idToken)") < delBody.indexOf("clearUsageCounters"));
+  assert.ok(delBody.indexOf("deleteWatchRecord") < delBody.indexOf("queueUsageCleanup"));
+  assert.ok(delBody.indexOf("queueUsageCleanup") < delBody.indexOf("enqueueRedaction"));
+  assert.ok(delBody.indexOf("enqueueRedaction") < delBody.indexOf("clearUsageCounters"));
   assert.ok(delBody.indexOf("clearUsageCounters") < delBody.indexOf("deleteCleanupResult"));
+  assert.ok(delBody.indexOf("deleteCleanupResult") < delBody.indexOf("deleteAuthUser"));
   assert.match(delBody, /sign-in is still here/);
   assert.match(delBody, /Couldn't finish deleting the account/);
-  assert.ok(delBody.indexOf("clearUsageCounters") < delBody.indexOf("queueUsageCleanup"));
-  assert.ok(delBody.indexOf("queueUsageCleanup") < delBody.indexOf("deleteCleanupResult"));
   assert.match(delBody, /deleteCleanupResult/);
   const queueFn = src.slice(src.indexOf("async function queueUsageCleanup"), src.indexOf("async function retryQueuedCleanups"));
   assert.match(queueFn, /CLEANUP_PREFIX \+ uid/);
@@ -82,6 +83,9 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   const retryFn = src.slice(src.indexOf("async function retryQueuedCleanups"), src.indexOf("async function retryOnce"));
   assert.match(retryFn, /plan\.action === "wait"/);
   assert.ok(retryFn.indexOf('plan.action === "wait"') < retryFn.indexOf("env.WATCH.put"));
+  const scheduled = src.slice(src.indexOf("async scheduled"));
+  assert.ok(scheduled.indexOf("retryQueuedCleanups") < scheduled.indexOf("runQueuedRedactions"));
+  assert.ok(scheduled.indexOf("runQueuedRedactions") < scheduled.indexOf("ANTHROPIC_API_KEY"));
   assert.match(src, /roundInputTokens/);
   assert.match(src, /retryQueuedCleanups/);
   const authFn = src.slice(src.indexOf("async function deleteAuthUser"), src.indexOf("async function listWatchUsers"));

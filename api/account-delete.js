@@ -1,8 +1,8 @@
-// Finish a tombstoned account with the person's own ID token.
-// Rules allow that owner to list and delete their shares, locker, and lends, and to clear their email.
+// Deletes the person's own shares, locker, and lends with their ID token.
+// Lends that name them are not read here. The worker queues that for the server job.
 // 404 means the row is already gone. The auth user is deleted only after this returns ok.
 
-import { USER_COLLECTIONS, loanRedactTargets, REDACT_LIMIT, orderRedactions } from "../js/logic.js";
+import { USER_COLLECTIONS } from "../js/logic.js";
 
 const GEAR_STILL_HERE = "Couldn't finish removing your gear. Your sign-in is still here. Try again.";
 
@@ -93,151 +93,11 @@ async function forEachMatch(fetchImpl, idToken, root, structuredQuery, visit) {
   }
 }
 
-function commitUrl(project) {
-  return rootUrl(project) + ":commit";
-}
-
-function commitStatus(res) {
-  if (!res) return "failed";
-  if (res.status === 200) return "ok";
-  const status = res.data && res.data.error && res.data.error.status;
-  if (res.status === 404 || status === "NOT_FOUND" || status === "FAILED_PRECONDITION") return "missing";
-  return "failed";
-}
-
-async function commitWrite(fetchImpl, idToken, project, write) {
-  let res;
-  try {
-    res = await callFs(fetchImpl, idToken, commitUrl(project), { method: "POST", body: JSON.stringify({ writes: [write] }) });
-  } catch {
-    return "failed";
-  }
-  return commitStatus(res);
-}
-
-// String clears go in the document. updatedAt and serverUpdatedAt are request.time, so a stale local email loses the merge.
-async function patchFields(fetchImpl, idToken, project, name, stringFields, timeFields, mustExist) {
-  const fields = {};
-  for (const field of stringFields) fields[field] = { stringValue: "" };
-  const write = {
-    update: { name, fields },
-    updateMask: { fieldPaths: [...stringFields, ...timeFields] },
-    updateTransforms: timeFields.map(fieldPath => ({ fieldPath, setToServerValue: "REQUEST_TIME" })),
-  };
-  if (mustExist) write.currentDocument = { exists: true };
-  return commitWrite(fetchImpl, idToken, project, write);
-}
-
-function stringField(doc, field) {
-  const value = doc && doc.fields && doc.fields[field];
-  return value && typeof value.stringValue === "string" ? value.stringValue : "";
-}
-
-function docId(doc) {
-  const parts = String((doc && doc.name) || "").split("/");
-  return parts[parts.length - 1] || "";
-}
-
-async function collectQuery(fetchImpl, idToken, root, structuredQuery) {
-  const found = [];
-  await forEachMatch(fetchImpl, idToken, root, structuredQuery, async docs => {
-    found.push(...docs);
-  });
-  return found;
-}
-
-function loanDocName(project, lender, loanId) {
-  return "projects/" + project + "/databases/(default)/documents/users/" + lender + "/loans/" + loanId;
-}
-
-function explicitlyUnverified(user) {
-  return !!(user && (user.email_verified === false || user.emailVerified === false));
-}
-
-function hasField(doc, field) {
-  return !!(doc && doc.fields && Object.prototype.hasOwnProperty.call(doc.fields, field));
-}
-
-// Redaction is best effort. A missing loan, a lender mismatch, or a changed email is skipped.
-// Anything else is queued. It never fails the caller's own delete.
-async function redactBorrowed(fetchImpl, idToken, project, root, email, user) {
-  const pending = [];
-  const want = String(email || "").trim().toLowerCase();
-  if (!want || explicitlyUnverified(user)) return pending;
-  const raw = String(email || "");
-  const queries = [equalFilter("borrowerEmail", raw)];
-  if (raw.toLowerCase() === raw) queries.push(equalFilter("borrowerEmailLower", want));
-  const docs = [];
-  const seen = new Set();
-  try {
-    for (const where of queries) {
-      const page = await collectQuery(fetchImpl, idToken, root, {
-        from: [{ collectionId: "lends" }],
-        where,
-      });
-      for (const doc of page) {
-        if (!doc || !doc.name || seen.has(doc.name)) continue;
-        seen.add(doc.name);
-        docs.push(doc);
-      }
-    }
-  } catch {
-    pending.push({ reason: "lends-query" });
-    return pending;
-  }
-  const ranked = [];
-  for (const doc of docs) {
-    const loanId = docId(doc);
-    const lender = stringField(doc, "lender");
-    const targets = loanRedactTargets([{ id: loanId, lender }]);
-    if (!targets.paths.length) {
-      ranked.push({ doc, match: false, clearLoan: false, path: null });
-      continue;
-    }
-    const path = targets.paths[0];
-    const name = loanDocName(project, path.lender, path.loanId);
-    let got;
-    try {
-      got = await callFs(fetchImpl, idToken, docUrl(name), { method: "GET" });
-    } catch {
-      got = { status: 0, data: {} };
-    }
-    let match = false;
-    let clearLoan = false;
-    if (got.status === 404) {
-      match = false;
-    } else if (got.status === 200) {
-      const lenderOnLoan = stringField(got.data, "lender");
-      const lenderOk = !lenderOnLoan || lenderOnLoan === path.lender;
-      const emailOk = !hasField(got.data, "friendEmail") || stringField(got.data, "friendEmail").trim().toLowerCase() === want;
-      match = lenderOk;
-      clearLoan = lenderOk && emailOk;
-    } else {
-      clearLoan = true;
-    }
-    ranked.push({ doc, match, clearLoan, path, name });
-  }
-  const ordered = orderRedactions(ranked, REDACT_LIMIT);
-  for (const row of ordered.later) {
-    pending.push({ reason: "capped", lend: row.doc.name, lender: stringField(row.doc, "lender"), loanId: docId(row.doc) });
-  }
-  for (const row of ordered.now) {
-    if (row.clearLoan && row.path) {
-      const patched = await patchFields(fetchImpl, idToken, project, row.name, ["friendEmail"], ["updatedAt", "serverUpdatedAt"], true);
-      if (patched !== "ok" && patched !== "missing") pending.push({ lender: row.path.lender, loanId: row.path.loanId, reason: "loan" });
-    }
-    const cleared = await patchFields(fetchImpl, idToken, project, row.doc.name, ["borrowerEmail", "borrowerEmailLower"], ["updatedAt", "serverUpdatedAt"], false);
-    if (cleared === "failed") pending.push({ lend: row.doc.name, reason: "lend" });
-  }
-  return pending;
-}
-
 export async function deleteUserFirestore(env, idToken, user, fetchImpl) {
   const fetchFn = fetchImpl || fetch;
   const project = env && env.FIREBASE_PROJECT;
   const uid = user && user.sub;
-  if (!project || !uid || !idToken) return { ok: false, error: GEAR_STILL_HERE, redactPending: [] };
-  const email = String((user && user.email) || "");
+  if (!project || !uid || !idToken) return { ok: false, error: GEAR_STILL_HERE };
   const root = rootUrl(project);
   try {
     await deleteQuery(fetchFn, idToken, root, {
@@ -252,13 +112,7 @@ export async function deleteUserFirestore(env, idToken, user, fetchImpl) {
       where: equalFilter("lender", uid),
     });
   } catch {
-    return { ok: false, error: GEAR_STILL_HERE, redactPending: [] };
+    return { ok: false, error: GEAR_STILL_HERE };
   }
-  let redactPending = [];
-  try {
-    redactPending = await redactBorrowed(fetchFn, idToken, project, root, email, user);
-  } catch {
-    redactPending = [{ reason: "redact" }];
-  }
-  return { ok: true, redactPending };
+  return { ok: true };
 }

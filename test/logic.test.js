@@ -215,6 +215,8 @@ test("server rows drop the offline flag and keep the rest of the item", () => {
   assert.equal(row.notes, "closet");
   assert.equal(row.location, "safe");
   assert.equal(src.offlinePending, true);
+  assert.equal(serverRow({ friendEmail: "Friend@Example.com" }).friendEmailLower, "friend@example.com");
+  assert.equal("friendEmailLower" in serverRow({ name: "Pouch" }), false);
 });
 
 test("a missing storage file is not counted as blocked", () => {

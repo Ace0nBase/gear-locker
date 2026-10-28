@@ -48,13 +48,13 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device and the service worker is version 36", () => {
+test("sign-out clears this device and the service worker is version 37", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v36/);
-  assert.match(read("js/cloud.js"), /APP_VERSION="36"/);
+  assert.match(sw, /war-box-v37/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="37"/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
   assert.match(manifest, /maskable-512\.png/);
@@ -228,9 +228,19 @@ test("local test mode blocks the Google popup script and the page does not allow
   assert.ok(delBody.indexOf("deleteRetryRoute") < delBody.indexOf('where("owner","=="'));
   assert.ok(delBody.indexOf("deleteRetryRoute") < delBody.indexOf('"/account/delete"'));
   assert.doesNotMatch(delBody, /collectionGroup\("loans"\)/);
-  assert.match(delBody, /redactBorrowedClient/);
-  assert.match(delBody, /emailVerified/);
-  assert.match(read("js/cloud.js"), /loanRedactTargets/);
+  assert.doesNotMatch(delBody, /redactBorrowedClient/);
+  assert.doesNotMatch(delBody, /borrowerEmail/);
+  assert.doesNotMatch(read("js/cloud.js"), /loanRedactTargets/);
+  assert.match(read("js/logic.js"), /friendEmailLower/);
+  assert.match(read("firestore.rules"), /lendMailIncreased/);
+  assert.match(read("firestore.rules"), /n <= 40/);
+  assert.match(read("README.md"), /FIREBASE_SA_JSON/);
+  assert.match(read("README.md"), /EMAIL_HMAC_KEY/);
+  assert.match(read("README.md"), /Cloud Datastore User/);
+  assert.doesNotMatch(read("README.md"), /BEGIN PRIVATE KEY/);
+  assert.doesNotMatch(read("api/worker.js"), /BEGIN PRIVATE KEY/);
+  assert.doesNotMatch(read("api/firestore-admin.js"), /BEGIN PRIVATE KEY/);
+  assert.match(read("api/firestore-admin.js"), /https:\/\/www\.googleapis\.com\/auth\/datastore/);
   assert.match(read("js/cloud.js"), /ACCOUNT_DELETED_NOTE/);
   assert.match(read("js/cloud.js"), /deletedAccountGate/);
   assert.match(read("js/logic.js"), /Your account is deleted\./);

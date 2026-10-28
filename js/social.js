@@ -48,10 +48,26 @@ async function mirrorLend(x,removed){
   batch.set(userRef().collection("loans").doc(x.id),stampRow(row));
   const ref=fsdb.collection("lends").doc(x.id);
   const desired=lendDoc(row);
-  if(plan.writeLend&&GearLogic.lendNeedsWrite(desired,lentRemote[x.id]))batch.set(ref,desired,{merge:true});
+  const needs=plan.writeLend&&GearLogic.lendNeedsWrite(desired,lentRemote[x.id]);
+  const creating=needs&&!lentRemote[x.id];
+  if(needs&&!creating)batch.set(ref,desired,{merge:true});
   pushed["loans/"+x.id]=row.updatedAt;
   try{await batch.commit()}
   catch(e){delete pushed["loans/"+x.id];toast("Couldn't send the loan to your friend's app: "+(e.message||"try again"),5000);return}
+  if(creating){
+    try{
+      const mail=userRef().collection("lendMail").doc(await GearLogic.lendMailDocId(desired.borrowerEmailLower||desired.borrowerEmail));
+      const snap=await mail.get();
+      const n=snap.exists?Math.floor(+((snap.data()||{}).n)||0):0;
+      if(n>=GearLogic.LEND_EMAIL_CAP)toast("That email already has the maximum number of loans from you.",5000);
+      else{
+        const create=fsdb.batch();
+        create.set(mail,{n:n+1,loanId:x.id});
+        create.set(ref,desired,{merge:true});
+        await create.commit();
+      }
+    }catch(e){toast("Couldn't send the loan to your friend's app: "+(e.message||"try again"),5000)}
+  }
   if(plan.deleteLend&&lentRemote[x.id]){try{await ref.delete()}catch(e){}}
 }
 async function recoverOrphanLends(){
@@ -98,12 +114,28 @@ async function repairLoanMirrors(){
   const plan=GearLogic.lendMirrorOps(jobs,desired,lentRemote);
   const sets=plan.filter(function(op){return op.op==="set"});
   const dels=plan.filter(function(op){return op.op==="delete"});
-  for(let i=0;i<sets.length;i+=400){
+  const updates=sets.filter(function(op){return lentRemote[op.id]});
+  const creates=sets.filter(function(op){return !lentRemote[op.id]});
+  for(let i=0;i<updates.length;i+=400){
     const batch=fsdb.batch();
-    sets.slice(i,i+400).forEach(function(op){
+    updates.slice(i,i+400).forEach(function(op){
       if(desired[op.id])batch.set(fsdb.collection("lends").doc(op.id),desired[op.id],{merge:true});
     });
     try{await batch.commit()}catch(e){}
+  }
+  for(const op of creates){
+    const doc=desired[op.id];
+    if(!doc)continue;
+    try{
+      const mail=userRef().collection("lendMail").doc(await GearLogic.lendMailDocId(doc.borrowerEmailLower||doc.borrowerEmail));
+      const snap=await mail.get();
+      const n=snap.exists?Math.floor(+((snap.data()||{}).n)||0):0;
+      if(n>=GearLogic.LEND_EMAIL_CAP)continue;
+      const batch=fsdb.batch();
+      batch.set(mail,{n:n+1,loanId:op.id});
+      batch.set(fsdb.collection("lends").doc(op.id),doc,{merge:true});
+      await batch.commit();
+    }catch(e){}
   }
   for(const op of dels){try{await fsdb.collection("lends").doc(op.id).delete()}catch(e){}}
 }

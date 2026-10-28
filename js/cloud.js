@@ -210,48 +210,6 @@ async function updateDocRefs(pairs){
     await b.commit();
   }
 }
-function emailPatch(data,email,fields){
-  const next=GearLogic.loanEmailRedaction(data,email);
-  if(!next)return null;
-  const want=String(email||"").trim().toLowerCase();
-  const patch={};
-  fields.forEach(function(f){if(String(data[f]||"").trim().toLowerCase()===want)patch[f]=""});
-  if(!Object.keys(patch).length)return null;
-  patch.updatedAt=now();
-  patch.serverUpdatedAt=firebase.firestore.FieldValue.serverTimestamp();
-  return patch;
-}
-function borrowerStamp(){return firebase.firestore.FieldValue.serverTimestamp()}
-function lendRedactPatch(data,email){
-  const next=GearLogic.loanEmailRedaction(data,email);
-  if(!next)return null;
-  const want=String(email||"").trim().toLowerCase();
-  const borrower=String(data.borrowerEmail||"").trim().toLowerCase()===want||String(data.borrowerEmailLower||"").trim().toLowerCase()===want;
-  if(!borrower)return null;
-  return {borrowerEmail:"",borrowerEmailLower:"",updatedAt:borrowerStamp(),serverUpdatedAt:firebase.firestore.FieldValue.serverTimestamp()};
-}
-async function redactBorrowedClient(email,verified){
-  if(!email||!verified)return;
-  const lendDocs=[];
-  const lendSeen=new Set();
-  try{
-    const exact=await fsdb.collection("lends").where("borrowerEmail","==",email).get();
-    exact.docs.forEach(function(d){if(!lendSeen.has(d.id)){lendSeen.add(d.id);lendDocs.push(d)}});
-    if(email===email.toLowerCase()){
-      const lowerSnap=await fsdb.collection("lends").where("borrowerEmailLower","==",email).get();
-      lowerSnap.docs.forEach(function(d){if(!lendSeen.has(d.id)){lendSeen.add(d.id);lendDocs.push(d)}});
-    }
-  }catch(e){return}
-  const targets=GearLogic.loanRedactTargets(lendDocs.map(function(d){return {id:d.id,lender:(d.data()||{}).lender}}));
-  const stamp=borrowerStamp();
-  for(const p of targets.paths){
-    try{await fsdb.collection("users").doc(p.lender).collection("loans").doc(p.loanId).update({friendEmail:"",updatedAt:stamp,serverUpdatedAt:firebase.firestore.FieldValue.serverTimestamp()})}
-    catch(e){}
-  }
-  for(const d of lendDocs){
-    try{const patch=lendRedactPatch(d.data(),email);if(patch)await d.ref.update(patch)}catch(e){}
-  }
-}
 async function deleteDocRefs(refs){
   const list=(refs||[]).filter(Boolean);
   for(let i=0;i<list.length;i+=400){
@@ -296,7 +254,6 @@ async function deleteMyAccount(password,signal){
     });
     if(shareRefs.length)removedAny=true;
     await deleteDocRefs(shareRefs);
-    await redactBorrowedClient(String(u.email||""),!!u.emailVerified);
     const lends=await fsdb.collection("lends").where(GearLogic.accountDeletePlan(u.uid).lendField,"==",u.uid).get();
     if(lends.docs.length)removedAny=true;
     await deleteDocRefs(lends.docs.map(d=>d.ref));
@@ -412,7 +369,7 @@ async function qaStorageCheckRun(){
   else toast("Storage check failed. Another account or a signed-out check was not blocked ("+otherCode+" / "+signedOutCode+").",6000);
 }
 }
-var APP_VERSION="36";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+var APP_VERSION="37";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 if("serviceWorker" in navigator&&GearLogic.serviceWorkerAllowed(location,window.GEAR_QA)){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const poke=()=>{if(reg.waiting)reg.waiting.postMessage({type:"skip-waiting"});reg.update().catch(()=>{})};reg.addEventListener("updatefound",()=>{const worker=reg.installing;if(worker)worker.addEventListener("statechange",()=>{if(worker.state==="installed")poke()})});document.addEventListener("visibilitychange",()=>{if(!document.hidden)poke()});setInterval(poke,20*60e3);poke()}).catch(()=>{});

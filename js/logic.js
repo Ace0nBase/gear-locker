@@ -666,9 +666,13 @@ export function loanSharePlan(loan, opts) {
 }
 
 // Drop client-only flags before a row is written to the server.
+// A loan stores friendEmailLower so the server can find it without a lend.
 export function serverRow(row) {
   const copy = { ...(row || {}) };
   delete copy.offlinePending;
+  if (Object.prototype.hasOwnProperty.call(copy, "friendEmail")) {
+    copy.friendEmailLower = String(copy.friendEmail || "").trim().toLowerCase();
+  }
   return copy;
 }
 
@@ -736,10 +740,10 @@ export function deletedAccountGate(loadedWith, shown) {
   };
 }
 
-// A failed queue write is an error. Pending means the hourly job still has usage counters to clear.
-export function deleteCleanupResult(countersCleared, queueSaved) {
-  if (!queueSaved) {
-    return { status: 502, body: { error: "Couldn't finish deleting the account. Try again." } };
+// Both queues are written before the sign-in is deleted. A failed queue leaves the sign-in in place.
+export function deleteCleanupResult(queuesSaved, countersCleared) {
+  if (!queuesSaved) {
+    return { status: 502, body: { error: "Couldn't finish deleting the account. Your sign-in is still here. Try again." } };
   }
   return {
     status: 200,
@@ -784,10 +788,14 @@ export function cleanupRetryPlan(record, nowMs) {
   return { action: "retry", body, raw };
 }
 
-// Confirmed lender loans go first, so forged lends do not fill the redaction cap.
+// One lender can publish this many lends to the same email. Rules enforce it on create.
+export const LEND_EMAIL_CAP = 40;
+
+// Confirmed lender loans go first inside a page. The server job has no overall cap.
 export function orderRedactions(candidates, limit) {
-  const n = Math.max(0, Math.floor(limit == null ? REDACT_LIMIT : +limit));
-  const ranked = (candidates || []).map((row, index) => ({
+  const all = candidates || [];
+  const n = limit == null ? all.length : Math.max(0, Math.floor(+limit));
+  const ranked = all.map((row, index) => ({
     row,
     index,
     rank: row && row.match ? (row.clearLoan ? 2 : 1) : 0,
@@ -797,8 +805,94 @@ export function orderRedactions(candidates, limit) {
   return { now: ordered.slice(0, n), later: ordered.slice(n) };
 }
 
-// One delete request writes this many redactions. Real lender loans are ordered first. The rest are reported as capped and are not stored.
-export const REDACT_LIMIT = 40;
+// Uppercase hex matches Firestore rules hashing.sha256(...).toHexString().
+export async function lendMailDocId(email) {
+  const addr = String(email || "").trim().toLowerCase();
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(addr));
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+// One cron pass stays under the Workers subrequest limit. The job resumes next hour.
+export const REDACT_PAGE_SIZE = 4;
+export const REDACT_OPS_BUDGET = 20;
+export const REDACT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+export const REDACT_RECORD_MAX_BYTES = 800;
+
+export function redactionJobBody(uid, email, nowIso) {
+  const id = String(uid || "").trim();
+  const addr = String(email || "").trim().toLowerCase();
+  if (!id || id.length > 128 || /[\s/]/.test(id)) return null;
+  if (!addr || addr.length > 200 || !addr.includes("@")) return null;
+  const raw = JSON.stringify({
+    uid: id,
+    email: addr,
+    at: String(nowIso || ""),
+    attempts: 0,
+    phase: "loans",
+    cursor: "",
+    lendCursor: "",
+  });
+  if (raw.length > REDACT_RECORD_MAX_BYTES) return null;
+  return raw;
+}
+
+function redactionRecord(record, extra) {
+  const atMs = Date.parse(record && record.at);
+  const body = {
+    uid: String((record && record.uid) || "").slice(0, 128),
+    email: String((record && record.email) || "").trim().toLowerCase().slice(0, 200),
+    at: Number.isFinite(atMs) ? record.at : "",
+    attempts: extra.attempts,
+    lastTry: extra.lastTry,
+    phase: extra.phase || (record && record.phase) || "loans",
+    cursor: String(extra.cursor != null ? extra.cursor : (record && record.cursor) || "").slice(0, 300),
+    lendCursor: String(extra.lendCursor != null ? extra.lendCursor : (record && record.lendCursor) || "").slice(0, 300),
+  };
+  let raw = JSON.stringify(body);
+  if (raw.length > REDACT_RECORD_MAX_BYTES) {
+    body.cursor = "";
+    body.lendCursor = "";
+    raw = JSON.stringify(body);
+  }
+  if (!body.uid || !body.email || raw.length > REDACT_RECORD_MAX_BYTES) return null;
+  return raw;
+}
+
+// The job expires 30 days after it was queued. Backoff skips a rewrite while the wait is still running.
+export function redactionRetryPlan(record, nowMs) {
+  const now = nowMs == null ? Date.now() : +nowMs;
+  if (!record || typeof record !== "object") return { action: "delete" };
+  const atMs = Date.parse(record.at);
+  const age = Number.isFinite(atMs) ? now - atMs : REDACT_MAX_AGE_MS + 1;
+  if (!record.email || age > REDACT_MAX_AGE_MS) return { action: "delete" };
+  const attempts = Math.max(0, Math.floor(+record.attempts || 0));
+  const lastMs = Date.parse(record.lastTry);
+  const basis = Number.isFinite(lastMs) ? lastMs : (Number.isFinite(atMs) ? atMs : now);
+  const waitHours = attempts <= 0 ? 0 : Math.min(24, 2 ** (attempts - 1));
+  if (attempts > 0 && now < basis + waitHours * 60 * 60 * 1000) return { action: "wait" };
+  return { action: "retry" };
+}
+
+export function redactionProgressBody(record, state, nowMs) {
+  const now = nowMs == null ? Date.now() : +nowMs;
+  return redactionRecord(record, {
+    attempts: 0,
+    lastTry: new Date(now).toISOString(),
+    phase: state && state.phase,
+    cursor: state && state.cursor,
+    lendCursor: state && state.lendCursor,
+  });
+}
+
+export function redactionFailureBody(record, nowMs) {
+  const now = nowMs == null ? Date.now() : +nowMs;
+  const atMs = Date.parse(record && record.at);
+  if (!Number.isFinite(atMs) || now - atMs > REDACT_MAX_AGE_MS) return null;
+  return redactionRecord(record, {
+    attempts: Math.max(0, Math.floor(+(record && record.attempts) || 0)) + 1,
+    lastTry: new Date(now).toISOString(),
+  });
+}
 
 // A searching round can carry this much input. The loop applies it only after a round that searched,
 // so the first call uses the real estimate and still has to fit the hold.
@@ -1891,7 +1985,9 @@ const GearLogic = {
   reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
   ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,
   CLEANUP_MAX_ATTEMPTS, CLEANUP_MAX_AGE_MS, CLEANUP_RECORD_MAX_BYTES, orderRedactions,
-  REDACT_LIMIT, lendNeedsWrite, lendMirrorOps,
+  LEND_EMAIL_CAP, lendMailDocId, REDACT_PAGE_SIZE, REDACT_OPS_BUDGET, REDACT_MAX_AGE_MS, REDACT_RECORD_MAX_BYTES,
+  redactionJobBody, redactionRetryPlan, redactionProgressBody, redactionFailureBody,
+  lendNeedsWrite, lendMirrorOps,
   ROUND_INPUT_TOKEN_CAP, roundInputTokens, flooredSearchRoundMicro,
   refreshAuthClaims, loanSharePlan, orphanLoansFromLends, serverRow, loanNeedsItem, storagePrivacyVerdict, cloudWriteDelay, serviceWorkerAllowed, saleRestricted,
   countedValue, csvExportField, csvCell, publicWeightNote, lookupAnswerRestricted, localDay,
