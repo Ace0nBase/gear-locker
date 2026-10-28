@@ -685,7 +685,7 @@ async function lookupOne(env, it, budget) {
   return { id: clean.id, ok: true, ...fields, usage, spendMicro };
 }
 
-const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", BETA_ONLY: "", REVIEW_EMAILS: "", REVIEW_DAILY_LIMIT: "8", FREE_SPEND_CAP_USD: "25", PLAN_LIMIT_FREE: "40", PLAN_LIMIT_PRO: "400", PLAN_LIMIT_ARMORY: "2000", SPEND_INPUT_PER_MILLION: "1", SPEND_OUTPUT_PER_MILLION: "5", SPEND_SEARCH_EACH: "0.01", FALLBACK_INPUT_PER_MILLION: "3", FALLBACK_OUTPUT_PER_MILLION: "15", FALLBACK_SEARCH_EACH: "0.01", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
+const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", BETA_ONLY: "", REVIEW_EMAILS: "", REVIEW_DAILY_LIMIT: "8", FREE_SPEND_CAP_USD: "25", PLAN_LIMIT_FREE: "10", PLAN_LIMIT_PRO: "100", PLAN_LIMIT_ARMORY: "500", SPEND_INPUT_PER_MILLION: "1", SPEND_OUTPUT_PER_MILLION: "5", SPEND_SEARCH_EACH: "0.01", FALLBACK_INPUT_PER_MILLION: "3", FALLBACK_OUTPUT_PER_MILLION: "15", FALLBACK_SEARCH_EACH: "0.01", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
 const ROUTES = ["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/watch/push", "/battery", "/ammo", "/pace"];
 
 export default {
