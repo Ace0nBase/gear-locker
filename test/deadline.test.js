@@ -1,9 +1,9 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import worker, { UsageLedger } from "../api/worker.js";
+import worker, { UsageLedger, clearJwksCache, setTestHandlerDelay } from "../api/worker.js";
 import {
-  MODEL_CALLS, REQUEST_DEADLINE_MS, ROUND_FLOOR_MS, ROUND_FLOOR_MIN_MS, USAGE_HOLD_STALE_MS,
+  MODEL_CALLS, REQUEST_DEADLINE_MS, REQUEST_DEADLINE_MIN_MS, ROUND_FLOOR_MS, ROUND_FLOOR_MIN_MS, USAGE_HOLD_STALE_MS,
   clampedDeadlineBudget, clampedRoundFloor, dailySpendKey, estimateInputTokens, estimateSpendMicro,
   inflightKey, poolSpendKey, ratesForModel,
 } from "../js/logic.js";
@@ -81,7 +81,7 @@ function post(path, body, env) {
 
 function hang(opts) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("model call was not aborted")), 4000);
+    const timer = setTimeout(() => reject(new Error("model call was not aborted")), 25000);
     const fail = () => { clearTimeout(timer); reject(new DOMException("The operation was aborted", "AbortError")); };
     const signal = opts && opts.signal;
     if (!signal) return;
@@ -147,14 +147,21 @@ describe("request deadline and abort billing", { concurrency: false }, () => {
     assert.equal(clampedDeadlineBudget("500000"), cap);
     assert.equal(clampedDeadlineBudget("999999999"), 100_000);
     assert.ok(clampedDeadlineBudget("999999999") < USAGE_HOLD_STALE_MS);
-    assert.equal(clampedDeadlineBudget("1500"), 1500);
+    assert.equal(REQUEST_DEADLINE_MIN_MS, 5_000);
+    assert.equal(clampedDeadlineBudget("1"), REQUEST_DEADLINE_MIN_MS);
+    assert.equal(clampedDeadlineBudget("1500"), REQUEST_DEADLINE_MIN_MS);
+    assert.equal(clampedDeadlineBudget("4999"), REQUEST_DEADLINE_MIN_MS);
+    assert.equal(clampedDeadlineBudget("5000"), REQUEST_DEADLINE_MIN_MS);
+    assert.equal(clampedDeadlineBudget("5001"), 5001);
     assert.equal(clampedRoundFloor("90000", 100_000), ROUND_FLOOR_MS);
-    assert.equal(clampedRoundFloor("500", 1200), 500);
+    assert.equal(clampedRoundFloor("0", 5000), 5000);
+    assert.equal(clampedRoundFloor("1", 8000), 8000);
+    assert.equal(clampedRoundFloor("500", 1200), 1200);
     assert.ok(clampedRoundFloor("90000", 100_000) < clampedDeadlineBudget("500000"));
   });
 
   test("a fallback that starts is aborted on the shared deadline and keeps the primary usage", async () => {
-    const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "250", ROUND_FLOOR_MS: "40" });
+    const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "20000", ROUND_FLOOR_MS: "15000" });
     let fallbacks = 0;
     let fallbackInput = 0;
     const restore = installFetch(async (url, opts) => {
@@ -433,7 +440,7 @@ describe("request deadline and abort billing", { concurrency: false }, () => {
   });
 
   test("one deadline is shared by every item and every round in the request", async () => {
-    const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "400", ROUND_FLOOR_MS: "40" });
+    const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "20000", ROUND_FLOOR_MS: "15000" });
     const signals = [];
     let calls = 0;
     const restore = installFetch(async (url, opts) => {
@@ -467,7 +474,8 @@ describe("request deadline and abort billing", { concurrency: false }, () => {
         await hang(opts);
         return new Response("{}", { status: 200 });
       };
-      await post("/lookup", { items: [{ id: "other", name: "Other", category: "Pouches" }] }, env);
+      const quick = ledgerEnv({ REQUEST_DEADLINE_MS: "5000" });
+      await post("/lookup", { items: [{ id: "other", name: "Other", category: "Pouches" }] }, quick.env);
       assert.equal(secondSignals.length > 0, true);
       assert.equal(secondSignals[0] === signals[0], false);
     } finally { restore(); }
@@ -486,11 +494,12 @@ describe("request deadline and abort billing", { concurrency: false }, () => {
       assert.equal(clampedRoundFloor(raw, 100_000), ROUND_FLOOR_MS, raw);
     }
     assert.notEqual(clampedRoundFloor("0x10", 100_000), 16);
-    assert.equal(clampedRoundFloor("500", 1200), 500);
+    assert.equal(clampedRoundFloor("0", 5000), 5000);
+    assert.equal(clampedRoundFloor("500", 1200), 1200);
   });
 
   test("a lookup body-read abort keeps the finished round", async () => {
-    const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "400", ROUND_FLOOR_MS: "30" });
+    const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "20000", ROUND_FLOOR_MS: "15000" });
     const round1 = { input_tokens: 8000, output_tokens: 400, web_search_requests: 3 };
     let calls = 0;
     let expected = 0;
@@ -513,7 +522,7 @@ describe("request deadline and abort billing", { concurrency: false }, () => {
   });
 
   test("a fallback body-read abort keeps the primary and the finished fallback round", async () => {
-    const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "700", ROUND_FLOOR_MS: "40" });
+    const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "20000", ROUND_FLOOR_MS: "15000" });
     const rated = { FALLBACK_MODEL: "claude-sonnet-5-5", MODEL: "claude-haiku-5-5" };
     const primaryUsage = { input_tokens: 4000, output_tokens: 800, web_search_requests: 2 };
     const fallbackUsage = { input_tokens: 3000, output_tokens: 600, web_search_requests: 1 };
@@ -543,7 +552,7 @@ describe("request deadline and abort billing", { concurrency: false }, () => {
   });
 
   test("a hang abort after a finished lookup round keeps that round", async () => {
-    const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "400", ROUND_FLOOR_MS: "30" });
+    const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "20000", ROUND_FLOOR_MS: "15000" });
     const round1 = { input_tokens: 8000, output_tokens: 400, web_search_requests: 3 };
     let calls = 0;
     let expected = 0;
@@ -665,9 +674,10 @@ describe("request deadline and abort billing", { concurrency: false }, () => {
   });
 
   test("time before the model call counts toward the deadline", async () => {
-    const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "200", HANDLER_DELAY_MS: "120" });
+    const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "5000" });
     let expected = 0;
     let calls = 0;
+    setTestHandlerDelay(2500);
     const restore = installFetch(async (url, opts) => {
       calls += 1;
       expected = inputEstimate(JSON.parse(opts.body));
@@ -680,11 +690,14 @@ describe("request deadline and abort billing", { concurrency: false }, () => {
       const elapsed = Date.now() - started;
       assert.equal(res.status, 502);
       assert.equal(calls, 1);
-      assert.ok(elapsed < 280, "elapsed " + elapsed);
+      assert.ok(elapsed > 4500 && elapsed < 6500, "elapsed " + elapsed);
       const got = spendNow(sql);
       assert.equal(got.daily, expected);
       assert.equal(got.pool, expected);
-    } finally { restore(); }
+    } finally {
+      setTestHandlerDelay(0);
+      restore();
+    }
   });
 
   test("October's hourly job keeps the old pool keys before the seed", async () => {
@@ -752,12 +765,12 @@ describe("request deadline and abort billing", { concurrency: false }, () => {
   });
 
   test("a request that finishes late logs how far past the deadline it ran", async () => {
-    const { env } = ledgerEnv({ REQUEST_DEADLINE_MS: "40" });
+    const { env } = ledgerEnv({ REQUEST_DEADLINE_MS: "5000" });
     const logs = [];
     const orig = console.log;
     console.log = (...args) => { logs.push(args.map(String).join(" ")); };
     const restore = installFetch(async () => {
-      await new Promise(r => setTimeout(r, 5200));
+      await new Promise(r => setTimeout(r, 11000));
       return new Response(JSON.stringify({
         stop_reason: "end_turn",
         content: [{ type: "text", text: '{"retailNew":1,"usedLow":1,"usedHigh":2,"value":1,"weightOz":8,"priceNote":"","weightNote":"","sources":[]}' }],
@@ -771,8 +784,208 @@ describe("request deadline and abort billing", { concurrency: false }, () => {
       const match = /^deadline: late (\d+)ms \/lookup$/.exec(line);
       assert.ok(match, line);
       assert.ok(Number(match[1]) > 5000);
+      assert.doesNotMatch(line, new RegExp(sub));
+      assert.doesNotMatch(line, /@/);
     } finally {
       console.log = orig;
+      restore();
+    }
+  });
+
+  test("the 15s guard holds when the deadline is under 15s", async () => {
+    assert.equal(clampedRoundFloor("0", 5000), 5000);
+    assert.equal(clampedRoundFloor("10", 6000), 6000);
+    assert.equal(clampedRoundFloor("90000", 8000), 8000);
+    const { env } = ledgerEnv({ REQUEST_DEADLINE_MS: "6000", ROUND_FLOOR_MS: "0" });
+    let calls = 0;
+    const restore = installFetch(async () => {
+      calls += 1;
+      await new Promise(r => setTimeout(r, 40));
+      return pauseTurn({ input_tokens: 100, output_tokens: 10, web_search_requests: 1 });
+    });
+    try {
+      const res = await post("/lookup", { items: [{ id: "guard", name: "Guard", category: "Pouches" }] }, env);
+      assert.equal(res.status, 502);
+      assert.equal(calls, 1);
+    } finally { restore(); }
+  });
+
+  test("HANDLER_DELAY_MS does not delay a production request", async () => {
+    const { env } = ledgerEnv({ HANDLER_DELAY_MS: "12000", REQUEST_DEADLINE_MS: "5000" });
+    const started = Date.now();
+    const res = await worker.fetch(new Request("https://gear-locker-api.example/health"), env);
+    assert.equal(res.status, 200);
+    assert.ok(Date.now() - started < 1000);
+  });
+
+  test("an unsent call on identify, battery, pace, and deal adds no input estimate", async () => {
+    const routes = [
+      ["/identify", { image: "aaaa", category: "Pouches" }, {}, 502],
+      ["/battery", { name: "Light", category: "Pouches" }, {}, 502],
+      ["/pace", { location: "Camp" }, {}, 502],
+      ["/watch/check", { id: "w1" }, { WATCH: watchFor([{ id: "w1", name: "Pouch", category: "Pouches", target: 20 }]) }, 200],
+    ];
+    let calls = 0;
+    setTestHandlerDelay(6000);
+    const restore = installFetch(async () => {
+      calls += 1;
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    });
+    try {
+      const runs = routes.map(([path, body, extra, status]) => {
+        const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "5000", ...extra });
+        return post(path, body, env).then(async res => ({ path, status, res, sql }));
+      });
+      for (const one of await Promise.all(runs)) {
+        assert.equal(one.res.status, one.status, one.path);
+        const got = spendNow(one.sql);
+        assert.equal(got.daily, 0, one.path);
+        assert.equal(got.pool, 0, one.path);
+      }
+      assert.equal(calls, 0);
+    } finally {
+      setTestHandlerDelay(0);
+      restore();
+    }
+  });
+
+  test("a slow sign-in key fetch stops on the request deadline", async () => {
+    clearJwksCache();
+    const { env } = ledgerEnv({ REQUEST_DEADLINE_MS: "5000" });
+    let sawSignal = false;
+    let anthropic = 0;
+    const orig = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.includes("googleapis.com") && !u.includes("identitytoolkit")) {
+        sawSignal = !!(opts && opts.signal);
+        await hang(opts);
+        return new Response(JSON.stringify(jwks), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (u.includes("anthropic")) anthropic += 1;
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    };
+    try {
+      const started = Date.now();
+      const res = await post("/lookup", { items: [{ id: "jwks", name: "Keys", category: "Pouches" }] }, env);
+      const elapsed = Date.now() - started;
+      assert.equal(res.status, 401);
+      assert.equal(sawSignal, true);
+      assert.equal(anthropic, 0);
+      assert.ok(elapsed > 4000 && elapsed < 8000, "elapsed " + elapsed);
+    } finally {
+      clearJwksCache();
+      globalThis.fetch = orig;
+    }
+  });
+
+  test("other routes log a late deadline without a uid or email", async () => {
+    const logs = [];
+    const orig = console.log;
+    console.log = (...args) => { logs.push(args.map(String).join(" ")); };
+    const restore = installFetch(async () => {
+      await new Promise(r => setTimeout(r, 11000));
+      return new Response(JSON.stringify({
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "{}" }],
+        usage: { input_tokens: 10, output_tokens: 10, web_search_requests: 0 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const specs = [
+      ["/identify", { image: "aaaa", category: "Pouches" }, {}],
+      ["/battery", { name: "Light", category: "Pouches" }, {}],
+      ["/pace", { location: "Camp" }, {}],
+      ["/watch/check", { id: "w1" }, { WATCH: watchFor([{ id: "w1", name: "Pouch", category: "Pouches", target: 20 }]) }],
+    ];
+    try {
+      await Promise.all(specs.map(([path, body, extra]) => {
+        const { env } = ledgerEnv({ REQUEST_DEADLINE_MS: "5000", ...extra });
+        return post(path, body, env);
+      }));
+      for (const path of ["/identify", "/battery", "/pace", "/watch/check"]) {
+        const line = logs.find(l => l.endsWith(" " + path));
+        assert.ok(line, logs.join("\n"));
+        const match = new RegExp("^deadline: late (\\d+)ms " + path.replace("/", "\\/") + "$").exec(line);
+        assert.ok(match, line);
+        assert.ok(Number(match[1]) > 5000);
+        assert.doesNotMatch(line, new RegExp(sub));
+        assert.doesNotMatch(line, /user@example\.com/);
+        assert.doesNotMatch(line, /@/);
+      }
+    } finally {
+      console.log = orig;
+      restore();
+    }
+  });
+
+  test("the hourly job logs when it ends late and does not log a uid or email", async () => {
+    const uid = "cronlate";
+    const email = "cron-late@example.com";
+    const { env } = ledgerEnv({ REQUEST_DEADLINE_MS: "5000" });
+    env.WATCH = {
+      list: async () => ({ keys: [{ name: "w:" + uid }], list_complete: true }),
+      get: async (key, type) => {
+        if (key !== "w:" + uid) return null;
+        const rec = { email, emailVerified: true, list: [{ id: "w1", name: "Pouch", category: "Pouches", target: 20 }] };
+        return type === "json" ? rec : JSON.stringify(rec);
+      },
+      put: async () => {},
+      delete: async () => {},
+    };
+    const logs = [];
+    const orig = console.log;
+    console.log = (...args) => { logs.push(args.map(String).join(" ")); };
+    const restore = installFetch(async (url) => {
+      if (!String(url).includes("anthropic")) return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      await new Promise(r => setTimeout(r, 11000));
+      return new Response(JSON.stringify({
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: '{"price":30,"where":"Amazon","url":"https://example.com","condition":"new","note":"in stock"}' }],
+        usage: { input_tokens: 20, output_tokens: 10, web_search_requests: 0 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    try {
+      let job;
+      await worker.scheduled({}, env, { waitUntil(p) { job = p; } });
+      await job;
+      const line = logs.find(l => l.startsWith("deadline: late ") && l.endsWith(" cron"));
+      assert.ok(line, logs.join("\n"));
+      const match = /^deadline: late (\d+)ms cron$/.exec(line);
+      assert.ok(match, line);
+      assert.ok(Number(match[1]) > 5000);
+      assert.equal(logs.some(entry => entry.includes(uid) || entry.includes(email)), false, logs.join("\n"));
+    } finally {
+      console.log = orig;
+      restore();
+    }
+  });
+
+  test("a body-read abort is billed once after the hourly run", async () => {
+    const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "5000" });
+    let expected = 0;
+    const restore = installFetch(async (url, opts) => {
+      const body = JSON.parse(opts.body);
+      expected = inputEstimate(body);
+      return bodyStall(opts);
+    });
+    const orig = globalThis.fetch;
+    try {
+      const res = await post("/lookup", { items: [{ id: "once", name: "Once", category: "Pouches" }] }, env);
+      assert.equal(res.status, 502);
+      const first = spendNow(sql);
+      assert.equal(first.daily, expected);
+      assert.equal(first.pool, expected);
+      assert.ok(expected > 0);
+      restore();
+      globalThis.fetch = async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      let job;
+      await worker.scheduled({}, env, { waitUntil(p) { job = p; } });
+      await job;
+      const again = spendNow(sql);
+      assert.equal(again.daily, expected);
+      assert.equal(again.pool, expected);
+    } finally {
+      globalThis.fetch = orig;
       restore();
     }
   });

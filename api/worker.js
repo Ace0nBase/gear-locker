@@ -30,6 +30,17 @@ function claudeBody(model, fields) {
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 let jwksCache = null, jwksAt = 0;
+// Tests spend time before a route runs. This is not an environment setting.
+let testHandlerDelayMs = 0;
+
+export function clearJwksCache() {
+  jwksCache = null;
+  jwksAt = 0;
+}
+
+export function setTestHandlerDelay(ms) {
+  testHandlerDelayMs = Math.max(0, Math.round(+ms || 0));
+}
 
 function cors(env, req) {
   const origin = req.headers.get("origin") || "";
@@ -50,22 +61,22 @@ function b64u(s) {
   while (s.length % 4) s += "=";
   return Uint8Array.from(atob(s), c => c.charCodeAt(0));
 }
-async function keys() {
+async function keys(signal) {
   if (jwksCache && Date.now() - jwksAt < 3600e3) return jwksCache;
-  const r = await fetch(JWKS_URL);
+  const r = await fetch(JWKS_URL, { signal });
   if (!r.ok) throw new Error("Couldn't load Google sign-in keys");
   jwksCache = (await r.json()).keys || [];
   jwksAt = Date.now();
   return jwksCache;
 }
-async function verifyFirebaseToken(token, project) {
+async function verifyFirebaseToken(token, project, signal) {
   const parts = (token || "").split(".");
   if (parts.length !== 3) throw new Error("bad token");
   const [h, p, sig] = parts;
   const head = JSON.parse(new TextDecoder().decode(b64u(h)));
   const pay = JSON.parse(new TextDecoder().decode(b64u(p)));
   if (head.alg !== "RS256") throw new Error("bad alg");
-  const jwk = (await keys()).find(k => k.kid === head.kid);
+  const jwk = (await keys(signal)).find(k => k.kid === head.kid);
   if (!jwk) throw new Error("unknown key");
   const key = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
   const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, b64u(sig), new TextEncoder().encode(h + "." + p));
@@ -658,7 +669,7 @@ async function listWatchUsers(env) {
   } while (cursor);
   return users;
 }
-async function runDueWatches(env, budget) {
+async function runDueWatches(env, budget, deadline) {
   if (!env.WATCH || !usageStub(env)) return 0;
   const gapMs = Math.max(1, +(env.MIN_ALERT_GAP_HOURS || 20)) * 3600e3;
   const alertLimit = +(env.ALERT_DAILY_CAP || 6);
@@ -695,7 +706,7 @@ async function runDueWatches(env, budget) {
     if (!hold.ok) continue;
     const wasHit = !!(w.best && w.best.hit);
     try {
-      const b = await dealCheck(env, w, hold.reserved || null, openDeadline(env));
+      const b = await dealCheck(env, w, hold.reserved || null, deadline || openDeadline(env));
       const spentUsage = b.usage;
       delete b.usage;
       w.best = b; w.lastErr = "";
@@ -917,10 +928,10 @@ export default {
     const env = { ...DEFAULTS };
     for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
     const deadline = openDeadline(env);
-    if (env.HANDLER_DELAY_MS) await new Promise(r => setTimeout(r, Math.max(0, Math.round(+env.HANDLER_DELAY_MS || 0))));
     let route = "";
     try { route = new URL(req.url).pathname; } catch { route = ""; }
     try {
+    if (testHandlerDelayMs) await new Promise(r => setTimeout(r, testHandlerDelayMs));
     const h = cors(env, req);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: h });
     const url = new URL(req.url);
@@ -929,7 +940,7 @@ export default {
       if (req.method !== "POST") return json({ error: "Not found" }, 404, h);
       const idToken = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
       let accountUser;
-      try { accountUser = await verifyFirebaseToken(idToken, env.FIREBASE_PROJECT); }
+      try { accountUser = await verifyFirebaseToken(idToken, env.FIREBASE_PROJECT, deadline.signal); }
       catch { return json({ error: "Please sign in again." }, 401, h); }
       if (!signInIsRecent(accountUser.auth_time)) return json({ error: "Enter your password again, then delete the account." }, 401, h);
       try {
@@ -953,7 +964,7 @@ export default {
       if (req.method !== "POST") return json({ error: "Not found" }, 404, h);
       const sessionToken = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
       let sessionUser;
-      try { sessionUser = await verifyFirebaseToken(sessionToken, env.FIREBASE_PROJECT); }
+      try { sessionUser = await verifyFirebaseToken(sessionToken, env.FIREBASE_PROJECT, deadline.signal); }
       catch { return json({ error: "Please sign in again." }, 401, h); }
       await releaseEmailHold(env, sessionUser);
       return json({ ok: true }, 200, h);
@@ -962,7 +973,7 @@ export default {
     if (!env.ANTHROPIC_API_KEY) return json({ error: "Lookup service isn't set up yet (missing API key)." }, 503, h);
 
     let user;
-    try { user = await verifyFirebaseToken((req.headers.get("authorization") || "").replace(/^Bearer\s+/i, ""), env.FIREBASE_PROJECT); }
+    try { user = await verifyFirebaseToken((req.headers.get("authorization") || "").replace(/^Bearer\s+/i, ""), env.FIREBASE_PROJECT, deadline.signal); }
     catch { return json({ error: "Please sign in again." }, 401, h); }
     await releaseEmailHold(env, user);
     const access = decideAccess(user, env);
@@ -1126,14 +1137,21 @@ export default {
   async scheduled(event, rawEnv, ctx) {
     const env = { ...DEFAULTS };
     for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
+    const deadline = openDeadline(env);
+    const route = "cron";
     ctx.waitUntil((async () => {
-      const now = env.NOW ? new Date(env.NOW) : new Date();
-      await serviceAccountLogLine(env);
-      await sweepTombstones(env);
-      await pruneUsageCounters(env, now);
-      await retryQueuedCleanups(env);
-      await runQueuedRedactions(env);
-      if (env.ANTHROPIC_API_KEY) await runDueWatches(env, +(env.WATCH_BATCH || 6));
+      try {
+        const now = env.NOW ? new Date(env.NOW) : new Date();
+        await serviceAccountLogLine(env);
+        await sweepTombstones(env);
+        await pruneUsageCounters(env, now);
+        await retryQueuedCleanups(env);
+        await runQueuedRedactions(env);
+        if (env.ANTHROPIC_API_KEY) await runDueWatches(env, +(env.WATCH_BATCH || 6), deadline);
+      } finally {
+        const late = Date.now() - deadline.end;
+        if (late > 5000) console.log("deadline: late " + late + "ms " + route);
+      }
     })());
   },
 };

@@ -251,6 +251,8 @@ export const LOOKUP_BUSY = "Lookups are busy right now. Try again in a moment.";
 export const USAGE_HOLD_STALE_MS = 2 * 60 * 1000;
 // One deadline for every model call in a request, inside the hold window.
 export const REQUEST_DEADLINE_MS = 100 * 1000;
+// A settings override cannot make the live window shorter than this.
+export const REQUEST_DEADLINE_MIN_MS = 5 * 1000;
 // Do not start a fallback or another round with less than this left.
 export const ROUND_FLOOR_MS = 30 * 1000;
 // The deadline stays this far inside the stale hold window.
@@ -282,24 +284,26 @@ function decimalDigits(raw) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Whatever the env asks, the live window stays at most 100s and 15s inside the hold.
+// Whatever the env asks, the live window stays between 5s and 100s, and 15s inside the hold.
+// Zero, blanks, and non-digits keep the default cap. Digit-only parsing stays.
 export function clampedDeadlineBudget(raw, staleMs = USAGE_HOLD_STALE_MS) {
   const stale = Math.max(DEADLINE_MARGIN_MS + 1000, Math.round(+staleMs || USAGE_HOLD_STALE_MS));
   const cap = Math.min(REQUEST_DEADLINE_MS, stale - DEADLINE_MARGIN_MS);
   const n = decimalDigits(raw);
   if (n == null || n <= 0) return cap;
-  return Math.min(n, cap);
+  return Math.min(cap, Math.max(REQUEST_DEADLINE_MIN_MS, n));
 }
 
 export const ROUND_FLOOR_MIN_MS = 15 * 1000;
 
+// The 15s guard still holds when the deadline itself is shorter, including 0 and other short overrides.
+// The floor then fills that shorter budget, so a later round does not start.
 export function clampedRoundFloor(raw, budgetMs) {
   const budget = Math.max(1, Math.round(+budgetMs || REQUEST_DEADLINE_MS));
   const cap = Math.min(ROUND_FLOOR_MS, budget);
   const n = decimalDigits(raw);
   if (n == null) return cap;
-  if (budget >= ROUND_FLOOR_MIN_MS) return Math.min(cap, Math.max(ROUND_FLOOR_MIN_MS, n));
-  return Math.min(cap, n);
+  return Math.min(cap, Math.max(ROUND_FLOOR_MIN_MS, n));
 }
 
 export function deadlineRemaining(deadline, nowMs) {
@@ -2423,7 +2427,7 @@ const GearLogic = {
   SHARE_ITEM_KEYS, MAX_SHARE_ITEMS, USER_LOCAL_KEYS, DEVICE_LOCAL_KEYS,
   clearUserLocal, shareItemFields, newWriteId, serverStampIso, mergeByServerTime, mergeKitsByServerTime,
   parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, attemptQuotaKey, dailySpendKey, poolSpendKey, inflightKey, alertQuotaKey, monthQuotaKey, monthRefundKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
-  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, BUSY_RETRY_MS, busyQueueStep, REQUEST_DEADLINE_MS, ROUND_FLOOR_MS, ROUND_FLOOR_MIN_MS, DEADLINE_MARGIN_MS, requestDeadline, clampedDeadlineBudget, clampedRoundFloor, roundAllowed, poolLifetimeExpired, USAGE_HOLD_STALE_MS, POOL_SEED_KEY, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
+  DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, BUSY_RETRY_MS, busyQueueStep, REQUEST_DEADLINE_MS, REQUEST_DEADLINE_MIN_MS, ROUND_FLOOR_MS, ROUND_FLOOR_MIN_MS, DEADLINE_MARGIN_MS, requestDeadline, clampedDeadlineBudget, clampedRoundFloor, roundAllowed, poolLifetimeExpired, USAGE_HOLD_STALE_MS, POOL_SEED_KEY, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupPriced, lookupBatchAllowance,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, DELETED_USER_TTL_MS, deletedUserExpireAt, tombstoneDue, LOOKUPS_PAUSED,
