@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { iphoneCopyHits } from "../scripts/cap-www.mjs";
 
 const read = p => fs.readFileSync(new URL("../" + p, import.meta.url), "utf8");
 const html = read("index.html");
@@ -65,6 +66,11 @@ test("sign-out clears this device, the app is version 58, and the service worker
   assert.match(sw, /js\/billing\.js/);
   assert.match(html, /js\/billing\.js/);
   assert.doesNotMatch(read("js/billing.js"), /\bAndroid\b|\bDesktop\b|\bPC\b|\bEdge\b/);
+  assert.doesNotMatch(read("js/core.js"), /folder on this computer/);
+  assert.match(read("js/core.js"), /folder you choose/);
+  assert.doesNotMatch(read("js/import-ui.js"), /Windows-1252|Mac Roman/);
+  assert.match(read("js/import-ui.js"), /Western European/);
+  assert.match(read("js/import-ui.js"), /encodingLabel/);
   assert.doesNotMatch(read("ios/App/App/Info.plist"), /\bAndroid\b|\bDesktop\b|\bPC\b|\bEdge\b/);
   assert.doesNotMatch(read("js/billing.js"), /FIREBASE_SA_JSON|sk_|appl_|goog_/);
   assert.match(read("js/billing.js"), /warbox_pro/);
@@ -405,4 +411,13 @@ test("production config stays on the live project and the default alias does not
   assert.equal(fs.existsSync(new URL("../icon-192.png", import.meta.url)), true);
   assert.equal(fs.existsSync(new URL("../favicon.svg", import.meta.url)), true);
   assert.equal(fs.existsSync(new URL("../apple-touch-icon.png", import.meta.url)), true);
+});
+
+test("the iPhone copy gate catches platform names in any case", () => {
+  for (const sample of ["Android", "android", "Desktops", "Edge", "PCs", "PC", "Windows", "Chromebook", "Google Play", "Mac Roman", "macOS"]) {
+    assert.ok(iphoneCopyHits(sample).length > 0, sample);
+  }
+  for (const sample of ["MacIntel", "windows-1252", "\"mac\"", "Western European", "Roman", "folder you choose", "12 pcs", "/iphone|ipad|android/i"]) {
+    assert.equal(iphoneCopyHits(sample).length, 0, sample);
+  }
 });

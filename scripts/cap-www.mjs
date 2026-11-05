@@ -2,10 +2,25 @@
 // The live site stays at the repo root. This folder is generated and is not published.
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const out = path.join(root, "www");
-const banned = /\bAndroid\b|\bDesktop\b|\bPC\b|\bEdge\b/;
+// Platform names in any case. PC stays capitalized so a quantity of "pcs" is not a computer.
+const banned = /\b(?:androids?|desktops?|edges?|windows|chromebooks?|macos|macintosh|mac)\b|google\s*play|mac\s*os|\bos\s*x\b/i;
+// Encoding ids are not store names. A user-agent test is not copy shown on screen.
+export function iphoneCopyHits(src) {
+  const text = String(src || "")
+    .replace(/windows-1252/gi, " ")
+    .replace(/(["'])mac\1/g, " ")
+    .replace(/\/[^/\n]*\bandroid\b[^/\n]*\/[a-z]*/gi, " ");
+  const found = [];
+  const words = text.match(new RegExp(banned.source, "gi"));
+  if (words) found.push(...words);
+  const pcs = text.match(/\bPCs?\b/g);
+  if (pcs) found.push(...pcs);
+  return found;
+}
 
 const files = [
   "index.html",
@@ -30,6 +45,7 @@ function copyFile(rel) {
   fs.copyFileSync(from, to);
 }
 
+function main() {
 fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(out, { recursive: true });
 for (const rel of files) copyFile(rel);
@@ -65,7 +81,7 @@ function walk(dir) {
     if (fs.statSync(full).isDirectory()) { walk(full); continue; }
     if (!textExt.has(path.extname(name))) continue;
     const src = fs.readFileSync(full, "utf8");
-    if (banned.test(src)) hits.push(path.relative(out, full));
+    if (iphoneCopyHits(src).length) hits.push(path.relative(out, full));
   }
 }
 walk(out);
@@ -74,3 +90,6 @@ if (hits.length) {
   process.exit(1);
 }
 console.log("Wrote " + out);
+}
+
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) main();

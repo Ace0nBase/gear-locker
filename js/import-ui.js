@@ -15,6 +15,12 @@ const SOURCE_LABEL = {
   guntrack: "GUNTRACK",
   generic: "a spreadsheet",
 };
+function encodingLabel(id) {
+  if (id === "windows-1252") return "Western European";
+  if (id === "mac") return "Roman";
+  if (id === "utf-8" || id === "utf8") return "UTF-8";
+  return String(id || "");
+}
 const STEP_META = [
   { n: 1, name: "File", steps: ["pick", "detected"] },
   { n: 2, name: "Columns", steps: ["columns"] },
@@ -375,7 +381,7 @@ function detectedView() {
   S.files.forEach((file, fi) => {
     (file.result.tables || []).forEach(table => {
       const bits = [`${table.grid.length} rows`, `${table.columns.length} columns`];
-      if (table.encoding) bits.push(table.encoding);
+      if (table.encoding) bits.push(encodingLabel(table.encoding));
       if (table.separator) bits.push(sepLabel(table.separator));
       if (table.headerRow > 1) bits.push(`Started at row ${table.headerRow}`);
       box.append(el("div", { className: "card" }, [
@@ -389,7 +395,7 @@ function detectedView() {
     });
     const enc = el("label", { text: "Text encoding " });
     const sel = el("select", { attrs: { "aria-label": "Text encoding", "data-import": "encoding", "data-file": String(fi) } });
-    [["", "Detected"], ["utf-8", "UTF-8"], ["windows-1252", "Windows-1252"], ["mac", "Mac Roman"]].forEach(([value, name]) => {
+    [["", "Detected"], ["utf-8", "UTF-8"], ["windows-1252", "Western European"], ["mac", "Roman"]].forEach(([value, name]) => {
       const opt = el("option", { text: name, attrs: { value } });
       sel.append(opt);
     });

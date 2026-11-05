@@ -453,10 +453,10 @@ function settleCall(ctx, promise) {
   }
   return promise;
 }
-async function loadBilling(env, user) {
+async function loadBilling(env, user, signal) {
   const uid = user && (user.sub || user.uid);
   try {
-    const billing = await resolveBilling(env, uid);
+    const billing = await resolveBilling(env, uid, undefined, undefined, signal);
     return billing && billing.plan ? billing : { plan: "free", packGranted: 0, configured: false };
   } catch {
     return { plan: "free", packGranted: 0, configured: false };
@@ -1013,8 +1013,8 @@ export default {
         if (cleanup.status !== 200) return json(cleanup.body, cleanup.status, h);
         const removed = await deleteAuthUser(env, idToken);
         if (!removed.ok) return json({ error: removed.error }, 502, h);
-        try { await deleteRevenueCatCustomerNow(env, accountUser.sub); }
-        catch { /* the account is already gone; a later delete can retry the customer */ }
+        // The sign-in is already gone. A slow customer delete must not hold this 200.
+        settleCall(ctx, deleteRevenueCatCustomerNow(env, accountUser.sub).catch(() => {}));
         return json(cleanup.body, 200, h);
       } catch { return json({ error: "Couldn't finish deleting the account. Your sign-in is still here. Try again." }, 502, h); }
     }
@@ -1022,9 +1022,9 @@ export default {
       if (req.method !== "POST") return json({ error: "Not found" }, 404, h);
       const planToken = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
       let planUser;
-      try { planUser = await verifyFirebaseToken(planToken, env.FIREBASE_PROJECT); }
+      try { planUser = await verifyFirebaseToken(planToken, env.FIREBASE_PROJECT, deadline.signal); }
       catch { return json({ error: "Please sign in again." }, 401, h); }
-      const billing = await loadBilling(env, planUser);
+      const billing = await loadBilling(env, planUser, deadline.signal);
       const plan = billing.plan === "pro" || billing.plan === "armory" ? billing.plan : "free";
       const snap = await usageSnapshot(env, planUser.sub, new Date());
       const consumed = snap ? (snap[packQuotaKey(planUser.sub)] || 0) : 0;

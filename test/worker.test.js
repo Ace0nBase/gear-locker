@@ -67,6 +67,7 @@ test("the worker keeps the hourly budget and allows only the named native origin
   assert.match(src, /url\.pathname === "\/account\/plan"/);
   const planAt = src.indexOf('url.pathname === "/account/plan"');
   assert.ok(planAt > 0 && planAt < src.indexOf("if (!env.ANTHROPIC_API_KEY)"));
+  assert.match(src, /verifyFirebaseToken\(planToken, env\.FIREBASE_PROJECT, deadline\.signal\)/);
   assert.doesNotMatch(src, /REVENUECAT_SECRET_API_KEY\s*=\s*"/);
   assert.doesNotMatch(src, /console\.log\([^)]*REVENUECAT/);
   assert.doesNotMatch(src, /console\.log\([^)]*FIREBASE_SA_JSON/);
@@ -89,6 +90,9 @@ test("the worker keeps the hourly budget and allows only the named native origin
   assert.match(delBody, /sign-in is still here/);
   assert.match(delBody, /Couldn't finish deleting the account/);
   assert.match(delBody, /deleteCleanupResult/);
+  assert.match(delBody, /settleCall\(ctx, deleteRevenueCatCustomerNow/);
+  assert.ok(delBody.indexOf("deleteAuthUser") < delBody.indexOf("settleCall(ctx, deleteRevenueCatCustomerNow"));
+  assert.doesNotMatch(delBody, /await deleteRevenueCatCustomerNow/);
   const queueFn = src.slice(src.indexOf("async function queueUsageCleanup"), src.indexOf("async function retryQueuedCleanups"));
   assert.match(queueFn, /CLEANUP_PREFIX \+ uid/);
   assert.doesNotMatch(queueFn, /redactPending/);
@@ -199,8 +203,33 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
   let primFail = false;
   let fallbackCalls = 0;
   let abortEstimate = 0;
+  let authDeletes = 0;
+  let rcAbort = false;
   globalThis.fetch = async (url, opts) => {
     const u = String(url);
+    if (u.includes("identitytoolkit.googleapis.com")) {
+      authDeletes++;
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (u.includes("firestore.googleapis.com")) {
+      const body = u.includes(":runQuery") ? "[]" : JSON.stringify({ documents: [] });
+      return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (u.includes("api.revenuecat.com")) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve(new Response("{}", { status: 200, headers: { "content-type": "application/json" } })), 150_000);
+        const abort = () => {
+          clearTimeout(timer);
+          rcAbort = true;
+          reject(new DOMException("The operation was aborted", "AbortError"));
+        };
+        const signal = opts && opts.signal;
+        if (signal) {
+          if (signal.aborted) abort();
+          else signal.addEventListener("abort", abort, { once: true });
+        }
+      });
+    }
     if (u.includes("googleapis.com")) return new Response(JSON.stringify(jwks), { status: 200, headers: { "content-type": "application/json" } });
     if (u.includes("api.anthropic.com")) {
       if (primFail) {
@@ -592,6 +621,47 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     assert.equal(abSql.rows.get(dailySpendKey(sub, new Date())), abortEstimate);
     assert.equal(abSql.rows.get(poolSpendKey(new Date())), abortEstimate);
     hangAnthropic = false;
+
+    const delPay = b64url(JSON.stringify({
+      aud: "gear-locker-c248c",
+      iss: "https://securetoken.google.com/gear-locker-c248c",
+      sub: "userdel",
+      email: "user@example.com",
+      email_verified: true,
+      auth_time: nowS,
+      iat: nowS,
+      exp: nowS + 3600,
+    }));
+    const delData = head + "." + delPay;
+    const delToken = delData + "." + b64url(crypto.sign("RSA-SHA256", Buffer.from(delData), privateKey));
+    const jobs = [];
+    const started = Date.now();
+    const deleted = await worker.fetch(new Request("https://gear-locker-api.example/account/delete", {
+      method: "POST",
+      headers: { authorization: "Bearer " + delToken, "content-type": "application/json" },
+      body: "{}",
+    }), {
+      FIREBASE_SERVER_API_KEY: "server-key",
+      REVENUECAT_SECRET_API_KEY: "sk_test_secret_value",
+      WATCH: {
+        get: async () => null,
+        put: async () => {},
+        delete: async () => {},
+        list: async () => ({ keys: [], list_complete: true }),
+      },
+      USAGE: { getByName: () => ({ clearUser: async () => ({ ok: true }) }) },
+    }, { waitUntil(p) { jobs.push(Promise.resolve(p)); } });
+    const deletedBody = await deleted.json();
+    assert.equal(deleted.status, 200, JSON.stringify(deletedBody));
+    assert.equal(authDeletes, 1);
+    assert.ok(Date.now() - started < 1000, "delete response waited " + (Date.now() - started));
+    assert.equal(jobs.length, 1);
+    await Promise.race([
+      Promise.all(jobs),
+      new Promise((resolve, reject) => setTimeout(() => reject(new Error("revenuecat delete did not finish")), 6000)),
+    ]);
+    assert.equal(rcAbort, true);
+    assert.ok(Date.now() - started < 6000);
   } finally {
     globalThis.fetch = orig;
   }

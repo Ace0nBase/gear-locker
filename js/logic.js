@@ -439,6 +439,9 @@ export const PRO_TRIAL_DAYS = 7;
 
 export function billingPlanForProductId(id) {
   const raw = String(id || "");
+  // RevenueCat promotional grants use rc_promo_<entitlement>, not the store product id.
+  const promo = raw.match(/^rc_promo_(armory|pro)(?:[:_].*)?$/);
+  if (promo) return promo[1];
   const rows = [["armory", BILLING_IDS.armory], ["pro", BILLING_IDS.pro]];
   for (const [plan, pid] of rows) {
     if (raw === pid || raw.startsWith(pid + "_") || raw.startsWith(pid + ":")) return plan;
@@ -524,31 +527,95 @@ export function packConsumedDelta(monthBefore, monthAfter, base) {
   return over(monthAfter) - over(monthBefore);
 }
 
-export async function resolveBilling(env, appUserId, fetchImpl, nowMs) {
+// A successful read is reused for a minute. A 429, 5xx, throw, or hang keeps the last
+// success for ten minutes so one bad call does not drop a paid account to Free.
+export const BILLING_FRESH_MS = 60 * 1000;
+export const BILLING_STALE_MS = 10 * 60 * 1000;
+export const REVENUECAT_TIMEOUT_MS = 4000;
+const billingCache = new Map();
+const billingFlight = new Map();
+
+export function clearBillingCache() {
+  billingCache.clear();
+  billingFlight.clear();
+}
+
+function billingClock(nowMs) {
+  return nowMs == null || nowMs === "" ? Date.now() : +nowMs;
+}
+
+function cachedBilling(id, now, allowStale) {
+  const row = billingCache.get(id);
+  if (!row) return null;
+  const age = now - row.at;
+  if (age < 0) return null;
+  if (age <= BILLING_FRESH_MS) return row.billing;
+  if (allowStale && age <= BILLING_STALE_MS) return row.billing;
+  return null;
+}
+
+function storeBilling(id, billing, now) {
+  billingCache.set(id, { billing, at: now });
+}
+
+function billingSignal(parent) {
+  const timeout = typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(REVENUECAT_TIMEOUT_MS) : undefined;
+  if (timeout && parent && typeof AbortSignal.any === "function") return AbortSignal.any([timeout, parent]);
+  return timeout || parent;
+}
+
+function transientBillingStatus(status) {
+  const code = +status || 0;
+  return code === 408 || code === 429 || code >= 500;
+}
+
+export async function resolveBilling(env, appUserId, fetchImpl, nowMs, signal) {
   const key = revenueCatSecret(env);
   const id = String(appUserId || "").trim();
   if (!key || !id) return { plan: "free", packGranted: 0, configured: false };
-  let subscriber = null;
+  const now = billingClock(nowMs);
+  const fresh = cachedBilling(id, now, false);
+  if (fresh) return fresh;
+  if (billingFlight.has(id)) return billingFlight.get(id);
+  const job = readSubscriber(env, id, key, fetchImpl, now, signal);
+  billingFlight.set(id, job);
+  job.finally(() => { if (billingFlight.get(id) === job) billingFlight.delete(id); });
+  return job;
+}
+
+async function readSubscriber(env, id, key, fetchImpl, now, signal) {
+  const remembered = () => cachedBilling(id, now, true);
   try {
     const fetchFn = fetchImpl || globalThis.fetch;
     const res = await fetchFn("https://api.revenuecat.com/v1/subscribers/" + encodeURIComponent(id), {
       method: "GET",
       redirect: "error",
       headers: { Authorization: "Bearer " + key, Accept: "application/json" },
-      signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined,
+      signal: billingSignal(signal),
     });
     if (res && res.ok && typeof res.json === "function") {
       const body = await res.json();
-      subscriber = body && body.subscriber && typeof body.subscriber === "object" ? body.subscriber : null;
+      const subscriber = body && body.subscriber && typeof body.subscriber === "object" ? body.subscriber : null;
+      const billing = {
+        plan: accountPlan(null, env, subscriber, now),
+        packGranted: lookupPackGranted(subscriber),
+        configured: true,
+      };
+      storeBilling(id, billing, now);
+      return billing;
     }
+    if (res && res.status === 404) {
+      const billing = { plan: "free", packGranted: 0, configured: true };
+      storeBilling(id, billing, now);
+      return billing;
+    }
+    const kept = remembered();
+    if (kept && (!res || transientBillingStatus(res.status) || res.status === 401 || res.status === 403)) return kept;
   } catch {
-    subscriber = null;
+    const kept = remembered();
+    if (kept) return kept;
   }
-  return {
-    plan: accountPlan(null, env, subscriber, nowMs),
-    packGranted: lookupPackGranted(subscriber),
-    configured: true,
-  };
+  return { plan: "free", packGranted: 0, configured: true };
 }
 
 function tokenCount(...vals) {
@@ -1097,6 +1164,7 @@ export async function deleteRevenueCatCustomerNow(env, appUserId, fetchImpl) {
       method: "DELETE",
       redirect: "error",
       headers: { Authorization: "Bearer " + key, Accept: "application/json" },
+      signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(REVENUECAT_TIMEOUT_MS) : undefined,
     });
     if (res && (res.ok || res.status === 404)) return { ok: true, skipped: false };
     return { ok: false, skipped: false };
@@ -2593,7 +2661,7 @@ const GearLogic = {
   parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, attemptQuotaKey, dailySpendKey, poolSpendKey, inflightKey, alertQuotaKey, monthQuotaKey, monthRefundKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
   DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, BUSY_RETRY_MS, busyQueueStep, REQUEST_DEADLINE_MS, REQUEST_DEADLINE_MIN_MS, ROUND_FLOOR_MS, ROUND_FLOOR_MIN_MS, DEADLINE_MARGIN_MS, requestDeadline, clampedDeadlineBudget, clampedRoundFloor, roundAllowed, poolLifetimeExpired, USAGE_HOLD_STALE_MS, POOL_SEED_KEY, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupPriced, lookupBatchAllowance,
-  BILLING_IDS, BILLING_ENTITLEMENTS, LOOKUP_PACK_PRODUCT, LOOKUP_PACK_SIZE, PRO_TRIAL_DAYS, billingPlanForProductId, packQuotaKey, entitlementActive, lookupPackGranted, packRemaining, packConsumedDelta, resolveBilling,
+  BILLING_IDS, BILLING_ENTITLEMENTS, LOOKUP_PACK_PRODUCT, LOOKUP_PACK_SIZE, PRO_TRIAL_DAYS, BILLING_FRESH_MS, BILLING_STALE_MS, REVENUECAT_TIMEOUT_MS, billingPlanForProductId, packQuotaKey, entitlementActive, lookupPackGranted, packRemaining, packConsumedDelta, resolveBilling, clearBillingCache,
   USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer, deleteRevenueCatCustomerNow,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, DELETED_USER_TTL_MS, deletedUserExpireAt, tombstoneDue, LOOKUPS_PAUSED,
   reserveFits, lookupItemHoldMicro, lookupTypicalMicro, operationTypicalMicro, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,

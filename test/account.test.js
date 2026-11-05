@@ -5,6 +5,7 @@ import {
   estimateSpendMicro, usageFromResponse, freeSpendBlocked, usageDecision,
   deleteRevenueCatCustomer, deleteRevenueCatCustomerNow, accountDeletePlan, accountPlan, USER_COLLECTIONS,
   billingPlanForProductId, lookupPackGranted, packRemaining, packConsumedDelta, packQuotaKey, resolveBilling,
+  clearBillingCache, REVENUECAT_TIMEOUT_MS, BILLING_FRESH_MS,
   BILLING_IDS, LOOKUP_PACK_SIZE, PRO_TRIAL_DAYS, entitlementActive,
   signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
   clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, lookupItemHoldMicro, lookupTypicalMicro, operationTypicalMicro, priciestRates, spendRates, applyReserve, applyReconcile, DAILY_SPEND_FULL,
@@ -160,6 +161,13 @@ test("entitlements map the approved product ids and a pack adds 100", () => {
   assert.equal(accountPlan(null, {}, expired, now), "free");
   const fromSub = { subscriptions: { "warbox_armory:monthly": { expires_date: "2026-12-01T00:00:00Z", purchase_date: "2026-11-01T00:00:00Z" } } };
   assert.equal(accountPlan(null, {}, fromSub, now), "armory");
+  assert.equal(billingPlanForProductId("rc_promo_pro"), "pro");
+  assert.equal(billingPlanForProductId("rc_promo_armory"), "armory");
+  assert.equal(billingPlanForProductId("rc_promo_professional"), "");
+  const promo = { entitlements: { pro: { expires_date: "2026-12-01T00:00:00Z", product_identifier: "rc_promo_pro", purchase_date: "2026-11-01T00:00:00Z" } } };
+  assert.equal(accountPlan(null, {}, promo, now), "pro");
+  const promoArmory = { subscriptions: { rc_promo_armory: { expires_date: "2026-12-01T00:00:00Z", purchase_date: "2026-11-01T00:00:00Z" } } };
+  assert.equal(accountPlan(null, {}, promoArmory, now), "armory");
   const packs = {
     non_subscriptions: {
       warbox_lookups_100: [
@@ -181,6 +189,7 @@ test("entitlements map the approved product ids and a pack adds 100", () => {
 });
 
 test("a billing lookup fails closed and does not return the secret", async () => {
+  clearBillingCache();
   let calls = 0;
   const secret = "sk_test_secret_value";
   const missed = await resolveBilling({}, "uid", () => { calls++; throw new Error("no"); });
@@ -211,6 +220,71 @@ test("a billing lookup fails closed and does not return the secret", async () =>
   assert.equal(JSON.stringify(removed).includes(secret), false);
   const skipped = await deleteRevenueCatCustomerNow({}, "uid", () => { throw new Error("called"); });
   assert.equal(skipped.skipped, true);
+  clearBillingCache();
+});
+
+test("a hung RevenueCat delete aborts in four seconds and does not block on the hang", async () => {
+  const orig = AbortSignal.timeout;
+  let delay = 0;
+  AbortSignal.timeout = (ms) => {
+    delay = ms;
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 20);
+    return ctrl.signal;
+  };
+  try {
+    const started = Date.now();
+    const result = await deleteRevenueCatCustomerNow({ REVENUECAT_SECRET_API_KEY: "sk_test_secret_value" }, "uid", (url, opts) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve({ ok: true, status: 200 }), 60_000);
+      const signal = opts && opts.signal;
+      const abort = () => {
+        clearTimeout(timer);
+        reject(new DOMException("The operation was aborted", "AbortError"));
+      };
+      if (signal) {
+        if (signal.aborted) abort();
+        else signal.addEventListener("abort", abort, { once: true });
+      }
+    }));
+    assert.equal(delay, REVENUECAT_TIMEOUT_MS);
+    assert.equal(REVENUECAT_TIMEOUT_MS, 4000);
+    assert.ok(Date.now() - started < 1000);
+    assert.equal(result.ok, false);
+    assert.equal(result.skipped, false);
+    assert.equal(JSON.stringify(result).includes("sk_test_secret_value"), false);
+  } finally {
+    AbortSignal.timeout = orig;
+  }
+});
+
+test("a transient RevenueCat error keeps a recent paid plan and a fresh read is reused", async () => {
+  clearBillingCache();
+  const secret = "sk_test_secret_value";
+  const env = { REVENUECAT_SECRET_API_KEY: secret };
+  const t0 = Date.parse("2026-11-05T12:00:00Z");
+  const proBody = { subscriber: { entitlements: { pro: { expires_date: "2099-01-01T00:00:00Z", product_identifier: "rc_promo_pro", purchase_date: "2026-11-01T00:00:00Z" } } } };
+  let calls = 0;
+  const ok = async () => {
+    calls++;
+    return { ok: true, status: 200, json: async () => proBody };
+  };
+  const first = await resolveBilling(env, "paid", ok, t0);
+  assert.equal(first.plan, "pro");
+  const again = await resolveBilling(env, "paid", () => { throw new Error("should reuse the fresh read"); }, t0 + 1000);
+  assert.equal(again.plan, "pro");
+  assert.equal(calls, 1);
+  const storm = await resolveBilling(env, "paid", async () => ({ ok: false, status: 429, json: async () => ({}) }), t0 + BILLING_FRESH_MS + 1000);
+  assert.equal(storm.plan, "pro");
+  const hung = await resolveBilling(env, "paid", (url, opts) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve({ ok: false, status: 500, json: async () => ({}) }), 60_000);
+    const abort = () => { clearTimeout(timer); reject(new DOMException("The operation was aborted", "AbortError")); };
+    if (opts && opts.signal) opts.signal.addEventListener("abort", abort, { once: true });
+  }), t0 + BILLING_FRESH_MS + 2000);
+  assert.equal(hung.plan, "pro");
+  assert.ok(Date.now() - t0 < 60_000 || hung.plan === "pro");
+  const unknown = await resolveBilling(env, "never", async () => ({ ok: false, status: 500, json: async () => ({}) }), t0);
+  assert.equal(unknown.plan, "free");
+  clearBillingCache();
 });
 
 test("a lookup pack is spent only past the plan allowance and a refund puts it back", () => {
