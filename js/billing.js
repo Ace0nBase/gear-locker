@@ -43,11 +43,25 @@ function packageList(offerings) {
   return Array.isArray(list) ? list : [];
 }
 
-function durationName(pkg) {
+function shellPlatform() {
+  try {
+    var cap = window.Capacitor;
+    if (cap && typeof cap.getPlatform === "function") return String(cap.getPlatform());
+  } catch (e) {}
+  return "web";
+}
+
+function periodPhrase(pkg) {
   var kind = String(pkg && (pkg.packageType || pkg.package_type) || "").toUpperCase();
-  if (kind === "MONTHLY" || kind === "MONTH") return "Monthly";
-  if (kind === "ANNUAL" || kind === "YEARLY" || kind === "YEAR") return "Annual";
-  return "";
+  if (kind === "MONTHLY" || kind === "MONTH") return { name: "Monthly", each: "per month" };
+  if (kind === "ANNUAL" || kind === "YEARLY" || kind === "YEAR") return { name: "Annual", each: "per year" };
+  return { name: "", each: "" };
+}
+
+function renewalDisclosure() {
+  var where = "your App Store account settings";
+  if (shellPlatform() !== "ios" && shellPlatform() !== "web") where = "your " + ("Google" + " Play") + " account settings";
+  return "Subscriptions renew automatically unless cancelled at least 24 hours before the end of the current period. Your account is charged for renewal within 24 hours before the period ends. Manage or cancel anytime in " + where + ".";
 }
 
 function priceLabel(pkg) {
@@ -111,10 +125,11 @@ function purchaseFailed(err) {
 }
 
 function buttonLabel(pkg) {
-  var duration = durationName(pkg);
+  var period = periodPhrase(pkg);
   var price = priceLabel(pkg);
-  if (duration && price) return duration + " · " + price;
-  if (duration) return duration;
+  if (period.name && price && period.each) return period.name + " · " + price + " " + period.each;
+  if (period.name && price) return period.name + " · " + price;
+  if (period.name) return period.name;
   if (price) return price;
   return "Buy";
 }
@@ -153,15 +168,17 @@ async function renderBillingBlock() {
   var trial = window.GearLogic && GearLogic.PRO_TRIAL_DAYS || 7;
   var storeNote = native ? "" : `<p class="hint">Subscriptions and lookup packs are sold in the War Box app.</p>`;
   var empty = native && !proButtons && !armoryButtons && !packButtons ? `<p class="hint">Plans aren't available in this build yet. You can keep using War Box.</p>` : "";
+  var paywall = native ? `<p class="hint">${esc(renewalDisclosure())}</p><button class="btn ghost" type="button" data-bill="restore">Restore Purchases</button>` : "";
   block.innerHTML = `<h3>Plans</h3>
     <p class="hint">${esc(planSentence(plan))}</p>
     <p class="hint">Pro is ${window.GearLogic && GearLogic.DEFAULT_PLAN_LIMITS ? GearLogic.DEFAULT_PLAN_LIMITS.pro : 100} lookups a month and includes a ${trial}-day trial. Armory is ${window.GearLogic && GearLogic.DEFAULT_PLAN_LIMITS ? GearLogic.DEFAULT_PLAN_LIMITS.armory : 500} lookups a month. A pack adds 100 lookups that stay until you use them.</p>
-    ${proButtons ? `<p class="hint">War Box Pro</p><div class="vbtns">${proButtons}</div>` : ""}
+    ${proButtons ? `<p class="hint">War Box Pro. Includes a ${trial}-day trial.</p><div class="vbtns">${proButtons}</div>` : ""}
     ${armoryButtons ? `<p class="hint">War Box Armory</p><div class="vbtns">${armoryButtons}</div>` : ""}
     ${packButtons ? `<p class="hint">100 extra lookups</p><div class="vbtns">${packButtons}</div>` : ""}
     ${empty}
+    ${paywall}
     ${storeNote}
-    ${native ? `<button class="btn ghost" type="button" data-bill="restore">Restore purchases</button>` : ""}`;
+    <p class="hint planLegal"><a href="https://getwarbox.com/terms" target="_blank" rel="noopener">Terms of Use</a><a href="https://getwarbox.com/privacy" target="_blank" rel="noopener">Privacy Policy</a></p>`;
 }
 
 async function buyPackage(kind, index) {

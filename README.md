@@ -28,7 +28,14 @@ npm run cap:sync
 
 That copies the public files into `www/` (not published) and refreshes the native projects. `npm run cap:www` only refreshes `www/`. Open `ios/App/App.xcworkspace` on a Mac for the iPhone app. Open the `android/` project for the other phone app. The icon set in `design/warbox-icon/ios/AppIcon.appiconset/` is copied onto the iPhone asset catalog when that catalog already exists.
 
-The native shell loads the bundled files from `warbox.local`. Share links still open the public site. Lookups from the shell are allowed only for `capacitor://warbox.local` and `https://warbox.local`, plus the origins already in `ALLOWED_ORIGINS`. Before a sandbox sign-in, add those two origins to the Firebase authorized domains and to the browser API key's allowed referrers. Do not remove the existing site referrer.
+The native shell loads the bundled files from `warbox.local`. Share links still open the public site. Lookups from the shell are allowed only for `capacitor://warbox.local` and `https://warbox.local`, plus the origins already in `ALLOWED_ORIGINS`.
+
+Before a sandbox sign-in, Coding Lead adds these in the Firebase and Google Cloud consoles. Do not remove the existing site referrer. No console credential belongs in this repo.
+
+- Firebase Auth authorized domain: `warbox.local`
+- Browser API key HTTP referrers: `https://warbox.local/*` and `capacitor://warbox.local/*`
+
+`capacitor://warbox.local` is the iPhone shell origin. `https://warbox.local` is the other phone shell origin. The hostname for Auth is `warbox.local`.
 
 Copy `config.billing.example.js` to `config.billing.js` before a store build and paste that build's RevenueCat public SDK key. `config.billing.js` is not committed. Leave the key empty until sandbox keys exist. Do not put a secret API key in it.
 
