@@ -5,7 +5,7 @@
 // The class extends DurableObject so the real binding exposes these methods over RPC.
 
 import { DurableObject } from "cloudflare:workers";
-import { applyReserve, applyReconcile, quotaCounterExpired, USAGE_HOLD_STALE_MS, POOL_SEED_KEY, poolLifetimeExpired } from "../js/logic.js";
+import { applyReserve, applyReconcile, packConsumedDelta, quotaCounterExpired, USAGE_HOLD_STALE_MS, POOL_SEED_KEY, poolLifetimeExpired } from "../js/logic.js";
 
 const SPEND = "spend:free";
 const SEEDED = "seeded:spend";
@@ -109,20 +109,31 @@ export class UsageLedger extends DurableObject {
     const monthKey = String(req.monthKey || "");
     const refundKey = String(req.refundKey || "");
     const dailySpendKey = String(req.dailySpendKey || "");
+    const monthBefore = monthKey ? this._get(monthKey) : 0;
     const out = applyReconcile({
       spend: this._get(spendKey),
       daily: 0,
-      month: monthKey ? this._get(monthKey) : 0,
+      month: monthBefore,
       refunds: refundKey ? this._get(refundKey) : 0,
       dailySpend: dailySpendKey ? this._get(dailySpendKey) : 0,
     }, { reserved: 0, actual: req.actual, countRefund: req.countRefund, refundCap: req.refundCap, skipMonth: req.skipMonth, dailyHold: 0 });
     this._put(spendKey, out.state.spend);
     if (out.refunded && monthKey && !req.skipMonth) this._put(monthKey, out.state.month);
+    this._adjustPack(req, monthBefore, monthKey && !req.skipMonth ? out.state.month : monthBefore);
     if (out.refunded && refundKey && !req.skipMonth) this._put(refundKey, out.state.refunds);
     if (dailySpendKey) this._put(dailySpendKey, out.state.dailySpend);
     this._del("rel:" + id);
     this._put("done:" + id, now);
     return { ok: true, duplicate: false, released: true, spend: out.state.spend, billed: out.billed, refunded: out.refunded, daily: out.state.daily, month: out.state.month, refunds: out.state.refunds, dailySpend: out.state.dailySpend };
+  }
+
+  _adjustPack(req, monthBefore, monthAfter) {
+    const packKey = String((req && req.packKey) || "");
+    if (!packKey || (req && req.skipMonth)) return;
+    if (!req || req.monthBase == null || req.monthBase === "") return;
+    const delta = packConsumedDelta(monthBefore, monthAfter, req.monthBase);
+    if (!delta) return;
+    this._put(packKey, Math.max(0, this._get(packKey) + delta));
   }
 
   reserve(req) {
@@ -145,8 +156,16 @@ export class UsageLedger extends DurableObject {
       dailySpend: req.dailySpendKey ? this._get(req.dailySpendKey) : 0,
       inflight: flightKey ? this._get(flightKey) : 0,
     };
-    const out = applyReserve(state, req);
+    const packKey = String(req.packKey || "");
+    const monthBase = Math.max(0, Math.round(+req.monthLimit || 0));
+    let gate = req;
+    if (packKey && !req.skipMonth) {
+      const left = Math.max(0, Math.round(+req.packGranted || 0) - this._get(packKey));
+      gate = { ...req, monthLimit: monthBase + left };
+    }
+    const out = applyReserve(state, gate);
     if (!out.ok) return { ok: false, status: out.status, error: out.error, reserved: 0, charged: 0, dailyHeld: 0, poolSeeded };
+    if (packKey) this._adjustPack({ ...req, monthBase }, state.month, out.state.month);
     this._put(spendKey, out.state.spend);
     if (req.dailySpendKey) this._put(req.dailySpendKey, out.state.dailySpend);
     if (req.dailyKey && out.state.daily !== state.daily) this._put(req.dailyKey, out.state.daily);
@@ -185,10 +204,11 @@ export class UsageLedger extends DurableObject {
     const refundKey = String(req.refundKey || "");
     const alertKey = String(req.alertKey || "");
     const dailySpendKey = String(req.dailySpendKey || "");
+    const monthBefore = monthKey ? this._get(monthKey) : 0;
     const out = applyReconcile({
       spend: this._get(spendKey),
       daily: dailyKey ? this._get(dailyKey) : 0,
-      month: monthKey ? this._get(monthKey) : 0,
+      month: monthBefore,
       alert: alertKey ? this._get(alertKey) : 0,
       refunds: refundKey ? this._get(refundKey) : 0,
       dailySpend: dailySpendKey ? this._get(dailySpendKey) : 0,
@@ -198,6 +218,7 @@ export class UsageLedger extends DurableObject {
     if (req.unsent && alertKey) this._put(alertKey, out.state.alert);
     if (req.unsent && monthKey && !req.skipMonth) this._put(monthKey, out.state.month);
     if (out.refunded && monthKey && !req.skipMonth) this._put(monthKey, out.state.month);
+    this._adjustPack(req, monthBefore, monthKey && !req.skipMonth ? out.state.month : monthBefore);
     if (out.refunded && refundKey && !req.skipMonth) this._put(refundKey, out.state.refunds);
     if (dailySpendKey) this._put(dailySpendKey, out.state.dailySpend);
     if (holdKey) this._del(holdKey);
@@ -257,6 +278,7 @@ export class UsageLedger extends DurableObject {
       const rows = this._rows("SELECT k FROM kv WHERE k GLOB ?", prefix + "*");
       for (const row of rows) this._del(row.k);
     }
+    this._del("pk:" + uid);
     return { ok: true };
   }
 }

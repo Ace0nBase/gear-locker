@@ -3,7 +3,10 @@
 // Header: Authorization: Bearer <Firebase ID token from the signed-in app user>
 // Returns { results: [{ id, ok, retailNew, usedLow, usedHigh, value, weightOz, priceNote, weightNote, sources }] }
 // Secrets (set in the Cloudflare dashboard, never in code): ANTHROPIC_API_KEY, FIREBASE_SERVER_API_KEY,
-// FIREBASE_SA_JSON, EMAIL_HMAC_KEY.
+// FIREBASE_SA_JSON, EMAIL_HMAC_KEY, REVENUECAT_SECRET_API_KEY.
+// REVENUECAT_SECRET_API_KEY is the RevenueCat secret API key. It is not a public SDK key.
+// Without it, every account stays on the free plan and there is no customer to delete.
+// The worker never writes that secret, FIREBASE_SA_JSON, or the service-account JSON into a response or a log line.
 // FIREBASE_SERVER_API_KEY is a second Google key restricted to the Identity Toolkit API, with no app restriction.
 // FIREBASE_SA_JSON is a Google service account with Cloud Datastore User on gear-locker-c248c. It is not required for deletion to finish.
 // The public web key is not used here. Other vars use the defaults below unless the dashboard sets them. BETA_ONLY stays unset.
@@ -16,7 +19,7 @@
 // Free spend and per-uid quotas are reserved in the UsageLedger Durable Object, not by a KV read-then-write.
 // A confirmed email can use lookups. BETA_ONLY=true requires ALLOWED_EMAILS again.
 
-import { decideAccess, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomer, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced, lookupTypicalMicro, operationTypicalMicro, poolSpendKey, inflightKey, FREE_INFLIGHT_LIMIT, MONTHLY_REFUND_CAP, REQUEST_DEADLINE_MS, ROUND_FLOOR_MS, clampedDeadlineBudget, clampedRoundFloor, roundAllowed, poolLifetimeExpired } from "../js/logic.js";
+import { decideAccess, attemptQuotaKey, dailySpendKey, alertQuotaKey, monthQuotaKey, monthRefundKey, selectDueWatches, saleRestricted, publicWeightNote, localDay, pickModelAnswer, stripGunMarketSources, settleLookup, settleDeal, GEAR_CATEGORIES, PRICE_BACKSTOP, pricedPhotoCategories, photoIdSuggestion, photoIdHardBlocked, betaOnly, isReviewEmail, planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, usageFromResponse, addUsage, estimateSpendMicro, accountDeletePlan, deleteRevenueCatCustomerNow, signInIsRecent, LOOKUPS_PAUSED, clampMaxTokens, MODEL_CALLS, callHoldMicro, estimateInputTokens, ratesForModel, roundFits, roundInputTokens, SEARCH_RESULT_TOKENS, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody, lookupBatchAllowance, lookupPriced, lookupTypicalMicro, operationTypicalMicro, poolSpendKey, inflightKey, packQuotaKey, packRemaining, resolveBilling, FREE_INFLIGHT_LIMIT, MONTHLY_REFUND_CAP, REQUEST_DEADLINE_MS, ROUND_FLOOR_MS, clampedDeadlineBudget, clampedRoundFloor, roundAllowed, poolLifetimeExpired } from "../js/logic.js";
 import { sendWebPush, pushEndpointOk } from "./webpush.js";
 import { deleteUserFirestore } from "./account-delete.js";
 import { serviceAccountLogLine, sweepTombstones } from "./firestore-admin.js";
@@ -42,9 +45,12 @@ export function setTestHandlerDelay(ms) {
   testHandlerDelayMs = Math.max(0, Math.round(+ms || 0));
 }
 
+// Native shells only. A wildcard is not allowed. The public site stays on its own origin list.
+const NATIVE_ORIGINS = ["capacitor://warbox.local", "https://warbox.local"];
 function cors(env, req) {
   const origin = req.headers.get("origin") || "";
   const allowed = (env.ALLOWED_ORIGINS || "").split(",").map(s => s.trim()).filter(Boolean);
+  for (const extra of NATIVE_ORIGINS) if (!allowed.includes(extra)) allowed.push(extra);
   const ok = allowed.includes(origin);
   return {
     "access-control-allow-origin": ok ? origin : allowed[0] || "null",
@@ -447,6 +453,15 @@ function settleCall(ctx, promise) {
   }
   return promise;
 }
+async function loadBilling(env, user) {
+  const uid = user && (user.sub || user.uid);
+  try {
+    const billing = await resolveBilling(env, uid);
+    return billing && billing.plan ? billing : { plan: "free", packGranted: 0, configured: false };
+  } catch {
+    return { plan: "free", packGranted: 0, configured: false };
+  }
+}
 async function reserveCall(env, user, op, count, extra) {
   extra = extra || {};
   const stub = usageStub(env);
@@ -454,7 +469,8 @@ async function reserveCall(env, user, op, count, extra) {
   const n = Math.max(1, +count || 1);
   const email = String((user && user.email) || "");
   const review = isReviewEmail(email, env);
-  const plan = accountPlan(user, env);
+  const billing = extra.billing || await loadBilling(env, user);
+  const plan = billing.plan === "pro" || billing.plan === "armory" ? billing.plan : "free";
   const skipSpend = review || plan !== "free";
   const day = extra.now instanceof Date ? extra.now : new Date();
   const uid = user && (user.sub || user.uid);
@@ -481,6 +497,8 @@ async function reserveCall(env, user, op, count, extra) {
       dailyLimit: review ? reviewDailyLimit(env) : +(env.DAILY_AI_LIMIT || 40),
       monthAdd: n,
       monthLimit: planMonthlyLimit(plan, env),
+      packKey: review ? "" : packQuotaKey(uid),
+      packGranted: review ? 0 : Math.max(0, Math.round(+billing.packGranted || 0)),
       alertAdd: extra.alertAdd || 0,
       alertLimit: +(env.ALERT_DAILY_CAP || 6),
       dailyKey,
@@ -498,7 +516,7 @@ async function reserveCall(env, user, op, count, extra) {
     if (reserved.poolSeeded && env.WATCH && typeof env.WATCH.delete === "function") {
       try { await env.WATCH.delete("spend:free"); } catch { /* the ledger already kept the balance */ }
     }
-    return { ...reserved, dailyKey, monthKey, refundKey, alertKey, dailySpendKey: spendDayKey, spendKey, inflightKey: flightKey, seedSpend: legacySpend, skipSpend, skipMonth: review, dailyHeld: reserved.dailyHeld || 0 };
+    return { ...reserved, dailyKey, monthKey, refundKey, alertKey, dailySpendKey: spendDayKey, spendKey, inflightKey: flightKey, seedSpend: legacySpend, skipSpend, skipMonth: review, dailyHeld: reserved.dailyHeld || 0, packKey: review ? "" : packQuotaKey(uid), monthBase: planMonthlyLimit(plan, env), plan };
   } catch {
     return { ok: false, status: 503, error: LOOKUPS_PAUSED, reserved: 0, charged: 0 };
   }
@@ -532,6 +550,8 @@ async function finishCall(env, id, reserved, usage, extra) {
       seedSpend: extra.seedSpend,
       now: Date.now(),
       skipMonth: !!extra.skipMonth,
+      packKey: extra.packKey || "",
+      monthBase: extra.monthBase,
     });
   } catch { /* the answer is already in hand */ }
 }
@@ -555,6 +575,8 @@ function spendExtra(hold, extra) {
     alertRefund: Math.max(0, Math.round(+extra.alertRefund || 0)),
     dailyKey: hold.dailyKey || "",
     alertKey: hold.alertKey || "",
+    packKey: hold.packKey || "",
+    monthBase: hold.monthBase,
   };
 }
 function callNeverSent(e) {
@@ -576,7 +598,7 @@ async function usageSnapshot(env, uid, now) {
   const stub = usageStub(env);
   if (!stub) return null;
   try {
-    const read = await stub.read({ keys: [attemptQuotaKey(uid, now), monthQuotaKey(uid, now), alertQuotaKey(uid, now), dailySpendKey(uid, now), poolSpendKey(now)] });
+    const read = await stub.read({ keys: [attemptQuotaKey(uid, now), monthQuotaKey(uid, now), alertQuotaKey(uid, now), dailySpendKey(uid, now), poolSpendKey(now), packQuotaKey(uid)] });
     return (read && read.values) || {};
   } catch { return null; }
 }
@@ -702,15 +724,18 @@ async function runDueWatches(env, budget, deadline) {
     if (!access.ok) continue;
     const who = { sub: u.uid, email };
     const review = isReviewEmail(email, env);
-    const plan = accountPlan(who, env);
+    const billing = await loadBilling(env, who);
+    const plan = billing.plan === "pro" || billing.plan === "armory" ? billing.plan : "free";
     const counts = await usageSnapshot(env, u.uid, now);
     if (!counts) continue;
     const dailyLimit = review ? reviewDailyLimit(env) : +(env.DAILY_AI_LIMIT || 40);
+    const packLeft = review ? 0 : packRemaining(billing.packGranted, counts[packQuotaKey(u.uid)] || 0);
     if ((counts[attemptQuotaKey(u.uid, now)] || 0) >= dailyLimit) continue;
-    if (!review && (counts[monthQuotaKey(u.uid, now)] || 0) >= planMonthlyLimit(plan, env)) continue;
+    if (!review && (counts[monthQuotaKey(u.uid, now)] || 0) >= planMonthlyLimit(plan, env) + packLeft) continue;
     if (!review && plan === "free" && (counts[poolSpendKey(now)] || 0) >= spendCapMicro(env)) continue;
     if (!review && plan === "free" && (counts[dailySpendKey(u.uid, now)] || 0) >= freeDailySpendCapMicro(env)) continue;
     if ((counts[alertQuotaKey(u.uid, now)] || 0) >= alertLimit) continue;
+    u.billing = billing;
     eligible.push(u);
   }
   eligible.forEach(u => { u.list = (u.list || []).filter(w => w && !priceRouteBlocked(w)); });
@@ -724,7 +749,7 @@ async function runDueWatches(env, budget, deadline) {
     const w = u && u.rec.list.find(x => x.id === p.watch.id);
     if (!w || priceRouteBlocked(w)) continue;
     const who = { sub: u.uid, email: u.rec.email };
-    const hold = await reserveCall(env, who, "deal", 1, { alertAdd: 1, inputTokens: estimateInputTokens(JSON.stringify(w)) });
+    const hold = await reserveCall(env, who, "deal", 1, { alertAdd: 1, inputTokens: estimateInputTokens(JSON.stringify(w)), billing: u.billing });
     if (!hold.ok) continue;
     const wasHit = !!(w.best && w.best.hit);
     let checked = true;
@@ -952,7 +977,7 @@ async function lookupOne(env, it, budget, deadline) {
   return { id: clean.id, ok: true, ...fields, usage, spendMicro };
 }
 
-const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", BETA_ONLY: "", REVIEW_EMAILS: "", REVIEW_DAILY_LIMIT: "8", FREE_SPEND_CAP_USD: "25", FREE_DAILY_SPEND_CAP_USD: "0.75", PLAN_LIMIT_FREE: "10", PLAN_LIMIT_PRO: "100", PLAN_LIMIT_ARMORY: "500", SPEND_INPUT_PER_MILLION: "1", SPEND_OUTPUT_PER_MILLION: "5", SPEND_SEARCH_EACH: "0.01", FALLBACK_INPUT_PER_MILLION: "3", FALLBACK_OUTPUT_PER_MILLION: "15", FALLBACK_SEARCH_EACH: "0.01", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
+const DEFAULTS = { FIREBASE_PROJECT: "gear-locker-c248c", ALLOWED_ORIGINS: "https://ace0nbase.github.io,capacitor://warbox.local,https://warbox.local", MODEL: "claude-haiku-5-5", FALLBACK_MODEL: "claude-sonnet-5-5", MAX_ITEMS: "4", ALLOWED_EMAILS: "", BETA_ONLY: "", REVIEW_EMAILS: "", REVIEW_DAILY_LIMIT: "8", FREE_SPEND_CAP_USD: "25", FREE_DAILY_SPEND_CAP_USD: "0.75", PLAN_LIMIT_FREE: "10", PLAN_LIMIT_PRO: "100", PLAN_LIMIT_ARMORY: "500", SPEND_INPUT_PER_MILLION: "1", SPEND_OUTPUT_PER_MILLION: "5", SPEND_SEARCH_EACH: "0.01", FALLBACK_INPUT_PER_MILLION: "3", FALLBACK_OUTPUT_PER_MILLION: "15", FALLBACK_SEARCH_EACH: "0.01", MAX_WATCHES: "10", WATCH_BATCH: "6", DAILY_AI_LIMIT: "40", ALERT_DAILY_CAP: "6", MIN_ALERT_GAP_HOURS: "20" };
 const ROUTES = ["/lookup", "/identify", "/watch/sync", "/watch/status", "/watch/check", "/watch/push", "/battery", "/ammo", "/pace"];
 
 export default {
@@ -988,9 +1013,24 @@ export default {
         if (cleanup.status !== 200) return json(cleanup.body, cleanup.status, h);
         const removed = await deleteAuthUser(env, idToken);
         if (!removed.ok) return json({ error: removed.error }, 502, h);
-        deleteRevenueCatCustomer(env, accountUser.sub);
+        try { await deleteRevenueCatCustomerNow(env, accountUser.sub); }
+        catch { /* the account is already gone; a later delete can retry the customer */ }
         return json(cleanup.body, 200, h);
       } catch { return json({ error: "Couldn't finish deleting the account. Your sign-in is still here. Try again." }, 502, h); }
+    }
+    if (url.pathname === "/account/plan") {
+      if (req.method !== "POST") return json({ error: "Not found" }, 404, h);
+      const planToken = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+      let planUser;
+      try { planUser = await verifyFirebaseToken(planToken, env.FIREBASE_PROJECT); }
+      catch { return json({ error: "Please sign in again." }, 401, h); }
+      const billing = await loadBilling(env, planUser);
+      const plan = billing.plan === "pro" || billing.plan === "armory" ? billing.plan : "free";
+      const snap = await usageSnapshot(env, planUser.sub, new Date());
+      const consumed = snap ? (snap[packQuotaKey(planUser.sub)] || 0) : 0;
+      const extra = packRemaining(billing.packGranted, consumed);
+      const planLimit = planMonthlyLimit(plan, env);
+      return json({ ok: true, plan, planLimit, packRemaining: extra, monthLimit: planLimit + extra }, 200, h);
     }
     if (url.pathname === "/account/session") {
       if (req.method !== "POST") return json({ error: "Not found" }, 404, h);
@@ -1120,15 +1160,17 @@ export default {
     const uid = user && (user.sub || user.uid);
     const now = new Date();
     const review = isReviewEmail(String((user && user.email) || ""), env);
-    const plan = accountPlan(user, env);
+    const billing = await loadBilling(env, user);
+    const plan = billing.plan === "pro" || billing.plan === "armory" ? billing.plan : "free";
     const dailyLimit = review ? reviewDailyLimit(env) : +(env.DAILY_AI_LIMIT || 40);
     const snap = await usageSnapshot(env, uid, now) || {};
+    const packLeft = review ? 0 : packRemaining(billing.packGranted, snap[packQuotaKey(uid)] || 0);
     const allowance = lookupBatchAllowance({
       count: items.length,
       dailyUsed: snap[attemptQuotaKey(uid, now)] || 0,
       dailyLimit,
       monthUsed: snap[monthQuotaKey(uid, now)] || 0,
-      monthLimit: planMonthlyLimit(plan, env),
+      monthLimit: planMonthlyLimit(plan, env) + packLeft,
       skipMonth: review,
     });
     const accepted = items.slice(0, allowance.allowed);
@@ -1137,7 +1179,7 @@ export default {
     const budgets = accepted.map(it => callHoldMicro(env, "lookup", estimateInputTokens(JSON.stringify([{ role: "user", content: prompt(it) }]))));
     const reserveMicro = budgets.reduce((sum, n) => sum + n, 0);
     const reserveEach = budgets.reduce((max, n) => Math.max(max, n), 0);
-    const lookBill = await reserveCall(env, user, "lookup", accepted.length, { reserveMicro, reserveEach, dailyEach: lookupTypicalMicro(env), partial: true, now });
+    const lookBill = await reserveCall(env, user, "lookup", accepted.length, { reserveMicro, reserveEach, dailyEach: lookupTypicalMicro(env), partial: true, now, billing });
     if (!lookBill.ok) return json({ error: lookBill.error, results: accepted.map(it => ({ id: String((it && it.id) || ""), ok: false, error: lookBill.error })).concat(refused) }, lookBill.status, h);
     const charged = Math.max(0, Math.round(+lookBill.charged || 0));
     const run = accepted.slice(0, charged);

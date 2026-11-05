@@ -343,7 +343,7 @@ function previousUtcMonth(date) {
 // The retired lifetime key spend:free is pruned. The seeded flag, holds, and flight markers stay.
 export function quotaCounterExpired(key, now) {
   const k = String(key || "");
-  if (!k || k === "seeded:spend" || k.startsWith("hold:") || k.startsWith("flight:")) return false;
+  if (!k || k === "seeded:spend" || k.startsWith("hold:") || k.startsWith("flight:") || k.startsWith("pk:")) return false;
   if (k === "spend:free") return true;
   const day = k.match(/^(?:q|a|t|ds|if):[^:]+:(\d{4}-\d{2}-\d{2})$/);
   if (day) {
@@ -424,9 +424,131 @@ export function priciestRates(env) {
   };
 }
 
-// RevenueCat is not connected. Every account stays on the free plan until that lookup exists.
-export function accountPlan() {
+// Approved store products. Monthly and annual are durations of the same id.
+// A store that needs one id per duration can add _monthly, _annual, or :monthly / :annual.
+// Those still map here, so sandbox products can be attached without renaming the approved ids.
+export const BILLING_IDS = {
+  pro: "warbox_pro",
+  armory: "warbox_armory",
+  pack: "warbox_lookups_100",
+};
+export const BILLING_ENTITLEMENTS = { pro: "pro", armory: "armory" };
+export const LOOKUP_PACK_PRODUCT = BILLING_IDS.pack;
+export const LOOKUP_PACK_SIZE = 100;
+export const PRO_TRIAL_DAYS = 7;
+
+export function billingPlanForProductId(id) {
+  const raw = String(id || "");
+  const rows = [["armory", BILLING_IDS.armory], ["pro", BILLING_IDS.pro]];
+  for (const [plan, pid] of rows) {
+    if (raw === pid || raw.startsWith(pid + "_") || raw.startsWith(pid + ":")) return plan;
+  }
+  return "";
+}
+
+export function packQuotaKey(uid) {
+  return `pk:${uid}`;
+}
+
+function revenueCatSecret(env) {
+  const raw = env && env.REVENUECAT_SECRET_API_KEY;
+  if (typeof raw !== "string") return "";
+  const key = raw.trim();
+  if (!key || key.length > 200 || /[\r\n]/.test(key)) return "";
+  return key;
+}
+
+// A null expiry is lifetime. A dated expiry counts only while it is still in the future.
+export function entitlementActive(entry, nowMs) {
+  if (!entry || typeof entry !== "object") return false;
+  if (entry.refunded_at) return false;
+  const exp = entry.expires_date;
+  if (exp == null || exp === "") return !!(entry.purchase_date || entry.product_identifier || entry.product_plan_identifier);
+  const t = Date.parse(exp);
+  const now = nowMs == null || nowMs === "" ? Date.now() : +nowMs;
+  return Number.isFinite(t) && t > now;
+}
+
+function entitlementGrants(entry, plan, nowMs) {
+  if (!entitlementActive(entry, nowMs)) return false;
+  const pid = entry && entry.product_identifier;
+  if (!pid) return true;
+  return billingPlanForProductId(pid) === plan;
+}
+
+function subscriptionGrants(subscriber, plan, nowMs) {
+  const subs = subscriber && subscriber.subscriptions;
+  if (!subs || typeof subs !== "object") return false;
+  for (const [id, row] of Object.entries(subs)) {
+    const named = billingPlanForProductId(id) === plan || billingPlanForProductId(row && row.product_identifier) === plan;
+    if (!named || (row && row.refunded_at)) continue;
+    if (entitlementActive(row, nowMs)) return true;
+  }
+  return false;
+}
+
+function planActive(subscriber, plan, nowMs) {
+  const ents = subscriber && subscriber.entitlements;
+  if (entitlementGrants(ents && ents[plan], plan, nowMs)) return true;
+  return subscriptionGrants(subscriber, plan, nowMs);
+}
+
+// No subscriber, or no secret configured: free. Armory wins when both are active.
+export function accountPlan(user, env, subscriber, nowMs) {
+  if (planActive(subscriber, "armory", nowMs)) return "armory";
+  if (planActive(subscriber, "pro", nowMs)) return "pro";
   return "free";
+}
+
+export function lookupPackGranted(subscriber) {
+  const bucket = subscriber && subscriber.non_subscriptions && subscriber.non_subscriptions[LOOKUP_PACK_PRODUCT];
+  if (!Array.isArray(bucket)) return 0;
+  const seen = new Set();
+  for (const row of bucket) {
+    if (!row || typeof row !== "object" || row.refunded_at) continue;
+    const id = String(row.id || row.store_transaction_id || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+  }
+  return seen.size * LOOKUP_PACK_SIZE;
+}
+
+export function packRemaining(granted, consumed) {
+  return Math.max(0, Math.round(+granted || 0) - Math.max(0, Math.round(+consumed || 0)));
+}
+
+// How the lifetime pack counter moves when the monthly counter changes.
+// Lookups inside the plan allowance do not touch the pack. A refund of an unused pack lookup puts it back.
+export function packConsumedDelta(monthBefore, monthAfter, base) {
+  const over = m => Math.max(0, Math.round(+m || 0) - Math.max(0, Math.round(+base || 0)));
+  return over(monthAfter) - over(monthBefore);
+}
+
+export async function resolveBilling(env, appUserId, fetchImpl, nowMs) {
+  const key = revenueCatSecret(env);
+  const id = String(appUserId || "").trim();
+  if (!key || !id) return { plan: "free", packGranted: 0, configured: false };
+  let subscriber = null;
+  try {
+    const fetchFn = fetchImpl || globalThis.fetch;
+    const res = await fetchFn("https://api.revenuecat.com/v1/subscribers/" + encodeURIComponent(id), {
+      method: "GET",
+      redirect: "error",
+      headers: { Authorization: "Bearer " + key, Accept: "application/json" },
+      signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined,
+    });
+    if (res && res.ok && typeof res.json === "function") {
+      const body = await res.json();
+      subscriber = body && body.subscriber && typeof body.subscriber === "object" ? body.subscriber : null;
+    }
+  } catch {
+    subscriber = null;
+  }
+  return {
+    plan: accountPlan(null, env, subscriber, nowMs),
+    packGranted: lookupPackGranted(subscriber),
+    configured: true,
+  };
 }
 
 function tokenCount(...vals) {
@@ -958,9 +1080,29 @@ export function loanEmailRedaction(loan, email) {
   return hit ? copy : null;
 }
 
-// RevenueCat is not set up. This is the hook that will delete the customer later.
-export function deleteRevenueCatCustomer() {
-  return { ok: true, skipped: true };
+// Without the dashboard secret there is no customer to delete. The secret never leaves this process.
+export function deleteRevenueCatCustomer(env, appUserId) {
+  const id = String(appUserId || "").trim();
+  if (!revenueCatSecret(env) || !id) return { ok: true, skipped: true };
+  return { ok: true, skipped: false, appUserId: id };
+}
+
+export async function deleteRevenueCatCustomerNow(env, appUserId, fetchImpl) {
+  const plan = deleteRevenueCatCustomer(env, appUserId);
+  if (plan.skipped) return plan;
+  const key = revenueCatSecret(env);
+  try {
+    const fetchFn = fetchImpl || globalThis.fetch;
+    const res = await fetchFn("https://api.revenuecat.com/v1/subscribers/" + encodeURIComponent(plan.appUserId), {
+      method: "DELETE",
+      redirect: "error",
+      headers: { Authorization: "Bearer " + key, Accept: "application/json" },
+    });
+    if (res && (res.ok || res.status === 404)) return { ok: true, skipped: false };
+    return { ok: false, skipped: false };
+  } catch {
+    return { ok: false, skipped: false };
+  }
 }
 
 export function selectDueWatches(users, opts) {
@@ -2451,7 +2593,8 @@ const GearLogic = {
   parseAllowlist, decideAccess, betaOnly, isReviewEmail, chargeDecision, quotaKey, attemptQuotaKey, dailySpendKey, poolSpendKey, inflightKey, alertQuotaKey, monthQuotaKey, monthRefundKey, quotaCounterExpired, selectDueWatches, pinLengthOk, newPasswordOk,
   DEFAULT_PLAN_LIMITS, DEFAULT_REVIEW_DAILY_LIMIT, DEFAULT_FREE_SPEND_CAP_USD, DEFAULT_FREE_DAILY_SPEND_CAP_USD, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, BUSY_RETRY_MS, busyQueueStep, REQUEST_DEADLINE_MS, REQUEST_DEADLINE_MIN_MS, ROUND_FLOOR_MS, ROUND_FLOOR_MIN_MS, DEADLINE_MARGIN_MS, requestDeadline, clampedDeadlineBudget, clampedRoundFloor, roundAllowed, poolLifetimeExpired, USAGE_HOLD_STALE_MS, POOL_SEED_KEY, MONTHLY_REFUND_CAP, DAILY_SPEND_FULL, DEFAULT_SPEND_RATES,
   planMonthlyLimit, reviewDailyLimit, spendCapMicro, freeDailySpendCapMicro, spendRates, accountPlan, usageFromResponse, addUsage, estimateSpendMicro, freeSpendBlocked, usageDecision, lookupPriced, lookupBatchAllowance,
-  USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer,
+  BILLING_IDS, BILLING_ENTITLEMENTS, LOOKUP_PACK_PRODUCT, LOOKUP_PACK_SIZE, PRO_TRIAL_DAYS, billingPlanForProductId, packQuotaKey, entitlementActive, lookupPackGranted, packRemaining, packConsumedDelta, resolveBilling,
+  USER_COLLECTIONS, accountDeletePlan, deleteRevenueCatCustomer, deleteRevenueCatCustomerNow,
   DELETE_AUTH_MAX_AGE_SEC, ACCOUNT_DELETE_TIMEOUT_MS, signInIsRecent, DELETED_USER_TTL_MS, deletedUserExpireAt, tombstoneDue, LOOKUPS_PAUSED,
   reserveFits, lookupItemHoldMicro, lookupTypicalMicro, operationTypicalMicro, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction, loanTargetsFromLends, loanRedactTargets, loansToMirror, deleteRetryRoute,
   ACCOUNT_DELETED_NOTE, deletedAccountGate, deleteCleanupResult, cleanupRetryPlan, cleanupQueueBody,

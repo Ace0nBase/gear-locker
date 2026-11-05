@@ -1,0 +1,28 @@
+{
+  "appId": "com.sixridgelabs.warbox",
+  "offering": "default",
+  "entitlements": {
+    "pro": {
+      "productId": "warbox_pro",
+      "monthlyLookups": 100,
+      "trialDays": 7,
+      "durations": ["monthly", "annual"]
+    },
+    "armory": {
+      "productId": "warbox_armory",
+      "monthlyLookups": 500,
+      "trialDays": 0,
+      "durations": ["monthly", "annual"]
+    }
+  },
+  "consumables": {
+    "warbox_lookups_100": {
+      "lookups": 100
+    }
+  },
+  "storeProductIds": {
+    "warbox_pro": ["warbox_pro", "warbox_pro_monthly", "warbox_pro_annual", "warbox_pro:monthly", "warbox_pro:annual"],
+    "warbox_armory": ["warbox_armory", "warbox_armory_monthly", "warbox_armory_annual", "warbox_armory:monthly", "warbox_armory:annual"],
+    "warbox_lookups_100": ["warbox_lookups_100"]
+  }
+}
