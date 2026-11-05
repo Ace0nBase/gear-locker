@@ -1,0 +1,15 @@
+{
+  "appId": "com.sixridgelabs.warbox",
+  "appName": "War Box",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https",
+    "hostname": "warbox.local"
+  },
+  "ios": {
+    "contentInset": "automatic"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

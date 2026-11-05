@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import {
   decideAccess, isReviewEmail, monthQuotaKey, quotaCounterExpired, planMonthlyLimit, reviewDailyLimit, spendCapMicro, lookupBatchAllowance, lookupPriced,
   estimateSpendMicro, usageFromResponse, freeSpendBlocked, usageDecision,
-  deleteRevenueCatCustomer, accountDeletePlan, accountPlan, USER_COLLECTIONS,
+  deleteRevenueCatCustomer, deleteRevenueCatCustomerNow, accountDeletePlan, accountPlan, USER_COLLECTIONS,
+  billingPlanForProductId, lookupPackGranted, packRemaining, packConsumedDelta, packQuotaKey, resolveBilling,
+  clearBillingCache, REVENUECAT_TIMEOUT_MS, BILLING_FRESH_MS,
+  BILLING_IDS, LOOKUP_PACK_SIZE, PRO_TRIAL_DAYS, entitlementActive,
   signInIsRecent, reserveFits, lookupReserveMicro, reconcileSpendMicro, loanEmailRedaction,
   clampMaxTokens, MODEL_CALLS, operationWorstUsage, worstCaseSpendMicro, callHoldMicro, lookupItemHoldMicro, lookupTypicalMicro, operationTypicalMicro, priciestRates, spendRates, applyReserve, applyReconcile, DAILY_SPEND_FULL,
   poolSpendKey, inflightKey, FREE_INFLIGHT_LIMIT, LOOKUP_BUSY, dailySpendKey, USAGE_HOLD_STALE_MS, BUSY_RETRY_MS, busyQueueStep, POOL_SEED_KEY, REQUEST_DEADLINE_MS, ROUND_FLOOR_MS, requestDeadline, roundAllowed, poolLifetimeExpired, estimateInputTokens,
@@ -112,11 +115,18 @@ test("usageDecision pauses free lookups, skips the month for review, and keeps t
   assert.match(daily.error, /Daily lookup limit/);
 });
 
-test("plan lookup is a free stub and account deletion names the exact keys", () => {
+test("plan lookup is free until a subscriber is active, and account deletion names the exact keys", () => {
   assert.equal(accountPlan(), "free");
+  assert.equal(accountPlan({ sub: "uid" }, {}), "free");
   const hook = deleteRevenueCatCustomer();
   assert.equal(hook.ok, true);
   assert.equal(hook.skipped, true);
+  const secret = "sk_test_secret_value";
+  const named = deleteRevenueCatCustomer({ REVENUECAT_SECRET_API_KEY: secret }, "uid 1");
+  assert.equal(named.skipped, false);
+  assert.equal(named.appUserId, "uid 1");
+  assert.equal(JSON.stringify(named).includes(secret), false);
+  assert.equal(deleteRevenueCatCustomer({ REVENUECAT_SECRET_API_KEY: secret }, "").skipped, true);
   const plan = accountDeletePlan("abc");
   assert.deepEqual(plan.collections, USER_COLLECTIONS);
   assert.deepEqual(plan.kvExact, ["w:abc"]);
@@ -124,6 +134,203 @@ test("plan lookup is a free stub and account deletion names the exact keys", () 
   assert.equal(plan.lendField, "lender");
   assert.ok(plan.kvPrefixes.every(p => p.endsWith(":")));
   assert.deepEqual(USER_COLLECTIONS, ["items", "ammo", "sessions", "dope", "maint", "wish", "loans", "freqs", "pace", "meta"]);
+});
+
+test("entitlements map the approved product ids and a pack adds 100", () => {
+  const now = Date.parse("2026-11-05T00:00:00Z");
+  const live = expires => ({ expires_date: expires, product_identifier: "warbox_pro", purchase_date: "2026-11-01T00:00:00Z" });
+  assert.equal(entitlementActive(live("2026-12-01T00:00:00Z"), now), true);
+  assert.equal(entitlementActive(live("2026-11-01T00:00:00Z"), now), false);
+  assert.equal(entitlementActive({ ...live("2026-12-01T00:00:00Z"), refunded_at: "2026-11-02T00:00:00Z" }, now), false);
+  assert.equal(billingPlanForProductId("warbox_pro"), "pro");
+  assert.equal(billingPlanForProductId("warbox_pro_annual"), "pro");
+  assert.equal(billingPlanForProductId("warbox_pro:monthly"), "pro");
+  assert.equal(billingPlanForProductId("warbox_armory"), "armory");
+  assert.equal(billingPlanForProductId("warbox_armory:annual"), "armory");
+  assert.equal(billingPlanForProductId("warbox_lookups_100"), "");
+  assert.equal(BILLING_IDS.pro, "warbox_pro");
+  assert.equal(BILLING_IDS.armory, "warbox_armory");
+  assert.equal(BILLING_IDS.pack, "warbox_lookups_100");
+  assert.equal(PRO_TRIAL_DAYS, 7);
+  assert.equal(LOOKUP_PACK_SIZE, 100);
+  const pro = { entitlements: { pro: { expires_date: "2026-12-01T00:00:00Z", product_identifier: "warbox_pro_annual", purchase_date: "2026-11-01T00:00:00Z" } } };
+  assert.equal(accountPlan(null, {}, pro, now), "pro");
+  const both = { entitlements: { pro: pro.entitlements.pro, armory: { expires_date: "2026-12-01T00:00:00Z", product_identifier: "warbox_armory", purchase_date: "2026-11-01T00:00:00Z" } } };
+  assert.equal(accountPlan(null, {}, both, now), "armory");
+  const expired = { entitlements: { pro: { expires_date: "2026-10-01T00:00:00Z", product_identifier: "warbox_pro", purchase_date: "2026-09-01T00:00:00Z" } } };
+  assert.equal(accountPlan(null, {}, expired, now), "free");
+  const fromSub = { subscriptions: { "warbox_armory:monthly": { expires_date: "2026-12-01T00:00:00Z", purchase_date: "2026-11-01T00:00:00Z" } } };
+  assert.equal(accountPlan(null, {}, fromSub, now), "armory");
+  assert.equal(billingPlanForProductId("rc_promo_pro"), "pro");
+  assert.equal(billingPlanForProductId("rc_promo_armory"), "armory");
+  assert.equal(billingPlanForProductId("rc_promo_professional"), "");
+  const promo = { entitlements: { pro: { expires_date: "2026-12-01T00:00:00Z", product_identifier: "rc_promo_pro", purchase_date: "2026-11-01T00:00:00Z" } } };
+  assert.equal(accountPlan(null, {}, promo, now), "pro");
+  const promoArmory = { subscriptions: { rc_promo_armory: { expires_date: "2026-12-01T00:00:00Z", purchase_date: "2026-11-01T00:00:00Z" } } };
+  assert.equal(accountPlan(null, {}, promoArmory, now), "armory");
+  const packs = {
+    non_subscriptions: {
+      warbox_lookups_100: [
+        { id: "txn-1", purchase_date: "2026-11-01T00:00:00Z" },
+        { id: "txn-1", purchase_date: "2026-11-01T00:00:00Z" },
+        { id: "txn-2", purchase_date: "2026-11-02T00:00:00Z" },
+        { id: "txn-3", purchase_date: "2026-11-03T00:00:00Z", refunded_at: "2026-11-04T00:00:00Z" },
+      ],
+    },
+  };
+  assert.equal(lookupPackGranted(packs), 200);
+  assert.equal(packRemaining(200, 30), 170);
+  assert.equal(packRemaining(10, 40), 0);
+  assert.equal(packConsumedDelta(8, 12, 10), 2);
+  assert.equal(packConsumedDelta(12, 10, 10), -2);
+  assert.equal(packConsumedDelta(3, 4, 10), 0);
+  assert.equal(packQuotaKey("abc"), "pk:abc");
+  assert.equal(quotaCounterExpired("pk:abc", new Date("2026-11-05T00:00:00Z")), false);
+});
+
+test("a billing lookup fails closed and does not return the secret", async () => {
+  clearBillingCache();
+  let calls = 0;
+  const secret = "sk_test_secret_value";
+  const missed = await resolveBilling({}, "uid", () => { calls++; throw new Error("no"); });
+  assert.equal(missed.plan, "free");
+  assert.equal(calls, 0);
+  const fetchImpl = async (url, opts) => {
+    calls++;
+    assert.match(String(url), /\/v1\/subscribers\/uid%201$/);
+    assert.equal(opts.headers.Authorization, "Bearer " + secret);
+    assert.equal(opts.redirect, "error");
+    return { ok: true, json: async () => ({ subscriber: { entitlements: { pro: { expires_date: "2099-01-01T00:00:00Z", product_identifier: "warbox_pro", purchase_date: "2026-11-01T00:00:00Z" } }, non_subscriptions: { warbox_lookups_100: [{ id: "pack-1" }] } } }) };
+  };
+  const hit = await resolveBilling({ REVENUECAT_SECRET_API_KEY: secret }, "uid 1", fetchImpl, Date.parse("2026-11-05T00:00:00Z"));
+  assert.equal(hit.plan, "pro");
+  assert.equal(hit.packGranted, 100);
+  assert.equal(JSON.stringify(hit).includes(secret), false);
+  const down = await resolveBilling({ REVENUECAT_SECRET_API_KEY: secret }, "uid", async () => ({ ok: false, status: 500, json: async () => ({}) }));
+  assert.equal(down.plan, "free");
+  assert.equal(down.packGranted, 0);
+  const removed = await deleteRevenueCatCustomerNow({ REVENUECAT_SECRET_API_KEY: secret }, "uid 1", async (url, opts) => {
+    assert.equal(opts.method, "DELETE");
+    assert.equal(opts.headers.Authorization, "Bearer " + secret);
+    assert.equal(JSON.stringify(opts).includes("FIREBASE_SA_JSON"), false);
+    return { ok: true, status: 200 };
+  });
+  assert.equal(removed.ok, true);
+  assert.equal(removed.skipped, false);
+  assert.equal(JSON.stringify(removed).includes(secret), false);
+  const skipped = await deleteRevenueCatCustomerNow({}, "uid", () => { throw new Error("called"); });
+  assert.equal(skipped.skipped, true);
+  clearBillingCache();
+});
+
+test("a hung RevenueCat delete aborts in four seconds and does not block on the hang", async () => {
+  const orig = AbortSignal.timeout;
+  let delay = 0;
+  AbortSignal.timeout = (ms) => {
+    delay = ms;
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 20);
+    return ctrl.signal;
+  };
+  try {
+    const started = Date.now();
+    const result = await deleteRevenueCatCustomerNow({ REVENUECAT_SECRET_API_KEY: "sk_test_secret_value" }, "uid", (url, opts) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve({ ok: true, status: 200 }), 60_000);
+      const signal = opts && opts.signal;
+      const abort = () => {
+        clearTimeout(timer);
+        reject(new DOMException("The operation was aborted", "AbortError"));
+      };
+      if (signal) {
+        if (signal.aborted) abort();
+        else signal.addEventListener("abort", abort, { once: true });
+      }
+    }));
+    assert.equal(delay, REVENUECAT_TIMEOUT_MS);
+    assert.equal(REVENUECAT_TIMEOUT_MS, 4000);
+    assert.ok(Date.now() - started < 1000);
+    assert.equal(result.ok, false);
+    assert.equal(result.skipped, false);
+    assert.equal(JSON.stringify(result).includes("sk_test_secret_value"), false);
+  } finally {
+    AbortSignal.timeout = orig;
+  }
+});
+
+test("a transient RevenueCat error keeps a recent paid plan and a fresh read is reused", async () => {
+  clearBillingCache();
+  const secret = "sk_test_secret_value";
+  const env = { REVENUECAT_SECRET_API_KEY: secret };
+  const t0 = Date.parse("2026-11-05T12:00:00Z");
+  const proBody = { subscriber: { entitlements: { pro: { expires_date: "2099-01-01T00:00:00Z", product_identifier: "rc_promo_pro", purchase_date: "2026-11-01T00:00:00Z" } } } };
+  let calls = 0;
+  const ok = async () => {
+    calls++;
+    return { ok: true, status: 200, json: async () => proBody };
+  };
+  const first = await resolveBilling(env, "paid", ok, t0);
+  assert.equal(first.plan, "pro");
+  const again = await resolveBilling(env, "paid", () => { throw new Error("should reuse the fresh read"); }, t0 + 1000);
+  assert.equal(again.plan, "pro");
+  assert.equal(calls, 1);
+  const storm = await resolveBilling(env, "paid", async () => ({ ok: false, status: 429, json: async () => ({}) }), t0 + BILLING_FRESH_MS + 1000);
+  assert.equal(storm.plan, "pro");
+  const hung = await resolveBilling(env, "paid", (url, opts) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve({ ok: false, status: 500, json: async () => ({}) }), 60_000);
+    const abort = () => { clearTimeout(timer); reject(new DOMException("The operation was aborted", "AbortError")); };
+    if (opts && opts.signal) opts.signal.addEventListener("abort", abort, { once: true });
+  }), t0 + BILLING_FRESH_MS + 2000);
+  assert.equal(hung.plan, "pro");
+  assert.ok(Date.now() - t0 < 60_000 || hung.plan === "pro");
+  const unknown = await resolveBilling(env, "never", async () => ({ ok: false, status: 500, json: async () => ({}) }), t0);
+  assert.equal(unknown.plan, "free");
+  clearBillingCache();
+});
+
+test("a lookup pack is spent only past the plan allowance and a refund puts it back", () => {
+  const sql = fakeSql();
+  const ledger = ledgerWith(sql);
+  const base = {
+    reserve: 0,
+    cap: 25e6,
+    skipSpend: true,
+    dailyAdd: 1,
+    dailyLimit: 40,
+    monthAdd: 1,
+    monthLimit: 10,
+    packGranted: 100,
+    packKey: "pk:user",
+    dailyKey: "t:user:2026-11-05",
+    monthKey: "m:user:2026-11",
+  };
+  for (let i = 0; i < 10; i++) {
+    const row = ledger.reserve({ ...base, id: "plan" + i });
+    assert.equal(row.ok, true, "plan " + i);
+  }
+  assert.equal(sql.rows.get("pk:user") || 0, 0);
+  assert.equal(sql.rows.get("m:user:2026-11"), 10);
+  const extra = ledger.reserve({ ...base, id: "pack1", dailyAdd: 4, monthAdd: 4, partial: true });
+  assert.equal(extra.ok, true);
+  assert.equal(extra.charged, 4);
+  assert.equal(sql.rows.get("m:user:2026-11"), 14);
+  assert.equal(sql.rows.get("pk:user"), 4);
+  const blocked = ledger.reserve({ ...base, id: "nopack", packGranted: 4, dailyAdd: 1, monthAdd: 1 });
+  assert.equal(blocked.ok, false);
+  ledger.reconcile({
+    id: "pack1",
+    actual: 0,
+    countRefund: 1,
+    refundCap: 5,
+    monthKey: "m:user:2026-11",
+    packKey: "pk:user",
+    monthBase: 10,
+  });
+  assert.equal(sql.rows.get("m:user:2026-11"), 13);
+  assert.equal(sql.rows.get("pk:user"), 3);
+  sql.rows.set("pk:user1", 3);
+  ledger.clearUser({ uid: "user1" });
+  assert.equal(sql.rows.has("pk:user1"), false);
+  assert.equal(sql.rows.get("pk:user"), 3);
 });
 
 test("account deletion accepts a sign-in from the last five minutes", () => {

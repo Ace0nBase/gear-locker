@@ -32,3 +32,5 @@ crons = ["17 * * * *"]
 # It deletes the Auth user. The public web key stays in the browser and is not used here.
 # FIREBASE_SA_JSON — service account JSON for project gear-locker-c248c, role Cloud Datastore User.
 # EMAIL_HMAC_KEY — random string used to key the deleted-email hold. Clients cannot read it.
+# REVENUECAT_SECRET_API_KEY — RevenueCat secret API key for subscriber lookups and customer delete.
+# It is not a public SDK key. Leave it unset until sandbox billing is ready. Do not put it in this file.

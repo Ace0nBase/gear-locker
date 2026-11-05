@@ -389,7 +389,7 @@ async function qaStorageCheckRun(){
   else toast("Storage check failed. Another account or a signed-out check was not blocked ("+otherCode+" / "+signedOutCode+").",6000);
 }
 }
-var APP_VERSION="57";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
+var APP_VERSION="58";try{document.getElementById("ver").textContent="v"+APP_VERSION}catch{}
 var swReloadPending=false;
 function showUpdateToast(){
   const el=$("toast");if(!el)return;
@@ -403,7 +403,8 @@ function showUpdateToast(){
   el.append(b);el.hidden=false;clearTimeout(toast.t);
 }
 function finishSwReload(){if(!swReloadPending)return;swReloadPending=false;location.reload()}
-if("serviceWorker" in navigator&&GearLogic.serviceWorkerAllowed(location,window.GEAR_QA)){
+function inNativeShell(){try{return !!(window.Capacitor&&typeof window.Capacitor.isNativePlatform==="function"&&window.Capacitor.isNativePlatform())}catch(e){return false}}
+if("serviceWorker" in navigator&&GearLogic.serviceWorkerAllowed(location,window.GEAR_QA)&&!inNativeShell()){
   const hadSW=!!navigator.serviceWorker.controller;let reloading=false;
   navigator.serviceWorker.register("sw.js").then(reg=>{const poke=()=>{if(reg.waiting)reg.waiting.postMessage({type:"skip-waiting"});reg.update().catch(()=>{})};reg.addEventListener("updatefound",()=>{const worker=reg.installing;if(worker)worker.addEventListener("statechange",()=>{if(worker.state==="installed")poke()})});document.addEventListener("visibilitychange",()=>{if(!document.hidden)poke()});setInterval(poke,20*60e3);poke()}).catch(()=>{});
   navigator.serviceWorker.addEventListener("controllerchange",()=>{if(!hadSW||reloading)return;reloading=true;if(!anySheetOpen()){location.reload();return}swReloadPending=true;showUpdateToast()});

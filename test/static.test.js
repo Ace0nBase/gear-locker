@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { iphoneCopyHits } from "../scripts/cap-www.mjs";
 
 const read = p => fs.readFileSync(new URL("../" + p, import.meta.url), "utf8");
 const html = read("index.html");
@@ -36,7 +37,8 @@ test("published files do not contain a personal name or a retired product name",
   assert.match(read("README.md"), /support@getwarbox\.com/);
   assert.match(read("README.md"), /Six Ridge Labs LLC/);
   assert.match(read("README.md"), /com\.sixridgelabs\.warbox/);
-  assert.match(read("README.md"), /iPhone only/);
+  assert.match(read("README.md"), /iPhone and Android/);
+  assert.match(read("README.md"), /in-app text does not name other platforms/);
   assert.doesNotMatch(html, /Gear Locker|Arms Room/);
   assert.doesNotMatch(manifest, /Gear Locker|Arms Room/);
   assert.match(read("js/records.js"), /\["arms","Armory"\]/);
@@ -48,17 +50,65 @@ test("published files do not contain a personal name or a retired product name",
   assert.deepEqual(emails.filter(e => !allowed.has(e.toLowerCase())), []);
 });
 
-test("sign-out clears this device, the app is version 57, and the service worker cache is version 57", () => {
+test("sign-out clears this device, the app is version 58, and the service worker cache is version 58", () => {
   assert.match(appJs, /GearLogic\.clearUserLocal/);
   assert.match(appJs, /pinLengthOk/);
   assert.match(appJs, /shareItemFields/);
   assert.match(appJs, /notes:""/);
-  assert.match(sw, /war-box-v57/);
+  assert.match(sw, /war-box-v58/);
   assert.match(sw, /skip-waiting/);
-  assert.match(read("js/cloud.js"), /APP_VERSION="57"/);
+  assert.match(read("js/cloud.js"), /APP_VERSION="58"/);
   assert.match(read("js/cloud.js"), /function markLookupError/);
   assert.match(read("js/core.js"), /i\.lookupError&&!lookingUp\.has\(i\.id\)/);
   assert.match(read("js/cloud.js"), /textContent="v"\+APP_VERSION/);
+  assert.match(read("js/cloud.js"), /inNativeShell/);
+  assert.match(read("js/cloud.js"), /!inNativeShell\(\)/);
+  assert.match(sw, /js\/billing\.js/);
+  assert.match(html, /js\/billing\.js/);
+  assert.doesNotMatch(read("js/billing.js"), /\bAndroid\b|\bDesktop\b|\bPC\b|\bEdge\b/);
+  assert.doesNotMatch(read("js/core.js"), /folder on this computer/);
+  assert.match(read("js/core.js"), /folder you choose/);
+  assert.doesNotMatch(read("js/import-ui.js"), /Windows-1252|Mac Roman/);
+  assert.match(read("js/import-ui.js"), /Western European/);
+  assert.match(read("js/import-ui.js"), /encodingLabel/);
+  assert.doesNotMatch(read("ios/App/App/Info.plist"), /\bAndroid\b|\bDesktop\b|\bPC\b|\bEdge\b/);
+  assert.doesNotMatch(read("js/billing.js"), /FIREBASE_SA_JSON|sk_|appl_|goog_/);
+  assert.match(read("js/billing.js"), /warbox_pro/);
+  assert.match(read("js/billing.js"), /warbox_armory/);
+  assert.match(read("js/billing.js"), /warbox_lookups_100/);
+  assert.match(read("js/billing.js"), /includes a \$\{trial\}-day trial\. Armory is/);
+  assert.match(read("js/billing.js"), /https:\/\/getwarbox\.com\/terms/);
+  assert.match(read("js/billing.js"), /https:\/\/getwarbox\.com\/privacy/);
+  assert.match(read("js/billing.js"), /Terms of Use/);
+  assert.match(read("js/billing.js"), /Privacy Policy/);
+  assert.match(read("js/billing.js"), /Subscriptions renew automatically unless cancelled at least 24 hours before the end of the current period/);
+  assert.match(read("js/billing.js"), /your App Store account settings/);
+  assert.match(read("js/billing.js"), /Restore Purchases/);
+  assert.match(read("js/billing.js"), /per month/);
+  assert.match(read("js/billing.js"), /per year/);
+  assert.equal(iphoneCopyHits(read("js/billing.js")).length, 0);
+  assert.match(read("README.md"), /Firebase Auth authorized domain: `warbox\.local`/);
+  assert.match(read("README.md"), /capacitor:\/\/warbox\.local\/\*/);
+  assert.match(read("README.md"), /https:\/\/warbox\.local\/\*/);
+  const catalog = JSON.parse(read("billing/products.json"));
+  assert.equal(catalog.appId, "com.sixridgelabs.warbox");
+  assert.equal(catalog.entitlements.pro.productId, "warbox_pro");
+  assert.equal(catalog.entitlements.pro.trialDays, 7);
+  assert.equal(catalog.entitlements.armory.productId, "warbox_armory");
+  assert.equal(catalog.entitlements.armory.trialDays, 0);
+  assert.equal(catalog.consumables.warbox_lookups_100.lookups, 100);
+  const cap = JSON.parse(read("capacitor.config.json"));
+  assert.equal(cap.appId, "com.sixridgelabs.warbox");
+  assert.equal(cap.webDir, "www");
+  assert.equal(cap.server.hostname, "warbox.local");
+  assert.equal(cap.server.androidScheme, "https");
+  assert.match(read("api/worker.js"), /\/account\/plan/);
+  assert.match(read("api/worker.js"), /resolveBilling/);
+  assert.match(read("api/worker.js"), /REVENUECAT_SECRET_API_KEY/);
+  assert.doesNotMatch(read("api/wrangler.toml"), /REVENUECAT_SECRET_API_KEY\s*=/);
+  assert.match(read("README.md"), /REVENUECAT_SECRET_API_KEY/);
+  assert.match(read("README.md"), /warbox_lookups_100/);
+  assert.doesNotMatch(read("config.billing.example.js"), /sk_|appl_|goog_/);
   assert.match(read("js/cloud.js"), /this month's lookups/);
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /addEventListener\("push"/);
@@ -374,4 +424,13 @@ test("production config stays on the live project and the default alias does not
   assert.equal(fs.existsSync(new URL("../icon-192.png", import.meta.url)), true);
   assert.equal(fs.existsSync(new URL("../favicon.svg", import.meta.url)), true);
   assert.equal(fs.existsSync(new URL("../apple-touch-icon.png", import.meta.url)), true);
+});
+
+test("the iPhone copy gate catches platform names in any case", () => {
+  for (const sample of ["Android", "android", "Desktops", "Edge", "PCs", "PC", "Windows", "Chromebook", "Google Play", "Mac Roman", "macOS"]) {
+    assert.ok(iphoneCopyHits(sample).length > 0, sample);
+  }
+  for (const sample of ["MacIntel", "windows-1252", "\"mac\"", "Western European", "Roman", "folder you choose", "12 pcs", "/iphone|ipad|android/i"]) {
+    assert.equal(iphoneCopyHits(sample).length, 0, sample);
+  }
 });

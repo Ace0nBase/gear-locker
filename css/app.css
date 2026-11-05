@@ -50,6 +50,7 @@ form.panel h2{grid-column:1/-1;margin:0;font-family:var(--display);text-transfor
 .priceOut{flex:1 1 280px;min-width:0;font-size:.86rem;color:var(--muted)}
 .priceOut b{color:var(--ink);font-family:var(--mono);font-weight:500}
 .priceOut a{color:var(--accent)}
+.planLegal a{color:var(--accent);font-weight:600;display:inline-block;min-height:44px;line-height:44px;margin-right:16px}
 .tag{display:inline-block;font-size:.66rem;text-transform:uppercase;letter-spacing:.08em;color:var(--coyote)}
 .actions{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;align-items:center}
 .actions .spacer{flex:1}

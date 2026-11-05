@@ -82,7 +82,7 @@ function showConnect(reconnect){if(window.FIREBASE_CONFIG)return;
   try{if(!reconnect&&localStorage.getItem("gearLocker.noFolder")==="1")return}catch{}
   $("connect").hidden=false;
   $("connectBtn").textContent=reconnect?"Reconnect folder":"Choose folder";
-  $("connectMsg").innerHTML=reconnect?"War Box needs your OK to open its save file in the <b>War Box</b> folder again. Choose Reconnect folder.":"Optional: keep a backup file of your gear in a folder on this computer. On the computer that runs the price and weight lookups, pick the <b>War Box</b> folder.";
+  $("connectMsg").innerHTML=reconnect?"War Box needs your OK to open its save file in the <b>War Box</b> folder again. Choose Reconnect folder.":"Optional: keep a backup file of your gear in a folder you choose. Pick the <b>War Box</b> folder.";
 }
 $("connectLater").onclick=()=>{try{localStorage.setItem("gearLocker.noFolder","1")}catch{};$("connect").hidden=true};
 $("connectBtn").onclick=async()=>{
