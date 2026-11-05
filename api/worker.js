@@ -30,6 +30,17 @@ function claudeBody(model, fields) {
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 let jwksCache = null, jwksAt = 0;
+// Tests spend time before a route runs. This is not an environment setting.
+let testHandlerDelayMs = 0;
+
+export function clearJwksCache() {
+  jwksCache = null;
+  jwksAt = 0;
+}
+
+export function setTestHandlerDelay(ms) {
+  testHandlerDelayMs = Math.max(0, Math.round(+ms || 0));
+}
 
 function cors(env, req) {
   const origin = req.headers.get("origin") || "";
@@ -50,22 +61,22 @@ function b64u(s) {
   while (s.length % 4) s += "=";
   return Uint8Array.from(atob(s), c => c.charCodeAt(0));
 }
-async function keys() {
+async function keys(signal) {
   if (jwksCache && Date.now() - jwksAt < 3600e3) return jwksCache;
-  const r = await fetch(JWKS_URL);
+  const r = await fetch(JWKS_URL, { signal });
   if (!r.ok) throw new Error("Couldn't load Google sign-in keys");
   jwksCache = (await r.json()).keys || [];
   jwksAt = Date.now();
   return jwksCache;
 }
-async function verifyFirebaseToken(token, project) {
+async function verifyFirebaseToken(token, project, signal) {
   const parts = (token || "").split(".");
   if (parts.length !== 3) throw new Error("bad token");
   const [h, p, sig] = parts;
   const head = JSON.parse(new TextDecoder().decode(b64u(h)));
   const pay = JSON.parse(new TextDecoder().decode(b64u(p)));
   if (head.alg !== "RS256") throw new Error("bad alg");
-  const jwk = (await keys()).find(k => k.kid === head.kid);
+  const jwk = (await keys(signal)).find(k => k.kid === head.kid);
   if (!jwk) throw new Error("unknown key");
   const key = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
   const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, b64u(sig), new TextEncoder().encode(h + "." + p));
@@ -451,6 +462,7 @@ async function reserveCall(env, user, op, count, extra) {
   const monthKey = monthQuotaKey(uid, day);
   const refundKey = monthRefundKey(uid, day);
   const spendDayKey = dailySpendKey(uid, day);
+  const alertKey = alertQuotaKey(uid, day);
   const spendKey = poolSpendKey(day);
   const flightKey = skipSpend ? "" : inflightKey(uid, day);
   const namedDaily = extra.dailyEach != null && extra.dailyEach !== "";
@@ -476,7 +488,7 @@ async function reserveCall(env, user, op, count, extra) {
       dailySpendKey: spendDayKey,
       dailySpendCap: skipSpend ? null : freeDailySpendCapMicro(env),
       dailyEach,
-      alertKey: alertQuotaKey(uid, day),
+      alertKey,
       spendKey,
       inflightKey: flightKey,
       inflightLimit: flightKey ? FREE_INFLIGHT_LIMIT : 0,
@@ -486,7 +498,7 @@ async function reserveCall(env, user, op, count, extra) {
     if (reserved.poolSeeded && env.WATCH && typeof env.WATCH.delete === "function") {
       try { await env.WATCH.delete("spend:free"); } catch { /* the ledger already kept the balance */ }
     }
-    return { ...reserved, dailyKey, monthKey, refundKey, dailySpendKey: spendDayKey, spendKey, inflightKey: flightKey, seedSpend: legacySpend, skipSpend, skipMonth: review, dailyHeld: reserved.dailyHeld || 0 };
+    return { ...reserved, dailyKey, monthKey, refundKey, alertKey, dailySpendKey: spendDayKey, spendKey, inflightKey: flightKey, seedSpend: legacySpend, skipSpend, skipMonth: review, dailyHeld: reserved.dailyHeld || 0 };
   } catch {
     return { ok: false, status: 503, error: LOOKUPS_PAUSED, reserved: 0, charged: 0 };
   }
@@ -508,6 +520,11 @@ async function finishCall(env, id, reserved, usage, extra) {
       refundCap: extra.refundCap,
       monthKey: extra.monthKey || "",
       refundKey: extra.refundKey || "",
+      dailyKey: extra.unsent ? (extra.dailyKey || "") : "",
+      alertKey: extra.unsent ? (extra.alertKey || "") : "",
+      unsent: !!extra.unsent,
+      quotaRefund: extra.unsent ? Math.max(0, Math.round(+extra.quotaRefund || 0)) : 0,
+      alertRefund: extra.unsent ? Math.max(0, Math.round(+extra.alertRefund || 0)) : 0,
       dailySpendKey: extra.skipSpend ? "" : (extra.dailySpendKey || ""),
       dailyHold: extra.skipSpend ? 0 : Math.max(0, Math.round(+extra.dailyHold || 0)),
       spendKey: extra.spendKey || "",
@@ -533,7 +550,21 @@ function spendExtra(hold, extra) {
     spendKey: hold.spendKey || "",
     inflightKey: hold.inflightKey || "",
     seedSpend: hold.seedSpend,
+    unsent: !!extra.unsent,
+    quotaRefund: Math.max(0, Math.round(+extra.quotaRefund || 0)),
+    alertRefund: Math.max(0, Math.round(+extra.alertRefund || 0)),
+    dailyKey: hold.dailyKey || "",
+    alertKey: hold.alertKey || "",
   };
+}
+function callNeverSent(e) {
+  if (!e || !e.unsent) return false;
+  const u = e.usage || {};
+  const work = Math.max(0, Math.round(+u.input_tokens || 0)) + Math.max(0, Math.round(+u.output_tokens || 0)) + Math.max(0, Math.round(+u.web_search_requests || 0));
+  return work === 0 && !(Math.round(+e.spent || 0) > 0);
+}
+function runDeadlineClosed(deadline) {
+  return pastDeadline(deadline) || !!(deadline && deadline.signal && deadline.signal.aborted);
 }
 async function clearUsageForUser(env, uid) {
   const stub = usageStub(env);
@@ -658,7 +689,7 @@ async function listWatchUsers(env) {
   } while (cursor);
   return users;
 }
-async function runDueWatches(env, budget) {
+async function runDueWatches(env, budget, deadline) {
   if (!env.WATCH || !usageStub(env)) return 0;
   const gapMs = Math.max(1, +(env.MIN_ALERT_GAP_HOURS || 20)) * 3600e3;
   const alertLimit = +(env.ALERT_DAILY_CAP || 6);
@@ -687,6 +718,8 @@ async function runDueWatches(env, budget) {
   const dirty = new Map();
   let done = 0;
   for (const p of picked) {
+    // The run deadline is the late-log clock. Once it has passed, do not reserve another watch.
+    if (runDeadlineClosed(deadline)) break;
     const u = eligible.find(x => x.uid === p.uid);
     const w = u && u.rec.list.find(x => x.id === p.watch.id);
     if (!w || priceRouteBlocked(w)) continue;
@@ -694,8 +727,9 @@ async function runDueWatches(env, budget) {
     const hold = await reserveCall(env, who, "deal", 1, { alertAdd: 1, inputTokens: estimateInputTokens(JSON.stringify(w)) });
     if (!hold.ok) continue;
     const wasHit = !!(w.best && w.best.hit);
+    let checked = true;
     try {
-      const b = await dealCheck(env, w, hold.reserved || null, openDeadline(env));
+      const b = await dealCheck(env, w, hold.reserved || null, deadline || openDeadline(env));
       const spentUsage = b.usage;
       delete b.usage;
       w.best = b; w.lastErr = "";
@@ -704,7 +738,16 @@ async function runDueWatches(env, budget) {
         const sent = await sendWebPush(u.rec.push, JSON.stringify({ title: "Price alert", body: `${w.name} is at or under your target`, url: "./?tab=wish" }), env);
         if (sent && sent.gone) delete u.rec.push;
       }
-    } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await finishCall(env, hold.id, hold.reserved, e.usage, spendExtra(hold)); }
+    } catch (e) {
+      if (callNeverSent(e)) {
+        checked = false;
+        await finishCall(env, hold.id, hold.reserved, 0, spendExtra(hold, { unsent: true, quotaRefund: 1, alertRefund: 1 }));
+      } else {
+        w.lastErr = String(e.message || e).slice(0, 120);
+        await finishCall(env, hold.id, hold.reserved, e.usage, spendExtra(hold));
+      }
+    }
+    if (!checked) continue;
     w.lastCheck = new Date().toISOString();
     dirty.set(u.key, u.rec);
     done++;
@@ -917,10 +960,10 @@ export default {
     const env = { ...DEFAULTS };
     for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
     const deadline = openDeadline(env);
-    if (env.HANDLER_DELAY_MS) await new Promise(r => setTimeout(r, Math.max(0, Math.round(+env.HANDLER_DELAY_MS || 0))));
     let route = "";
     try { route = new URL(req.url).pathname; } catch { route = ""; }
     try {
+    if (testHandlerDelayMs) await new Promise(r => setTimeout(r, testHandlerDelayMs));
     const h = cors(env, req);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: h });
     const url = new URL(req.url);
@@ -929,7 +972,7 @@ export default {
       if (req.method !== "POST") return json({ error: "Not found" }, 404, h);
       const idToken = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
       let accountUser;
-      try { accountUser = await verifyFirebaseToken(idToken, env.FIREBASE_PROJECT); }
+      try { accountUser = await verifyFirebaseToken(idToken, env.FIREBASE_PROJECT, deadline.signal); }
       catch { return json({ error: "Please sign in again." }, 401, h); }
       if (!signInIsRecent(accountUser.auth_time)) return json({ error: "Enter your password again, then delete the account." }, 401, h);
       try {
@@ -953,7 +996,7 @@ export default {
       if (req.method !== "POST") return json({ error: "Not found" }, 404, h);
       const sessionToken = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
       let sessionUser;
-      try { sessionUser = await verifyFirebaseToken(sessionToken, env.FIREBASE_PROJECT); }
+      try { sessionUser = await verifyFirebaseToken(sessionToken, env.FIREBASE_PROJECT, deadline.signal); }
       catch { return json({ error: "Please sign in again." }, 401, h); }
       await releaseEmailHold(env, sessionUser);
       return json({ ok: true }, 200, h);
@@ -962,7 +1005,7 @@ export default {
     if (!env.ANTHROPIC_API_KEY) return json({ error: "Lookup service isn't set up yet (missing API key)." }, 503, h);
 
     let user;
-    try { user = await verifyFirebaseToken((req.headers.get("authorization") || "").replace(/^Bearer\s+/i, ""), env.FIREBASE_PROJECT); }
+    try { user = await verifyFirebaseToken((req.headers.get("authorization") || "").replace(/^Bearer\s+/i, ""), env.FIREBASE_PROJECT, deadline.signal); }
     catch { return json({ error: "Please sign in again." }, 401, h); }
     await releaseEmailHold(env, user);
     const access = decideAccess(user, env);
@@ -1126,14 +1169,21 @@ export default {
   async scheduled(event, rawEnv, ctx) {
     const env = { ...DEFAULTS };
     for (const k in rawEnv) if (rawEnv[k] !== undefined && rawEnv[k] !== "") env[k] = rawEnv[k];
+    const deadline = openDeadline(env);
+    const route = "cron";
     ctx.waitUntil((async () => {
-      const now = env.NOW ? new Date(env.NOW) : new Date();
-      await serviceAccountLogLine(env);
-      await sweepTombstones(env);
-      await pruneUsageCounters(env, now);
-      await retryQueuedCleanups(env);
-      await runQueuedRedactions(env);
-      if (env.ANTHROPIC_API_KEY) await runDueWatches(env, +(env.WATCH_BATCH || 6));
+      try {
+        const now = env.NOW ? new Date(env.NOW) : new Date();
+        await serviceAccountLogLine(env);
+        await sweepTombstones(env);
+        await pruneUsageCounters(env, now);
+        await retryQueuedCleanups(env);
+        await runQueuedRedactions(env);
+        if (env.ANTHROPIC_API_KEY) await runDueWatches(env, +(env.WATCH_BATCH || 6), deadline);
+      } finally {
+        const late = Date.now() - deadline.end;
+        if (late > 5000) console.log("deadline: late " + late + "ms " + route);
+      }
     })());
   },
 };

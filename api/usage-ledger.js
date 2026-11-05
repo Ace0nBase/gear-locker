@@ -183,15 +183,20 @@ export class UsageLedger extends DurableObject {
     const dailyKey = String(req.dailyKey || "");
     const monthKey = String(req.monthKey || "");
     const refundKey = String(req.refundKey || "");
+    const alertKey = String(req.alertKey || "");
     const dailySpendKey = String(req.dailySpendKey || "");
     const out = applyReconcile({
       spend: this._get(spendKey),
       daily: dailyKey ? this._get(dailyKey) : 0,
       month: monthKey ? this._get(monthKey) : 0,
+      alert: alertKey ? this._get(alertKey) : 0,
       refunds: refundKey ? this._get(refundKey) : 0,
       dailySpend: dailySpendKey ? this._get(dailySpendKey) : 0,
-    }, { reserved, actual: req.actual, countRefund: req.countRefund, refundCap: req.refundCap, skipMonth: req.skipMonth, dailyHold: req.dailyHold });
+    }, { reserved, actual: req.actual, countRefund: req.countRefund, refundCap: req.refundCap, skipMonth: req.skipMonth, dailyHold: req.dailyHold, unsent: req.unsent, quotaRefund: req.quotaRefund, alertRefund: req.alertRefund });
     this._put(spendKey, out.state.spend);
+    if (req.unsent && dailyKey) this._put(dailyKey, out.state.daily);
+    if (req.unsent && alertKey) this._put(alertKey, out.state.alert);
+    if (req.unsent && monthKey && !req.skipMonth) this._put(monthKey, out.state.month);
     if (out.refunded && monthKey && !req.skipMonth) this._put(monthKey, out.state.month);
     if (out.refunded && refundKey && !req.skipMonth) this._put(refundKey, out.state.refunds);
     if (dailySpendKey) this._put(dailySpendKey, out.state.dailySpend);

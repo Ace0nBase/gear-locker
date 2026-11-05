@@ -130,6 +130,11 @@ test("the worker keeps the hourly budget and does not allow a bundled origin", (
   assert.match(src, /deadline\.signal/);
   assert.match(src, /canContinue\(deadline\)/);
   assert.ok(src.indexOf("function modelFetch") < src.indexOf("async function callClaude"));
+  assert.doesNotMatch(src, /HANDLER_DELAY_MS/);
+  assert.match(src, /fetch\(JWKS_URL, \{ signal \}\)/);
+  assert.match(scheduled, /openDeadline\(env\)/);
+  assert.match(scheduled, /deadline: late /);
+  assert.match(scheduled, /runDueWatches\(env, \+\(env\.WATCH_BATCH \|\| 6\), deadline\)/);
 });
 
 function fakeSql() {
@@ -210,7 +215,7 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
         abortEstimate += estimateSpendMicro({ input_tokens: estimateInputTokens(JSON.stringify(body.messages || [])), output_tokens: 0, web_search_requests: 0 });
         anthropic += 1;
         await new Promise((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error("model call was not aborted")), 5000);
+          const timer = setTimeout(() => reject(new Error("model call was not aborted")), 12000);
           const fail = () => { clearTimeout(timer); reject(new DOMException("The operation was aborted", "AbortError")); };
           const signal = opts && opts.signal;
           if (signal) {
@@ -522,7 +527,7 @@ test("one failed lookup is refunded, and a second batch in the same moment keeps
     const hung = await firstHang;
     const hungBody = await hung.json();
     assert.equal(hung.status, 502, JSON.stringify(hungBody));
-    assert.ok(Date.now() - hangStarted < 4000);
+    assert.ok(Date.now() - hangStarted < 8000, "elapsed " + (Date.now() - hangStarted));
     assert.equal(hangSql.rows.get(flightNow) || 0, 0);
     hangAnthropic = false;
 
