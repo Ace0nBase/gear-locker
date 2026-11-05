@@ -285,7 +285,8 @@ function decimalDigits(raw) {
 }
 
 // Whatever the env asks, the live window stays between 5s and 100s, and 15s inside the hold.
-// Zero, blanks, and non-digits keep the default cap. Digit-only parsing stays.
+// Zero, blanks, and non-digits (including 1e9) keep that cap. A hold under 20s can leave the cap
+// below 5s, because the 15s margin does not fit. The production hold is 2 minutes, so it cannot.
 export function clampedDeadlineBudget(raw, staleMs = USAGE_HOLD_STALE_MS) {
   const stale = Math.max(DEADLINE_MARGIN_MS + 1000, Math.round(+staleMs || USAGE_HOLD_STALE_MS));
   const cap = Math.min(REQUEST_DEADLINE_MS, stale - DEADLINE_MARGIN_MS);
@@ -830,10 +831,31 @@ export function applyReconcile(state, req) {
   req = req || {};
   const reserved = Math.max(0, Math.round(+req.reserved || 0));
   const actual = Math.max(0, Math.round(+req.actual || 0));
-  const asked = Math.max(0, Math.round(+req.countRefund || 0));
-  const cap = req.refundCap == null || req.refundCap === "" ? asked : Math.max(0, Math.round(+req.refundCap));
   const used = Math.max(0, Math.round(+state.refunds || 0));
   const month = Math.max(0, Math.round(+state.month || 0));
+  const spend = reconcileSpendMicro(state.spend, reserved, actual);
+  const dailySpend = Math.max(0, Math.round(+state.dailySpend || 0) - Math.max(0, Math.round(+req.dailyHold || 0)) + actual);
+  // A call that never left did not use an attempt, a monthly lookup, or an alert slot.
+  // This does not count against the monthly refund cap.
+  if (req.unsent) {
+    const attempts = Math.max(0, Math.round(+req.quotaRefund || 0));
+    const alerts = Math.max(0, Math.round(+req.alertRefund || 0));
+    return {
+      ok: true,
+      billed: actual,
+      refunded: 0,
+      state: {
+        spend,
+        daily: Math.max(0, Math.round(+state.daily || 0) - attempts),
+        month: req.skipMonth ? month : Math.max(0, month - attempts),
+        alert: Math.max(0, Math.round(+state.alert || 0) - alerts),
+        refunds: used,
+        dailySpend,
+      },
+    };
+  }
+  const asked = Math.max(0, Math.round(+req.countRefund || 0));
+  const cap = req.refundCap == null || req.refundCap === "" ? asked : Math.max(0, Math.round(+req.refundCap));
   const room = Math.max(0, cap - used);
   const refund = req.skipMonth ? 0 : Math.min(asked, room, month);
   return {
@@ -841,12 +863,12 @@ export function applyReconcile(state, req) {
     billed: actual,
     refunded: refund,
     state: {
-      spend: reconcileSpendMicro(state.spend, reserved, actual),
+      spend,
       daily: Math.max(0, Math.round(+state.daily || 0)),
       month: month - refund,
       alert: Math.max(0, Math.round(+state.alert || 0)),
       refunds: used + refund,
-      dailySpend: Math.max(0, Math.round(+state.dailySpend || 0) - Math.max(0, Math.round(+req.dailyHold || 0)) + actual),
+      dailySpend,
     },
   };
 }

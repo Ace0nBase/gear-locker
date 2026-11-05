@@ -462,6 +462,7 @@ async function reserveCall(env, user, op, count, extra) {
   const monthKey = monthQuotaKey(uid, day);
   const refundKey = monthRefundKey(uid, day);
   const spendDayKey = dailySpendKey(uid, day);
+  const alertKey = alertQuotaKey(uid, day);
   const spendKey = poolSpendKey(day);
   const flightKey = skipSpend ? "" : inflightKey(uid, day);
   const namedDaily = extra.dailyEach != null && extra.dailyEach !== "";
@@ -487,7 +488,7 @@ async function reserveCall(env, user, op, count, extra) {
       dailySpendKey: spendDayKey,
       dailySpendCap: skipSpend ? null : freeDailySpendCapMicro(env),
       dailyEach,
-      alertKey: alertQuotaKey(uid, day),
+      alertKey,
       spendKey,
       inflightKey: flightKey,
       inflightLimit: flightKey ? FREE_INFLIGHT_LIMIT : 0,
@@ -497,7 +498,7 @@ async function reserveCall(env, user, op, count, extra) {
     if (reserved.poolSeeded && env.WATCH && typeof env.WATCH.delete === "function") {
       try { await env.WATCH.delete("spend:free"); } catch { /* the ledger already kept the balance */ }
     }
-    return { ...reserved, dailyKey, monthKey, refundKey, dailySpendKey: spendDayKey, spendKey, inflightKey: flightKey, seedSpend: legacySpend, skipSpend, skipMonth: review, dailyHeld: reserved.dailyHeld || 0 };
+    return { ...reserved, dailyKey, monthKey, refundKey, alertKey, dailySpendKey: spendDayKey, spendKey, inflightKey: flightKey, seedSpend: legacySpend, skipSpend, skipMonth: review, dailyHeld: reserved.dailyHeld || 0 };
   } catch {
     return { ok: false, status: 503, error: LOOKUPS_PAUSED, reserved: 0, charged: 0 };
   }
@@ -519,6 +520,11 @@ async function finishCall(env, id, reserved, usage, extra) {
       refundCap: extra.refundCap,
       monthKey: extra.monthKey || "",
       refundKey: extra.refundKey || "",
+      dailyKey: extra.unsent ? (extra.dailyKey || "") : "",
+      alertKey: extra.unsent ? (extra.alertKey || "") : "",
+      unsent: !!extra.unsent,
+      quotaRefund: extra.unsent ? Math.max(0, Math.round(+extra.quotaRefund || 0)) : 0,
+      alertRefund: extra.unsent ? Math.max(0, Math.round(+extra.alertRefund || 0)) : 0,
       dailySpendKey: extra.skipSpend ? "" : (extra.dailySpendKey || ""),
       dailyHold: extra.skipSpend ? 0 : Math.max(0, Math.round(+extra.dailyHold || 0)),
       spendKey: extra.spendKey || "",
@@ -544,7 +550,21 @@ function spendExtra(hold, extra) {
     spendKey: hold.spendKey || "",
     inflightKey: hold.inflightKey || "",
     seedSpend: hold.seedSpend,
+    unsent: !!extra.unsent,
+    quotaRefund: Math.max(0, Math.round(+extra.quotaRefund || 0)),
+    alertRefund: Math.max(0, Math.round(+extra.alertRefund || 0)),
+    dailyKey: hold.dailyKey || "",
+    alertKey: hold.alertKey || "",
   };
+}
+function callNeverSent(e) {
+  if (!e || !e.unsent) return false;
+  const u = e.usage || {};
+  const work = Math.max(0, Math.round(+u.input_tokens || 0)) + Math.max(0, Math.round(+u.output_tokens || 0)) + Math.max(0, Math.round(+u.web_search_requests || 0));
+  return work === 0 && !(Math.round(+e.spent || 0) > 0);
+}
+function runDeadlineClosed(deadline) {
+  return pastDeadline(deadline) || !!(deadline && deadline.signal && deadline.signal.aborted);
 }
 async function clearUsageForUser(env, uid) {
   const stub = usageStub(env);
@@ -698,6 +718,8 @@ async function runDueWatches(env, budget, deadline) {
   const dirty = new Map();
   let done = 0;
   for (const p of picked) {
+    // The run deadline is the late-log clock. Once it has passed, do not reserve another watch.
+    if (runDeadlineClosed(deadline)) break;
     const u = eligible.find(x => x.uid === p.uid);
     const w = u && u.rec.list.find(x => x.id === p.watch.id);
     if (!w || priceRouteBlocked(w)) continue;
@@ -705,6 +727,7 @@ async function runDueWatches(env, budget, deadline) {
     const hold = await reserveCall(env, who, "deal", 1, { alertAdd: 1, inputTokens: estimateInputTokens(JSON.stringify(w)) });
     if (!hold.ok) continue;
     const wasHit = !!(w.best && w.best.hit);
+    let checked = true;
     try {
       const b = await dealCheck(env, w, hold.reserved || null, deadline || openDeadline(env));
       const spentUsage = b.usage;
@@ -715,7 +738,16 @@ async function runDueWatches(env, budget, deadline) {
         const sent = await sendWebPush(u.rec.push, JSON.stringify({ title: "Price alert", body: `${w.name} is at or under your target`, url: "./?tab=wish" }), env);
         if (sent && sent.gone) delete u.rec.push;
       }
-    } catch (e) { w.lastErr = String(e.message || e).slice(0, 120); await finishCall(env, hold.id, hold.reserved, e.usage, spendExtra(hold)); }
+    } catch (e) {
+      if (callNeverSent(e)) {
+        checked = false;
+        await finishCall(env, hold.id, hold.reserved, 0, spendExtra(hold, { unsent: true, quotaRefund: 1, alertRefund: 1 }));
+      } else {
+        w.lastErr = String(e.message || e).slice(0, 120);
+        await finishCall(env, hold.id, hold.reserved, e.usage, spendExtra(hold));
+      }
+    }
+    if (!checked) continue;
     w.lastCheck = new Date().toISOString();
     dirty.set(u.key, u.rec);
     done++;

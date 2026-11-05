@@ -4,8 +4,8 @@ import crypto from "node:crypto";
 import worker, { UsageLedger, clearJwksCache, setTestHandlerDelay } from "../api/worker.js";
 import {
   MODEL_CALLS, REQUEST_DEADLINE_MS, REQUEST_DEADLINE_MIN_MS, ROUND_FLOOR_MS, ROUND_FLOOR_MIN_MS, USAGE_HOLD_STALE_MS,
-  clampedDeadlineBudget, clampedRoundFloor, dailySpendKey, estimateInputTokens, estimateSpendMicro,
-  inflightKey, poolSpendKey, ratesForModel,
+  alertQuotaKey, attemptQuotaKey, clampedDeadlineBudget, clampedRoundFloor, dailySpendKey, estimateInputTokens, estimateSpendMicro,
+  inflightKey, monthQuotaKey, poolSpendKey, ratesForModel, selectDueWatches,
 } from "../js/logic.js";
 
 function b64url(buf) {
@@ -988,5 +988,118 @@ describe("request deadline and abort billing", { concurrency: false }, () => {
       globalThis.fetch = orig;
       restore();
     }
+  });
+
+  test("an unsent reconcile gives back the attempt, the month, and the alert slot", () => {
+    const sql = fakeSql();
+    const ledger = new UsageLedger({ storage: { sql } }, {});
+    const day = "2026-11-05";
+    const t0 = Date.parse(day + "T12:00:00Z");
+    const daily = "t:unsent:" + day;
+    const month = "m:unsent:2026-11";
+    const alert = "a:unsent:" + day;
+    const spendKey = "spend:free:2026-11";
+    const held = ledger.reserve({
+      id: "unsent-watch",
+      reserve: 1000,
+      cap: 25e6,
+      spendKey,
+      seedSpend: 0,
+      dailyAdd: 1,
+      dailyLimit: 40,
+      monthAdd: 1,
+      monthLimit: 10,
+      alertAdd: 1,
+      alertLimit: 6,
+      dailyKey: daily,
+      monthKey: month,
+      alertKey: alert,
+      dailySpendKey: "ds:unsent:" + day,
+      dailySpendCap: 10e6,
+      dailyEach: 1000,
+      now: t0,
+    });
+    assert.equal(held.ok, true);
+    assert.equal(sql.rows.get(daily), 1);
+    assert.equal(sql.rows.get(month), 1);
+    assert.equal(sql.rows.get(alert), 1);
+    const settled = ledger.reconcile({
+      id: "unsent-watch",
+      actual: 0,
+      reserved: held.reserved,
+      unsent: true,
+      quotaRefund: 1,
+      alertRefund: 1,
+      dailyKey: daily,
+      monthKey: month,
+      alertKey: alert,
+      dailySpendKey: "ds:unsent:" + day,
+      dailyHold: held.dailyHeld,
+      spendKey,
+      now: t0,
+    });
+    assert.equal(settled.duplicate, false);
+    assert.equal(settled.refunded, 0);
+    assert.equal(sql.rows.get(daily), 0);
+    assert.equal(sql.rows.get(month), 0);
+    assert.equal(sql.rows.get(alert), 0);
+    assert.equal(sql.rows.get("rf:unsent:2026-11") || 0, 0);
+    assert.equal(sql.rows.get(spendKey) || 0, 0);
+    assert.equal(sql.rows.get("ds:unsent:" + day) || 0, 0);
+  });
+
+  test("a later hourly watch is not checked or charged when the run deadline has passed", async () => {
+    const { sql, env } = ledgerEnv({ REQUEST_DEADLINE_MS: "5000" });
+    const users = [
+      { uid: "crona", email: "a@example.test", name: "Pouch A" },
+      { uid: "cronb", email: "b@example.test", name: "Pouch B" },
+      { uid: "cronc", email: "c@example.test", name: "Pouch C" },
+    ];
+    const saved = new Map(users.map(u => ["w:" + u.uid, {
+      email: u.email,
+      emailVerified: true,
+      list: [{ id: "w1", name: u.name, category: "Pouches", target: 20 }],
+    }]));
+    env.WATCH = {
+      list: async () => ({ keys: users.map(u => ({ name: "w:" + u.uid })), list_complete: true }),
+      get: async (key, type) => {
+        const rec = saved.get(key);
+        if (!rec) return null;
+        return type === "json" ? rec : JSON.stringify(rec);
+      },
+      put: async (key, value) => { saved.set(key, JSON.parse(value)); },
+      delete: async () => {},
+    };
+    let calls = 0;
+    const restore = installFetch(async (url, opts) => {
+      if (!String(url).includes("anthropic")) return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      calls += 1;
+      await hang(opts);
+      return new Response("{}", { status: 200 });
+    });
+    try {
+      let job;
+      await worker.scheduled({}, env, { waitUntil(p) { job = p; } });
+      await job;
+      assert.equal(calls, 1);
+      const now = new Date();
+      const first = saved.get("w:crona");
+      assert.ok(first.list[0].lastCheck, "the watch that was sent is marked checked");
+      assert.equal(sql.rows.get(attemptQuotaKey("crona", now)), 1);
+      assert.equal(sql.rows.get(monthQuotaKey("crona", now)), 1);
+      assert.equal(sql.rows.get(alertQuotaKey("crona", now)), 1);
+      assert.ok((sql.rows.get(dailySpendKey("crona", now)) || 0) > 0);
+      for (const uid of ["cronb", "cronc"]) {
+        const rec = saved.get("w:" + uid);
+        assert.equal(rec.list[0].lastCheck || "", "", uid);
+        assert.equal(rec.list[0].lastErr || "", "", uid);
+        assert.equal(sql.rows.get(attemptQuotaKey(uid, now)) || 0, 0, uid);
+        assert.equal(sql.rows.get(monthQuotaKey(uid, now)) || 0, 0, uid);
+        assert.equal(sql.rows.get(alertQuotaKey(uid, now)) || 0, 0, uid);
+        assert.equal(sql.rows.get(dailySpendKey(uid, now)) || 0, 0, uid);
+      }
+      const due = selectDueWatches(users.slice(1).map(u => ({ uid: u.uid, list: saved.get("w:" + u.uid).list })), { now, budget: 6, minGapMs: 20 * 3600e3 });
+      assert.deepEqual(due.map(p => p.uid).sort(), ["cronb", "cronc"]);
+    } finally { restore(); }
   });
 });
